@@ -1,0 +1,8 @@
+.git
+.github
+.next
+node_modules
+.env*
+*.tsbuildinfo
+public/sw.js
+scripts/set-password.mjs
