@@ -102,6 +102,7 @@ try {
   assert.match(signupHtml, /Create your Fitness account/);
   assert.doesNotMatch(signupHtml, /name="invite"/);
   assert.match(signupPage.headers.get("content-security-policy"), /challenges\.cloudflare\.com/);
+  assert.equal((await post("/api/auth/sign-in/email", { email, password })).status, 200);
 
   const member = { name: "Member", email: "member@example.test", password };
   const register = (token, details = member) => post("/api/auth/sign-up/email", details,

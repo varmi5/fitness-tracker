@@ -52,7 +52,8 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
         create: {
           before: async (user) => {
             if (!creatingOwner) return allowMemberSignup ? { data: { ...user, role: "member" } } : false;
-            return { data: { ...user, role: "owner" } };
+            // The one-time owner setup code is the credential for this account.
+            return { data: { ...user, role: "owner", emailVerified: true } };
           },
         },
       },

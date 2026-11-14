@@ -87,3 +87,23 @@ test("an existing user closes setup even if the marker has not been consumed", a
   assert.equal((await signUpOwner(request(config.setupCode), db, config)).status, 403);
   assert.equal((await db.select().from(schema.user)).length, 1);
 });
+
+test("the owner access migration preserves only the established owner's access", async () => {
+  const now = new Date();
+  await db.insert(schema.user).values([
+    { id: "owner", role: "owner", name: "Owner", email: "owner@example.test", createdAt: now, updatedAt: now },
+    { id: "member", role: "member", name: "Member", email: "member@example.test", createdAt: now, updatedAt: now },
+  ]);
+  const migration = await readFile("migrations/003-preserve-owner-access.sql", "utf8");
+  const verification = () => pg.query<{ role: string; email_verified: boolean }>(
+    'SELECT role, email_verified FROM "user" ORDER BY role',
+  );
+  await pg.exec(migration);
+  assert.ok((await verification()).rows.every((row) => !row.email_verified));
+  await db.update(schema.ownerSetup).set({ consumed: true });
+  await pg.exec(migration);
+  assert.deepEqual((await verification()).rows, [
+    { role: "member", email_verified: false },
+    { role: "owner", email_verified: true },
+  ]);
+});
