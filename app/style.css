@@ -32,10 +32,7 @@ form { gap: 1rem; }
 label { font-size: .89rem; font-weight: 560; }
 label small { color: var(--muted); font-weight: 400; }
 .auth-card { max-width: 27rem; margin: clamp(2rem, 12vh, 8rem) auto; margin-inline: max(1rem, calc((100% - 27rem) / 2)); background: var(--surface); border: 1px solid var(--border); border-radius: 25px; padding: clamp(1.15rem, 5vw, 2rem); display: grid; gap: 1rem; }
-.brand-icon { color: var(--accent); }
 .shell { max-width: 960px; margin: auto; padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) calc(6.5rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); }
-.masthead { display: flex; align-items: center; gap: .55rem; margin-bottom: 1.8rem; font-weight: 650; }
-.mark { display: inline-grid; place-items: center; width: 35px; height: 35px; border-radius: 11px; background: var(--accent); color: #16220f; }
 .screen { animation: appear 170ms ease-out; display: grid; gap: .85rem; }
 @keyframes appear { from { opacity: .7; transform: translateY(4px); } }
 .page-title, .chart-controls, .button-row, .metric-meta { display: flex; align-items: center; justify-content: space-between; gap: .7rem; }

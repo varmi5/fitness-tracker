@@ -14,7 +14,7 @@ export default async function SetupPage() {
 
   return (
     <main className="auth-card">
-      <h1>Fitness setup</h1>
+      <h1>{ready && config.mode !== "closed" ? "Create your Fitness account" : "Fitness setup"}</h1>
       {ready && config.mode !== "closed" ? (
         <OpenSignup siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!} invite={config.mode === "invite"} />
       ) : status === "available" ? <SetupForm /> : (

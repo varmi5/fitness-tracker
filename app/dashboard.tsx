@@ -99,7 +99,6 @@ export function Dashboard({ initial }: { initial: Snapshot }) {
     value != null && base != null && base > 0 ? (value / base).toFixed(2) : "Insufficient data";
 
   return <main className="shell">
-    <header className="masthead"><span className="mark"><Activity size={20} /></span><span>Fitness</span></header>
     <div className="screen" key={tab}>
       <div className="page-title"><h1>{tab}</h1>{tab === "Today" &&
         <Button variant="secondary" className="compact" onClick={() => navigate("Log")}><Plus size={18} /> Log</Button>}</div>

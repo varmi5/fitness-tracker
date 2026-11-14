@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { average, movingAverage, recomp, summary, type Reading } from "../lib/metrics";
+import { createAuth } from "../lib/auth";
 import { signupMode } from "../lib/signup-config";
 import { logInput, trackerData } from "../lib/tracker-data";
 import * as schema from "../lib/schema";
@@ -82,4 +84,46 @@ test("opening signup requires sender and Turnstile configuration and invite mode
   assert.equal(signupMode({ ...configured, SIGNUP_MODE: "open" }), "open");
   assert.throws(() => signupMode({ ...configured, SIGNUP_MODE: "invite" }), /INVITE_CODE/);
   assert.equal(signupMode({ ...configured, SIGNUP_MODE: "invite", INVITE_CODE: "test" }), "invite");
+});
+
+test("new members must verify their address before signing in, and cannot choose the owner role", async () => {
+  const baseURL = "http://localhost:3000";
+  const email = "member@example.test";
+  const password = randomBytes(24).toString("hex");
+  const messages: string[] = [];
+  const config = {
+    baseURL,
+    mode: "invite",
+    secret: randomBytes(32).toString("hex"),
+    sendEmail: async (recipient: string, _subject: string, url: string) => {
+      assert.equal(recipient, email);
+      messages.push(url);
+    },
+  };
+  const registration = createAuth(db, config, false, true);
+  const regularAuth = createAuth(db, config);
+  const post = (path: string, body: object) => new Request(baseURL + "/api/auth" + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: baseURL },
+    body: JSON.stringify(body),
+  });
+  const details = { email, password, name: "Member", role: "owner" };
+  assert.equal((await regularAuth.handler(post("/sign-up/email", details))).ok, false);
+  const signup = await registration.handler(post("/sign-up/email", details));
+  assert.equal(signup.status, 200);
+  assert.equal((await signup.json()).user.role, "member");
+  assert.equal(signup.headers.get("set-cookie"), null);
+  assert.equal(messages.length, 1);
+
+  const credentials = { email, password };
+  const unverified = await regularAuth.handler(post("/sign-in/email", credentials));
+  assert.equal(unverified.status, 403);
+  assert.equal((await unverified.json()).code, "EMAIL_NOT_VERIFIED");
+  assert.equal(messages.length, 2);
+
+  const verification = await regularAuth.handler(new Request(messages[1]));
+  assert.equal(verification.status, 302);
+  const verified = await regularAuth.handler(post("/sign-in/email", credentials));
+  assert.equal(verified.status, 200);
+  assert.ok(verified.headers.get("set-cookie"));
 });

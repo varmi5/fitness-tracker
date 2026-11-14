@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
-import { Activity, Fingerprint } from "lucide-react";
+import { Fingerprint } from "lucide-react";
 import { authClient } from "../lib/auth-client";
 
 export function Login({ signup }: { signup: boolean }) {
@@ -26,7 +26,9 @@ export function Login({ signup }: { signup: boolean }) {
       const result = await authClient.signIn.email({
         email: String(form.get("email")), password: String(form.get("password")),
       });
-      if (result.error) setMessage("Could not sign in. Check your email and password.");
+      if (result.error?.code === "EMAIL_NOT_VERIFIED") {
+        setMessage("Verify your email before signing in. Check your inbox for the verification link.");
+      } else if (result.error) setMessage("Could not sign in. Check your email and password.");
       else location.reload();
     } catch {
       setMessage("Could not reach Fitness. Try again.");
@@ -36,7 +38,6 @@ export function Login({ signup }: { signup: boolean }) {
   }
 
   return <main className="auth-card">
-    <Activity className="brand-icon" aria-hidden="true" />
     <h1>Fitness</h1>
     <p>Sign in to your measurement tracker.</p>
     <form onSubmit={signIn} method="post">

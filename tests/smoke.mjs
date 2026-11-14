@@ -51,7 +51,9 @@ try {
   assert.ok(cookie);
   const loggedIn = await fetch(url("/"), { headers: { Cookie: cookie } });
   assert.equal(loggedIn.status, 200);
-  assert.match(await loggedIn.text(), /Waist-to-height/);
+  const dashboard = await loggedIn.text();
+  assert.match(dashboard, /Waist-to-height/);
+  assert.doesNotMatch(dashboard, /class="masthead"/);
   const result = await post("/api/tracker", {
     action: "log", data: { date: "2026-11-01", values: [{ key: "waist", value: 80 }], note: "Test" },
   }, { Cookie: cookie });

@@ -22,7 +22,11 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
     emailAndPassword: { enabled: true, disableSignUp: !creatingOwner && !allowMemberSignup,
       requireEmailVerification: config.mode !== "closed",
       sendResetPassword: config.sendEmail ? ({ user, url }) => config.sendEmail!(user.email, "Reset your Fitness password", url) : undefined },
-    emailVerification: config.sendEmail ? { sendVerificationEmail: ({ user, url }) => config.sendEmail!(user.email, "Verify your Fitness email", url) } : undefined,
+    emailVerification: config.sendEmail ? {
+      sendOnSignUp: true,
+      sendOnSignIn: true,
+      sendVerificationEmail: ({ user, url }) => config.sendEmail!(user.email, "Verify your Fitness email", url),
+    } : undefined,
     plugins: [passkey({ rpName: "Fitness", rpID: new URL(config.baseURL).hostname, origin: new URL(config.baseURL).origin })],
     session: { expiresIn: 90 * 86400, updateAge: 86400 },
     advanced: {
@@ -30,7 +34,14 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
       defaultCookieAttributes: { sameSite: "lax", httpOnly: true },
     },
     disabledPaths: config.mode === "closed" ? ["/request-password-reset", "/reset-password", "/send-verification-email"] : [],
-    rateLimit: { enabled: true },
+    rateLimit: {
+      enabled: true,
+      customRules: {
+        "/sign-up/email": { window: 60, max: 5 },
+        "/send-verification-email": { window: 60, max: 3 },
+        "/request-password-reset": { window: 60, max: 3 },
+      },
+    },
     user: {
       additionalFields: {
         role: { type: "string", defaultValue: "member", input: false },
