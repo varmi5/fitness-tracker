@@ -1,11 +1,11 @@
 ---
 name: fitness-nutrition-mcp
-description: Log, inspect, update, and analyse meals, energy balance, and body measurements in the user's private Fitness tracker via MCP.
+description: Log, inspect, update, and analyse meals, energy balance, and body measurements in the user's private FitnessTrackr account via MCP.
 ---
 
 # Fitness Nutrition & Energy Balance Workflow
 
-Use these rules whenever the user asks to estimate, log, update, review, or analyse food, calories, macros, TDEE/deficit, or waist/weight trends using the Fitness MCP server.
+Use these rules whenever the user asks to estimate, log, update, review, or analyse food, calories, macros, TDEE/deficit, or waist/weight trends using the FitnessTrackr MCP server.
 
 ## 1. Photo & Meal Estimation Rules
 When the user uploads a food photograph (with or without a text description):
@@ -37,3 +37,11 @@ When the user uploads a food photograph (with or without a text description):
 - Keep **remaining allowance** (`dailyCalorieTarget - intake`) separate from **estimated calorie deficit** (`totalExpenditureKcal - intake`).
 - Remember that wearable TDEE (`totalExpenditureKcal`) and photo-estimated food calories are both estimates. Never treat unlogged or incomplete days (`diaryComplete: false`) as zero-calorie days.
 - Never silently alter the user's calorie target or timezone.
+
+## 5. Foods, personal targets and reminders
+- Use `search_foods` for UK reference foods and the user's foods. For brand names use `includeProducts: true`; only a public search query is sent to Open Food Facts, never a diary or account identifier. Ask before searching sensitive personal notes externally.
+- Prefer explicit count/portion options (one egg, slice, scoop, bottle) or ml for drinks. Pass the returned food snapshot and portionId so the service scales nutrition consistently. Unknown values stay null; household and standard portion sizes remain estimates.
+- Retrieve `get_nutrition_settings` before discussing targets. Use `preview_nutrition_targets` to rebalance carbs and fat while keeping protein and fibre fixed. Show the proposed calories, macros and effective date. Save with `set_nutrition_targets` and confirmation APPLY only when the user requests or approves that exact plan. Never change a target while simply logging food. If settings permission is missing, explain that the user must reconnect and consent to fitness:settings:write.
+- Use `get_logging_reminders` to inspect only this user's schedule and recorded meals. Do not assume an unreported meal was skipped. Change reminders with `set_logging_reminders` and confirmation APPLY only when requested. Phone push additionally needs the user to install the PWA and enable notifications in Settings on their phone.
+- Installing this plugin does not itself create ChatGPT notifications or a scheduled task. A ChatGPT task requires a separate explicit request and host support. Never claim a reminder/task exists without a successful tool confirmation. Phone push is delivered by FitnessTrackr, not ChatGPT.
+- Meal write-back to Google Health is per user and opt-in. A database save confirms the local diary write only; queued Google sync is not confirmation that Google saved it.

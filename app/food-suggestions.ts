@@ -22,7 +22,7 @@ export function savedFoodChoice(food: FoodLibrary["saved"][number]): FoodChoice 
       ingredients: food.ingredients, cookingMethod: food.cookingMethod, savedFoodId: food.id, isFavourite: food.isFavourite };
   }
   const portions = Array.isArray(food.portionsJson) && food.portionsJson.length ? food.portionsJson : standardMeasures(food.defaultUnit as FoodUnit, food.defaultAmount);
-  const parsed = foodSnapshotInput.parse({ id: food.sourceId ?? food.id, name: food.name, brand: food.brand, source: food.sourceName,
+  const parsed = foodSnapshotInput.parse({ id: food.sourceId ?? food.id, name: food.name, brand: food.brand, source: food.kind === "recipe" ? "Saved recipe" : food.sourceName,
     foodType: food.foodType, sourceUrl: food.sourceUrl, basisAmount: food.batchCookedGrams ?? food.defaultAmount, basisUnit: food.defaultUnit,
     calories: food.calories, proteinG: food.proteinG, carbsG: food.carbsG, fatG: food.fatG, fibreG: food.fibreG,
     portions, defaultPortionId: food.defaultPortionId ?? (portions as {id: string}[])[0].id });
