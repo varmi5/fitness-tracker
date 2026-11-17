@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { cp, mkdir } from "node:fs/promises";
 import { once } from "node:events";
 import { PGlite } from "@electric-sql/pglite";
@@ -22,6 +23,7 @@ const env = { ...process.env, FITNESS_BACKGROUND_WORKER: "false", HOSTNAME: "127
 let app;
 let browser;
 const screenshotDir = process.env.UI_SCREENSHOT_DIR;
+const systemChromium = existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined;
 
 try {
   const migration = spawn(process.execPath, ["scripts/migrate.mjs"], { env, stdio: "inherit" });
@@ -39,10 +41,15 @@ try {
   });
   assert.equal(owner.status, 200);
 
-  for (const [name, engine, device] of [["iphone", webkit, devices["iPhone 15"]], ["desktop", chromium, { viewport: { width: 1280, height: 900 } }]]) {
+  for (const [name, preferredEngine, device] of [["iphone", webkit, devices["iPhone 15"]], ["desktop", chromium, { viewport: { width: 1280, height: 900 } }]]) {
     if (process.env.UI_ENGINE && process.env.UI_ENGINE !== name) continue;
-    browser = await engine.launch(name === "desktop" ? { channel: "chromium", args: ["--disable-gpu", "--disable-renderer-backgrounding"] } : {});
-    const context = await browser.newContext({ ...device, serviceWorkers: "block", reducedMotion: "reduce" });
+    const useFallbackChromium = !existsSync(preferredEngine.executablePath()) && Boolean(systemChromium);
+    const engine = useFallbackChromium ? chromium : preferredEngine;
+    const contextDevice = useFallbackChromium ? { ...device, defaultBrowserType: undefined } : device;
+    browser = await engine.launch(engine === chromium
+      ? { ...(useFallbackChromium ? { executablePath: systemChromium } : { channel: "chromium" }), args: ["--disable-gpu", "--disable-renderer-backgrounding"] }
+      : {});
+    const context = await browser.newContext({ ...contextDevice, serviceWorkers: "block", reducedMotion: "reduce" });
     assert.ok((await context.request.post(`${origin}/api/auth/sign-in/email`, { headers: { Origin: origin }, data: { email, password } })).ok());
     const page = await context.newPage();
     await page.route(/\/api\/foods\?.*products=1/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ products: [], providerMessage: null }) }));
@@ -94,11 +101,39 @@ try {
     await modal.getByRole("option").filter({ hasText: "Porridge oats, unfortified" }).first().click();
     assert.equal(await modal.getByLabel("Calories", { exact: false }).inputValue(), "381");
     await modal.getByRole("button", { name: "Close composer" }).click();
+    assert.equal(await page.evaluate(() => document.body.style.overflow), "");
+
+    if (name === "iphone") {
+      await fab.click();
+      await modal.waitFor();
+      await page.setViewportSize({ width: 390, height: 430 });
+      await search.click();
+      await search.fill("Eggs");
+      await modal.getByRole("option").filter({ hasText: "whole, boiled" }).waitFor();
+      const firstOptionBox = await modal.getByRole("option").filter({ hasText: "whole, boiled" }).first().boundingBox();
+      assert.ok(firstOptionBox && firstOptionBox.y + firstOptionBox.height <= 430 + 24, "Food suggestions should stay visible above mobile keyboard");
+      if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/${name}-keyboard-search.png` });
+      await modal.getByRole("option").filter({ hasText: "whole, boiled" }).first().click();
+      const calInput = modal.getByLabel("Calories", { exact: false });
+      await calInput.click();
+      await page.waitForTimeout(180);
+      const sheetState = await modal.locator(".modal-sheet").getAttribute("data-keyboard");
+      assert.equal(sheetState, "open");
+      if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/${name}-keyboard-meal.png` });
+      const calBox = await calInput.boundingBox();
+      assert.ok(calBox && calBox.y >= 0 && calBox.y + calBox.height <= 430, "Focused Calories input must sit inside reduced mobile viewport");
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+      await modal.getByRole("button", { name: "Done", exact: true }).click();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await modal.getByRole("button", { name: "Save meal & reusable template", exact: true }).waitFor();
+      await modal.getByRole("button", { name: "Close composer" }).click();
+    }
+
     for (const tab of ["Home", "Nutrition", "Measurements", "Settings"]) {
       await page.getByRole("navigation").getByRole("button", { name: tab, exact: true }).click();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     }
-    console.log(`${name}: food suggestions, input sizing, modal bounds, portion scaling, failed-save recovery, inline autocomplete and tab overflow passed.`);
+    console.log(`${name}: food suggestions, input sizing, modal bounds, portion scaling, failed-save recovery, inline autocomplete, keyboard viewport and tab overflow passed.`);
     await browser.close(); browser = undefined;
   }
 } finally {

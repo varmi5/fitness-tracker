@@ -34,6 +34,8 @@ test("push schedules respect London DST, encrypted device ownership and deduplic
  assert.deepEqual(dueTimes(["18:30"],new Date("2026-07-01T17:31:00Z"),"Europe/London"),["18:30"]);
  let calls=0; const send = (async (_subscription: unknown,payload?:string|Buffer|null)=>{ calls++; assert.ok(!String(payload).includes("150")); return {statusCode:201,body:"",headers:{}}; }) as Parameters<typeof processReminders>[2];
  const now=new Date("2026-11-17T18:31:00Z"); await processReminders(db,now,send); await processReminders(db,now,send); assert.equal(calls,1);
+ await saveReminderSettings(db,"USER-A",{enabled:false,times:["19:00"]});
+ await processReminders(db,new Date("2026-11-17T19:05:00Z"),send); assert.equal(calls,1);
  await registerPush(db,"USER-B",subscription); await unregisterPush(db,"USER-A",subscription.endpoint);
  assert.equal((await reminderSettings(db,"USER-B")).deviceCount,1); assert.equal((await reminderSettings(db,"USER-A")).deviceCount,0);
  await assert.rejects(()=>registerPush(db,"USER-B",{...subscription,endpoint:"https://127.0.0.1/private"}));

@@ -164,6 +164,90 @@ test("MCP server enforces read vs write scopes and executes meal + energy tools 
   await Promise.all([rwClient.close(), rwServer.close()]);
 });
 
+test("MCP settings writes require both fitness:read and fitness:settings:write plus APPLY confirmation, and stay user-isolated", async () => {
+  await db.insert(schema.user).values({
+    id: "M2",
+    name: "M2",
+    email: "m2@example.test",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  // fitness:settings:write alone (without fitness:read) must register zero tools
+  const writeOnlyServer = fitnessMcp("M1", ["fitness:settings:write"], db);
+  const [woClientT, woServerT] = InMemoryTransport.createLinkedPair();
+  const woClient = new Client({ name: "test-wo", version: "1.0.0" });
+  await Promise.all([writeOnlyServer.connect(woServerT), woClient.connect(woClientT)]);
+  await assert.rejects(() => woClient.listTools(), /Method not found/);
+  await Promise.all([woClient.close(), writeOnlyServer.close()]);
+
+  // Authorized settings client can preview and apply targets + reminders for M1 only
+  const swServer = fitnessMcp("M1", ["fitness:read", "fitness:write", "fitness:settings:write"], db);
+  const [swClientT, swServerT] = InMemoryTransport.createLinkedPair();
+  const swClient = new Client({ name: "test-sw", version: "1.0.0" });
+  await Promise.all([swServer.connect(swServerT), swClient.connect(swClientT)]);
+  const swTools = (await swClient.listTools()).tools.map((t) => t.name);
+  assert.ok(swTools.includes("set_nutrition_targets"));
+  assert.ok(swTools.includes("set_logging_reminders"));
+
+  const m2Before = await nutritionData(db, "M2").daily("2026-11-18");
+
+  // Missing confirmation='APPLY' must be rejected
+  const preview = await swClient.callTool({
+    name: "preview_nutrition_targets",
+    arguments: { calories: 2050, proteinG: 165, carbsG: 190, fatG: 65, fibreG: 34 },
+  });
+  assert.equal(preview.isError, false);
+  const rebalanced = JSON.parse((preview.content as { text: string }[])[0].text);
+  assert.equal(rebalanced.saved, false);
+
+  const unconfirmed = await swClient.callTool({
+    name: "set_nutrition_targets",
+    arguments: {
+      targets: { ...rebalanced, effectiveFrom: "2026-11-18" },
+      confirmation: "NO",
+    },
+  });
+  assert.equal(unconfirmed.isError, true);
+
+  // Explicit APPLY persists targets for M1 only
+  const appliedTargets = await swClient.callTool({
+    name: "set_nutrition_targets",
+    arguments: {
+      targets: { calories: 2050, proteinG: 165, carbsG: 199, fatG: 66, fibreG: 34, effectiveFrom: "2026-11-18" },
+      confirmation: "APPLY",
+    },
+  });
+  assert.equal(appliedTargets.isError, false);
+  assert.equal((await nutritionData(db, "M1").daily("2026-11-18")).macroTargets.proteinG, 165);
+  assert.equal((await nutritionData(db, "M2").daily("2026-11-18")).macroTargets.proteinG, m2Before.macroTargets.proteinG);
+
+  // Logging a meal must never change nutrition targets
+  await swClient.callTool({
+    name: "log_meal",
+    arguments: {
+      day: "2026-11-18",
+      time: "12:30",
+      name: "Chicken salad",
+      category: "lunch",
+      idempotencyKey: "mcp-preserve-targets-1",
+      items: [{ name: "Chicken", amount: 150, unit: "g", calories: 250, proteinG: 45, carbsG: 2, fatG: 6, estimationMethod: "weighed" }],
+    },
+  });
+  const m1Day = await nutritionData(db, "M1").daily("2026-11-18");
+  assert.equal(m1Day.target, 2050);
+  assert.equal(m1Day.macroTargets.proteinG, 165);
+
+  const appliedReminders = await swClient.callTool({
+    name: "set_logging_reminders",
+    arguments: { settings: { enabled: true, times: ["19:15"] }, confirmation: "APPLY" },
+  });
+  assert.equal(appliedReminders.isError, false);
+  assert.deepEqual(JSON.parse((appliedReminders.content as { text: string }[])[0].text).times, ["19:15"]);
+
+  await Promise.all([swClient.close(), swServer.close()]);
+});
+
 test("Google Health v4 outbound weight & nutrition payloads follow API schema", () => {
   const wt = buildGoogleWeightDataPoint({
     weightKg: 74.35,
