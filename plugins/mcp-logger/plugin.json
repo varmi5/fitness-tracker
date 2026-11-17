@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "mcp-logger",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Log meals and review nutrition, energy balance and body measurements in your private FitnessTrackr account.",
   "author": {
     "name": "Varmisan S",
