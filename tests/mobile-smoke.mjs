@@ -57,7 +57,7 @@ try {
     await modal.waitFor();
     const search = modal.getByRole("combobox", { name: "Find a food" });
     await search.fill("Ehgs");
-    await modal.getByRole("option").filter({ hasText: "whole, boiled" }).filter({ hasText: "UK CoFID" }).waitFor();
+    await modal.getByRole("option").filter({ hasText: "whole, boiled" }).waitFor();
     assert.ok(await search.evaluate((input) => parseFloat(getComputedStyle(input).fontSize) >= 16));
     assert.equal(await page.evaluate(() => window.visualViewport.scale), 1);
     const bounds = await modal.boundingBox();
@@ -67,7 +67,7 @@ try {
       await mkdir(screenshotDir, { recursive: true });
       await page.screenshot({ path: `${screenshotDir}/${name}-search.png` });
     }
-    await modal.getByRole("option").filter({ hasText: "whole, boiled" }).filter({ hasText: "UK CoFID" }).click();
+    await modal.getByRole("option").filter({ hasText: "whole, boiled" }).click();
     await modal.getByLabel("Portion measure", { exact: true }).selectOption("g");
     await modal.getByLabel("Portion amount", { exact: true }).fill("200");
     assert.equal(await modal.getByLabel("Calories", { exact: false }).inputValue(), "286");
@@ -91,7 +91,7 @@ try {
     await page.locator(".meal-card").filter({ hasText: `${name} review meal` }).waitFor();
     await page.getByRole("button", { name: "Edit", exact: true }).last().click();
     await modal.getByLabel("Food name", { exact: true }).fill("oats");
-    await modal.getByRole("option").filter({ hasText: "Porridge oats, unfortified UK" }).first().click();
+    await modal.getByRole("option").filter({ hasText: "Porridge oats, unfortified" }).first().click();
     assert.equal(await modal.getByLabel("Calories", { exact: false }).inputValue(), "381");
     await modal.getByRole("button", { name: "Close composer" }).click();
     for (const tab of ["Home", "Nutrition", "Measurements", "Settings"]) {
