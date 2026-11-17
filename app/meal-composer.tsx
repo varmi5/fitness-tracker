@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Plus, Search, Trash2, X } from "lucide-react";
+import { portionBasis, scalePortion, type PortionBasis } from "../lib/food-portion";
+import { localTime } from "../lib/nutrition-model";
+import { useFoodSuggestions, type FoodChoice } from "./food-suggestions";
 import type { MealRecord } from "../lib/nutrition-data";
 import {
   CATEGORIES,
@@ -28,6 +31,7 @@ interface DraftItem {
   calMax: string;
   estimationMethod: EstimationMethod;
   savedFoodId: string | null;
+  basis?: PortionBasis;
 }
 
 const emptyItem = (): DraftItem => ({
@@ -66,15 +70,17 @@ interface MealComposerProps {
   defaultDay: string;
   editingMeal: MealRecord | null;
   busy: boolean;
+  timezone: string;
   onClose: () => void;
-  onSaveMeal: (payload: { mode: "log" | "update"; data: unknown }) => Promise<void>;
-  onSaveTemplate: (data: unknown) => Promise<void>;
+  onSaveMeal: (payload: { mode: "log" | "update"; data: unknown }) => Promise<boolean>;
+  onSaveTemplate: (data: unknown) => Promise<boolean>;
 }
 
 export function MealComposer({
   defaultDay,
   editingMeal,
   busy,
+  timezone,
   onClose,
   onSaveMeal,
   onSaveTemplate,
@@ -84,7 +90,7 @@ export function MealComposer({
   const [time, setTime] = useState(() => {
     if (editingMeal) return editingMeal.localTime;
     const now = new Date();
-    return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    return localTime(now, timezone);
   });
   const [mealName, setMealName] = useState(editingMeal?.name ?? "");
   const [category, setCategory] = useState<MealCategory>(editingMeal?.category ?? "lunch");
@@ -112,7 +118,15 @@ export function MealComposer({
   );
 
   const [query, setQuery] = useState("");
-  const [library, setLibrary] = useState<FoodLibrary | null>(null);
+  const { suggestions, library, searching, failed } = useFoodSuggestions(query);
+  const [activeFoodKey, setActiveFoodKey] = useState<string | null>(null);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const [submitting, setSubmitting] = useState(false);
+  const submitLock = useRef(false);
+  const requestKey = useRef(crypto.randomUUID());
+  const dialog = useRef<HTMLDialogElement>(null);
+  const sheet = useRef<HTMLDivElement>(null);
+  const working = busy || submitting;
   const [barcode, setBarcode] = useState("");
   const [barcodeProduct, setBarcodeProduct] = useState<BarcodeProduct | null>(null);
   const [barcodeGrams, setBarcodeGrams] = useState("100");
@@ -132,27 +146,85 @@ export function MealComposer({
   const [recipeIng, setRecipeIng] = useState("");
 
   useEffect(() => {
-    let active = true;
-    const controller = new AbortController();
-    fetch(`/api/nutrition?library=${encodeURIComponent(query)}`, { signal: controller.signal })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (active && data) setLibrary(data);
-      })
-      .catch(() => null);
-    return () => {
-      active = false;
-      controller.abort();
+    const modal = dialog.current!;
+    const previous = document.activeElement as HTMLElement | null;
+    const y = window.scrollY;
+    const previousStyle = { position: document.body.style.position, top: document.body.style.top, width: document.body.style.width };
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${y}px`;
+    document.body.style.width = "100%";
+    const viewport = window.visualViewport;
+    const resize = () => {
+      modal.style.setProperty("--dialog-height", `${viewport?.height ?? window.innerHeight}px`);
+      modal.style.setProperty("--dialog-top", `${viewport?.offsetTop ?? 0}px`);
     };
-  }, [query]);
+    resize();
+    modal.showModal();
+    viewport?.addEventListener("resize", resize);
+    viewport?.addEventListener("scroll", resize);
+    return () => {
+      viewport?.removeEventListener("resize", resize);
+      viewport?.removeEventListener("scroll", resize);
+      modal.close();
+      Object.assign(document.body.style, previousStyle);
+      window.scrollTo({ top: y, behavior: "instant" });
+      previous?.focus({ preventScroll: true });
+    };
+  }, []);
+
+  function chooseFood(choice: FoodChoice) {
+    const incoming: DraftItem[] = choice.items.map((item) => {
+      const draft: DraftItem = { key: crypto.randomUUID(), name: item.name,
+        amount: item.amount == null ? "" : String(item.amount), unit: item.unit,
+        calories: toStr(item.calories), proteinG: toStr(item.proteinG), carbsG: toStr(item.carbsG),
+        fatG: toStr(item.fatG), fibreG: toStr(item.fibreG), calMin: toStr(item.calMin), calMax: toStr(item.calMax),
+        estimationMethod: item.estimationMethod, savedFoodId: item.savedFoodId ?? null };
+      return { ...draft, basis: portionBasis(draft) };
+    });
+    if (activeFoodKey) {
+      setItems((prev) => prev.map((item) => item.key === activeFoodKey ? { ...incoming[0], key: item.key } : item));
+    } else {
+      addDraftItems(incoming, choice.name);
+    }
+    if (choice.ingredients && !ingredients) setIngredients(choice.ingredients);
+    if (choice.cookingMethod && !cookingMethod) setCookingMethod(choice.cookingMethod);
+    setActiveFoodKey(null); setQuery(""); setActiveSuggestion(-1);
+    (document.activeElement as HTMLElement | null)?.blur();
+    // Do not focus a field here: choosing a food must not open the phone keyboard.
+  }
+
+  function suggestionKeys(event: KeyboardEvent<HTMLInputElement>, choices: FoodChoice[]) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveSuggestion((index) => (index + (event.key === "ArrowDown" ? 1 : -1) + choices.length) % Math.max(choices.length, 1));
+    } else if (event.key === "Enter" && choices.length) {
+      event.preventDefault(); chooseFood(choices[Math.max(0, activeSuggestion)] ?? choices[0]);
+    } else if (event.key === "Escape" && activeFoodKey) {
+      event.preventDefault(); event.stopPropagation(); setActiveFoodKey(null);
+    }
+  }
+
+  function suggestionList(choices: FoodChoice[], id: string) {
+    return <div className="food-suggestions" role="listbox" id={id} aria-label="Food suggestions">
+      {choices.map((choice, index) => <button type="button" role="option" aria-selected={activeSuggestion === index}
+        id={`${id}-${index}`} key={choice.key} className="food-suggestion" disabled={working}
+        onClick={() => chooseFood(choice)}>
+        <span><strong>{choice.name}</strong><small>{choice.source} · {choice.detail}</small></span>
+        <span className="food-suggestion-energy">{choice.items.every((item) => item.calories != null)
+          ? `${Math.round(choice.items.reduce((sum, item) => sum + (item.calories ?? 0), 0))} kcal` : "kcal —"}<Plus size={16} aria-hidden="true" /></span>
+      </button>)}
+    </div>;
+  }
 
   function addDraftItems(incoming: DraftItem[], suggestedMealName?: string) {
     setItems((prev) => {
       const cleaned = prev.filter((i) => i.name.trim() !== "" || i.calories.trim() !== "");
-      return [...cleaned, ...incoming];
+      return [...cleaned, ...incoming.map((item) => ({ ...item, basis: portionBasis(item) }))];
     });
     if (!mealName.trim() && suggestedMealName) setMealName(suggestedMealName);
     setSourceTab("manual");
+    setActiveFoodKey(null); setQuery("");
+    sheet.current?.scrollTo({ top: 0, behavior: "instant" });
   }
 
   function addUkStaple(staple: FoodLibrary["ukStaples"][number], gramsStr = "100") {
@@ -279,7 +351,9 @@ export function MealComposer({
       setError("Enter recipe name and cooked batch weight in grams.");
       return;
     }
-    await onSaveTemplate({
+    if (submitLock.current) return;
+    submitLock.current = true; setSubmitting(true);
+    const saved = await onSaveTemplate({
       kind: "recipe",
       name: recipeName.trim(),
       defaultAmount: serve,
@@ -292,10 +366,11 @@ export function MealComposer({
       fibreG: toNum(recipeFib),
       ingredients: recipeIng.trim(),
     });
+    submitLock.current = false; setSubmitting(false);
+    if (!saved) { setError("Recipe was not saved. Your entries are still here. Please try again."); return; }
     setShowNewRecipe(false);
     setRecipeName("");
-    const refreshed = await fetch(`/api/nutrition?library=${encodeURIComponent(query)}`).then((r) => r.json());
-    setLibrary(refreshed);
+    setSourceTab("recent"); setQuery(recipeName.trim());
   }
 
   async function handleSubmit(saveAsTemplate = false) {
@@ -323,8 +398,19 @@ export function MealComposer({
     }
     const resolvedName = mealName.trim() || validItems[0].name;
 
+    if (submitLock.current) return;
+    submitLock.current = true; setSubmitting(true);
+    const saved = await onSaveMeal({
+      mode: editingMeal ? "update" : "log",
+      data: { id: editingMeal?.id, idempotencyKey: requestKey.current, day, time, name: resolvedName, category, cookingMethod, ingredients, notes, items: validItems },
+    });
+    if (!saved) {
+      submitLock.current = false; setSubmitting(false);
+      setError("Meal was not saved. Your entries are still here. Check the connection and try again.");
+      return;
+    }
     if (saveAsTemplate) {
-      await onSaveTemplate({
+      const templateSaved = await onSaveTemplate({
         kind: "template",
         name: resolvedName,
         defaultAmount: 1,
@@ -333,122 +419,67 @@ export function MealComposer({
         ingredients: ingredients.trim(),
         cookingMethod: cookingMethod.trim(),
       });
+      if (!templateSaved) {
+        submitLock.current = false; setSubmitting(false);
+        setError("Your meal is saved, but the template could not be saved. You can close this form safely.");
+        return;
+      }
     }
 
-    await onSaveMeal({
-      mode: editingMeal ? "update" : "log",
-      data: editingMeal
-        ? {
-            id: editingMeal.id,
-            day,
-            time,
-            name: resolvedName,
-            category,
-            cookingMethod,
-            ingredients,
-            notes,
-            items: validItems,
-          }
-        : {
-            day,
-            time,
-            name: resolvedName,
-            category,
-            cookingMethod,
-            ingredients,
-            notes,
-            items: validItems,
-          },
-    });
     onClose();
   }
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={editingMeal ? "Edit meal" : "Log meal"}>
-      <div className="modal-sheet">
-        <div className="split-row">
-          <h2>{editingMeal ? `Edit ${editingMeal.name}` : "Add Food & Meal"}</h2>
-          <button type="button" className="secondary compact" onClick={onClose} aria-label="Close composer">
+    <dialog ref={dialog} className="modal-backdrop" aria-labelledby="meal-dialog-title"
+      onCancel={(event) => { event.preventDefault(); if (!working) onClose(); }}>
+      <div ref={sheet} className="modal-sheet" aria-busy={working}>
+        <div className="split-row modal-header">
+          <h2 id="meal-dialog-title">{editingMeal ? "Edit meal" : "Log a meal"}</h2>
+          <button type="button" className="secondary compact" autoFocus disabled={working} onClick={onClose} aria-label="Close composer">
             <X size={18} />
           </button>
         </div>
 
-        <div className="seg-tabs" role="tablist" aria-label="Food source">
+        <div className="seg-tabs" role="group" aria-label="Food source">
           {(
             [
-              ["recent", "Recent"],
+              ["recent", "Search"],
               ["recipes", "Recipes"],
-              ["uk", "UK & Scan"],
+              ["uk", "Barcode"],
               ["manual", `Meal (${items.filter((i) => i.name.trim()).length || items.length})`],
             ] as const
           ).map(([key, label]) => (
-            <button key={key} type="button" aria-pressed={sourceTab === key} onClick={() => setSourceTab(key)}>
+            <button key={key} type="button" aria-pressed={sourceTab === key} onClick={() => { setSourceTab(key); setActiveFoodKey(null); setQuery(""); setActiveSuggestion(-1); }}>
               {label}
             </button>
           ))}
         </div>
 
-        {sourceTab !== "manual" && (
+        {error && <p role="alert" className="form-error">{error}</p>}
+        {(sourceTab === "recent" || sourceTab === "recipes") && (
           <label>
-            Search foods, recipes, or UK staples
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="e.g. eggs, dhal, chicken breast, oats…"
-            />
+            {sourceTab === "recent" ? "Find a food" : "Find a saved recipe"}
+            <input type="search" role="combobox" aria-autocomplete="list" aria-expanded={sourceTab === "recent" && suggestions.length > 0}
+              aria-controls="food-search-results" aria-activedescendant={activeSuggestion >= 0 ? `food-search-results-${activeSuggestion}` : undefined}
+              value={query} onChange={(e) => { setQuery(e.target.value); setActiveSuggestion(-1); }}
+              onKeyDown={(event) => suggestionKeys(event, suggestions)} autoComplete="off" autoCorrect="off" spellCheck={false}
+              placeholder="Try eggs, oats, dhal…" enterKeyHint="search" />
           </label>
         )}
-
-        {sourceTab === "recent" && (
-          <div style={{ display: "grid", gap: ".45rem" }}>
-            {!library ? (
-              <p>Loading recent foods…</p>
-            ) : library.frequent.length === 0 ? (
-              <p>No recent items yet. Switch to UK & Scan or Meal to add your first food.</p>
-            ) : (
-              library.frequent.map((f) => (
-                <div className="list-item" key={f.name}>
-                  <div>
-                    <strong>{f.name}</strong>
-                    <small className="row-note">
-                      {f.amount ? `${f.amount}${f.unit} · ` : ""}
-                      {f.calories != null ? `${Math.round(f.calories)} kcal` : "kcal unknown"} ·{" "}
-                      {f.proteinG != null ? `P ${f.proteinG}g` : "P —"} · logged {f.count}×
-                    </small>
-                  </div>
-                  <button
-                    type="button"
-                    className="secondary compact"
-                    onClick={() =>
-                      addDraftItems(
-                        [
-                          {
-                            key: crypto.randomUUID(),
-                            name: f.name,
-                            amount: f.amount != null ? String(f.amount) : "",
-                            unit: f.unit,
-                            calories: toStr(f.calories),
-                            proteinG: toStr(f.proteinG),
-                            carbsG: toStr(f.carbsG),
-                            fatG: toStr(f.fatG),
-                            fibreG: toStr(f.fibreG),
-                            calMin: "",
-                            calMax: "",
-                            estimationMethod: f.estimationMethod,
-                            savedFoodId: null,
-                          },
-                        ],
-                        f.name,
-                      )
-                    }
-                  >
-                    <Plus size={15} /> Add
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        )}
+        {sourceTab === "recent" && <section className="food-search-panel" aria-label="Find food">
+          <p className="search-hint">{query ? "Suggestions from your foods and UK staples" : "Your recent foods, saved recipes and everyday staples"}</p>
+          {suggestionList(suggestions, "food-search-results")}
+          <p className="search-hint" role="status">{failed ? "Saved foods are unavailable. UK staples still work. Try searching again." : searching ? "Checking your saved foods…" : `${suggestions.length} suggestions`}</p>
+          {suggestions.length === 0 && <p>No matches yet. You can enter the food and its nutrition below.</p>}
+          <button type="button" className="secondary" disabled={working} onClick={() => {
+            if (query.trim()) {
+              setItems((prev) => { const copy = [...prev]; const blank = copy.findIndex((item) => !item.name.trim());
+                if (blank >= 0) copy[blank] = { ...copy[blank], name: query.trim() };
+                else copy.push({ ...emptyItem(), name: query.trim() }); return copy; });
+            }
+            setSourceTab("manual"); setQuery(""); sheet.current?.scrollTo({ top: 0, behavior: "instant" });
+          }}>Enter food manually</button>
+        </section>}
 
         {sourceTab === "recipes" && (
           <div style={{ display: "grid", gap: ".65rem" }}>
@@ -472,7 +503,7 @@ export function MealComposer({
                   <label>Batch fibre (g)<input inputMode="decimal" value={recipeFib} onChange={(e) => setRecipeFib(e.target.value)} /></label>
                 </div>
                 <label>Ingredients<input value={recipeIng} onChange={(e) => setRecipeIng(e.target.value)} placeholder="Red lentils, onions, tomatoes, 1 tbsp ghee, spices" /></label>
-                <button type="button" disabled={busy} onClick={() => void submitRecipe()}>Save batch recipe</button>
+                <button type="button" disabled={working} onClick={() => void submitRecipe()}>Save batch recipe</button>
               </div>
             )}
 
@@ -508,9 +539,10 @@ export function MealComposer({
                   value={barcode}
                   onChange={(e) => setBarcode(e.target.value)}
                   inputMode="numeric"
-                  placeholder="Enter 8–14 digit EAN barcode"
+                  aria-label="Food barcode"
+                  placeholder="Enter 8–14 digit barcode"
                 />
-                <button type="button" className="secondary compact" disabled={lookupBusy} onClick={() => void lookupBarcode()}>
+                <button type="button" className="secondary compact" disabled={lookupBusy || working || !/^\d{8,14}$/.test(barcode.trim())} onClick={() => void lookupBarcode()}>
                   <Search size={15} /> {lookupBusy ? "Looking up…" : "Lookup"}
                 </button>
               </div>
@@ -610,25 +642,38 @@ export function MealComposer({
                       Food name
                       <input
                         value={item.name}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, name: e.target.value } : x)))
-                        }
-                        placeholder="e.g. Three large eggs"
+                        role="combobox" autoComplete="off" aria-autocomplete="list"
+                        aria-expanded={activeFoodKey === item.key && suggestions.length > 0}
+                        aria-controls={`food-options-${item.key}`}
+                        aria-activedescendant={activeFoodKey === item.key && activeSuggestion >= 0 ? `food-options-${item.key}-${activeSuggestion}` : undefined}
+                        onFocus={() => { setActiveFoodKey(item.key); setQuery(item.name); setActiveSuggestion(-1); }}
+                        onChange={(e) => {
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, name: e.target.value } : x)));
+                          setActiveFoodKey(item.key); setQuery(e.target.value); setActiveSuggestion(-1);
+                        }}
+                        onKeyDown={(event) => suggestionKeys(event, suggestions.filter((choice) => choice.items.length === 1))}
+                        placeholder="e.g. Eggs"
                       />
                     </label>
+                    {activeFoodKey === item.key && item.name.trim() && <div className="inline-food-suggestions">
+                      {suggestionList(suggestions.filter((choice) => choice.items.length === 1), `food-options-${item.key}`)}
+                      <button className="secondary compact" type="button" onClick={() => setActiveFoodKey(null)}>Keep my entry</button>
+                    </div>}
                     <label>
                       Portion
                       <div style={{ display: "flex", gap: ".35rem" }}>
                         <input
+                          aria-label="Portion amount"
                           inputMode="decimal"
                           value={item.amount}
                           onChange={(e) =>
-                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, amount: e.target.value } : x)))
+                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, basis: x.basis ?? portionBasis(x), amount: e.target.value, ...scalePortion(x.basis ?? portionBasis(x), e.target.value) } : x)))
                           }
                           placeholder="g / ml"
                         />
                         <select
                           style={{ width: "6.2rem" }}
+                          aria-label="Portion unit"
                           value={item.unit}
                           onChange={(e) =>
                             setItems((p) =>
@@ -668,7 +713,7 @@ export function MealComposer({
                         inputMode="decimal"
                         value={item.calories}
                         onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, calories: e.target.value } : x)))
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, calories: e.target.value, basis: portionBasis({ ...x, calories: e.target.value }) } : x)))
                         }
                       />
                     </label>
@@ -678,7 +723,7 @@ export function MealComposer({
                         inputMode="decimal"
                         value={item.proteinG}
                         onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, proteinG: e.target.value } : x)))
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, proteinG: e.target.value, basis: portionBasis({ ...x, proteinG: e.target.value }) } : x)))
                         }
                       />
                     </label>
@@ -688,7 +733,7 @@ export function MealComposer({
                         inputMode="decimal"
                         value={item.fibreG}
                         onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, fibreG: e.target.value } : x)))
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, fibreG: e.target.value, basis: portionBasis({ ...x, fibreG: e.target.value }) } : x)))
                         }
                       />
                     </label>
@@ -698,7 +743,7 @@ export function MealComposer({
                         inputMode="decimal"
                         value={item.carbsG}
                         onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, carbsG: e.target.value } : x)))
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, carbsG: e.target.value, basis: portionBasis({ ...x, carbsG: e.target.value }) } : x)))
                         }
                       />
                     </label>
@@ -708,7 +753,7 @@ export function MealComposer({
                         inputMode="decimal"
                         value={item.fatG}
                         onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, fatG: e.target.value } : x)))
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, fatG: e.target.value, basis: portionBasis({ ...x, fatG: e.target.value }) } : x)))
                         }
                       />
                     </label>
@@ -720,7 +765,7 @@ export function MealComposer({
                           placeholder="Min"
                           value={item.calMin}
                           onChange={(e) =>
-                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, calMin: e.target.value } : x)))
+                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, calMin: e.target.value, basis: portionBasis({ ...x, calMin: e.target.value }) } : x)))
                           }
                         />
                         <input
@@ -728,7 +773,7 @@ export function MealComposer({
                           placeholder="Max"
                           value={item.calMax}
                           onChange={(e) =>
-                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, calMax: e.target.value } : x)))
+                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, calMax: e.target.value, basis: portionBasis({ ...x, calMax: e.target.value }) } : x)))
                           }
                         />
                       </div>
@@ -753,14 +798,14 @@ export function MealComposer({
               <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
             </label>
 
-            {error && <p role="alert" style={{ color: "var(--danger-fg)" }}>{error}</p>}
 
-            <div className="button-row">
-              <button type="button" disabled={busy} onClick={() => void handleSubmit(false)}>
-                {editingMeal ? "Save changes" : "Save meal"}
+
+            <div className="button-row meal-save-actions">
+              <button type="button" disabled={working} onClick={() => void handleSubmit(false)}>
+                {working ? "Saving…" : editingMeal ? "Save changes" : "Save meal"}
               </button>
               {!editingMeal && (
-                <button type="button" className="secondary" disabled={busy} onClick={() => void handleSubmit(true)}>
+                <button type="button" className="secondary" disabled={working} onClick={() => void handleSubmit(true)}>
                   Save meal & reusable template
                 </button>
               )}
@@ -768,6 +813,6 @@ export function MealComposer({
           </div>
         )}
       </div>
-    </div>
+    </dialog>
   );
 }

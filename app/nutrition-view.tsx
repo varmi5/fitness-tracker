@@ -37,6 +37,7 @@ interface NutritionViewProps {
   tracker: TrackerSnapshot;
   theme: ThemeMode;
   busy: boolean;
+  loading: boolean;
   onToggleTheme: () => void;
   onSelectDay: (day: string) => void;
   onLogMeal: () => void;
@@ -55,6 +56,7 @@ export function NutritionView({
   tracker,
   theme,
   busy,
+  loading,
   onToggleTheme,
   onSelectDay,
   onLogMeal,
@@ -179,6 +181,7 @@ export function NutritionView({
         </div>
       </section>
 
+      {loading ? <p className="card" role="status">Loading diary…</p> : <>
       {showTrends && <NutritionTrends history={history30} tracker={tracker} />}
 
       {/* Daily Summary Card: Protein & Fibre above Carbs & Fat */}
@@ -399,6 +402,7 @@ export function NutritionView({
           })
         )}
       </section>
+      </>}
     </>
   );
 }

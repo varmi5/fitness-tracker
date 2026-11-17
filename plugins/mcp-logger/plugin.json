@@ -1,0 +1,28 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mcp-logger",
+  "version": "1.0.0",
+  "description": "Log meals and review nutrition, energy balance and body measurements in your private MCP Logger account.",
+  "author": {
+    "name": "varmi5"
+  },
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "MCP Logger",
+        "shortDescription": "Meals, macros and energy",
+        "longDescription": "Estimate meal photographs, save meals only when asked, and retrieve your actual diary, calorie totals and body measurement trends. Connect securely to your existing MCP Logger account using OAuth.",
+        "developerName": "varmi5",
+        "category": "Healthcare",
+        "capabilities": [],
+        "defaultPrompt": [
+          "Review my food diary today.",
+          "Estimate this meal and ask before logging it.",
+          "Show my nutrition and waist trends."
+        ],
+        "logo": "./assets/icon.png",
+        "composerIcon": "./assets/icon.png"
+      }
+    }
+  }
+}

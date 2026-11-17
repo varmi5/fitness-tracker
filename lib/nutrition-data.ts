@@ -39,6 +39,7 @@ import {
   profile,
   savedFood,
 } from "./schema";
+import { foodMatchScore } from "./search-match";
 import { searchUkStaples } from "./uk-foods";
 
 export { preferencesInput, targetInput };
@@ -803,7 +804,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       .limit(100);
 
     const matchingSaved = savedRows
-      .filter((row) => !clean || `${row.name} ${row.brand} ${row.ingredients}`.toLowerCase().includes(clean))
+      .filter((row) => Number.isFinite(foodMatchScore(`${row.name} ${row.brand} ${row.ingredients}`, clean)))
       .slice(0, limit);
 
     const recentRows = await db.select({ item: mealItem })
@@ -829,7 +830,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
 
     for (const item of recentItems) {
       const key = item.name.trim().toLowerCase();
-      if (clean && !key.includes(clean)) continue;
+      if (!Number.isFinite(foodMatchScore(key, clean))) continue;
       const prev = freqMap.get(key);
       if (prev) {
         prev.count += 1;

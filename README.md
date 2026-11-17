@@ -13,4 +13,5 @@ A private, mobile-first nutrition, energy balance, and body measurement tracker.
 - [Coolify setup](docs/coolify-setup.md)
 - [Apple Health companion architecture](docs/apple-health-companion.md)
 - [ChatGPT MCP skill](skills/fitness-nutrition-mcp/SKILL.md)
+- [Connect ChatGPT on web and mobile](docs/chatgpt-connector.md)
 - [Checklist for opening to others](docs/open-to-others.md)

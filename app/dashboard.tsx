@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   HomeRingIcon,
   MeasurementsCaliperIcon,
@@ -9,12 +9,19 @@ import {
   SettingsSlidersIcon,
 } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
-import { addDays } from "../lib/nutrition-model";
+import { addDays, localDay } from "../lib/nutrition-model";
 import { HomeView } from "./home-view";
-import { MeasurementsView } from "./measurements-view";
-import { NutritionView } from "./nutrition-view";
-import { SettingsView } from "./settings-view";
 import type { AppTab, InitialAppData, ThemeMode } from "./types";
+
+const MeasurementsView = dynamic(() => import("./measurements-view").then((m) => m.MeasurementsView), {
+  loading: () => <p role="status">Loading measurements…</p>,
+});
+const NutritionView = dynamic(() => import("./nutrition-view").then((m) => m.NutritionView), {
+  loading: () => <p role="status">Loading diary…</p>,
+});
+const SettingsView = dynamic(() => import("./settings-view").then((m) => m.SettingsView), {
+  loading: () => <p role="status">Loading settings…</p>,
+});
 
 const MealComposer = dynamic(() => import("./meal-composer").then((m) => m.MealComposer), {
   ssr: false,
@@ -34,7 +41,12 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [theme, setThemeState] = useState<ThemeMode>("light");
   const [tracker, setTracker] = useState(initial.tracker);
   const [settings, setSettings] = useState(initial.settings);
-  const [today] = useState(initial.today);
+  const [today, setToday] = useState(initial.today);
+  const selectedDayRef = useRef(initial.today);
+  const dayRequest = useRef<AbortController | null>(null);
+  const actionLock = useRef(false);
+  const [dayLoading, setDayLoading] = useState(false);
+  const lastToday = useRef(initial.today);
   const [selectedDay, setSelectedDay] = useState(initial.today);
   const [todayDaily, setTodayDaily] = useState<DailyNutritionView>(initial.daily);
   const [selectedDaily, setSelectedDaily] = useState<DailyNutritionView>(initial.daily);
@@ -77,7 +89,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     if (reqTab && tabs.some((t) => t.title === reqTab)) setTab(reqTab);
     const googleState = params.get("google");
     if (googleState === "connected") {
-      setMessage("Google Health connected and synced.");
+      setMessage(initial.google.status === "sync_failed" ? "Google Health connected. The first sync failed; try Sync again in Settings." : "Google Health connected.");
       window.history.replaceState({}, "", "/");
     } else if (googleState === "error") {
       const reason = params.get("reason") ?? "connection failed";
@@ -85,6 +97,25 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       window.history.replaceState({}, "", "/");
     }
   }, []);
+
+  useEffect(() => {
+    const updateDay = () => {
+      const currentDay = localDay(new Date(), settings.timezone);
+      setToday(currentDay);
+      if (selectedDayRef.current === today) { selectedDayRef.current = currentDay; setSelectedDay(currentDay); }
+    };
+    const timer = window.setInterval(updateDay, 30000);
+    window.addEventListener("focus", updateDay);
+    updateDay();
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", updateDay); };
+  }, [settings.timezone, today]);
+
+  useEffect(() => {
+    if (lastToday.current === today) return;
+    lastToday.current = today;
+    void refreshHistoryAndToday(selectedDayRef.current).catch(() => setMessage("Could not refresh the diary. Try again."));
+  }, [today]);
+  useEffect(() => () => dayRequest.current?.abort(), []);
 
   function navigate(next: AppTab) {
     setMessage("");
@@ -103,23 +134,37 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       focusDay === today ? Promise.resolve(null) : fetch(`/api/nutrition?day=${focusDay}`),
       fetch(`/api/nutrition?day=${today}`),
     ]);
+    if (!histRes.ok || !todayRes.ok || (dayRes && !dayRes.ok)) throw new Error("Could not refresh the diary.");
     if (histRes.ok) setHistory30(await histRes.json());
     if (todayRes.ok) {
       const freshToday = await todayRes.json();
       setTodayDaily(freshToday);
-      if (focusDay === today) setSelectedDaily(freshToday);
+      if (focusDay === today && selectedDayRef.current === focusDay) setSelectedDaily(freshToday);
     }
-    if (dayRes?.ok) setSelectedDaily(await dayRes.json());
+    if (dayRes?.ok) {
+      const value = await dayRes.json();
+      if (selectedDayRef.current === focusDay) setSelectedDaily(value);
+    }
   }
 
   async function selectDay(day: string) {
+    dayRequest.current?.abort();
+    selectedDayRef.current = day;
     setSelectedDay(day);
-    if (day === today) {
-      setSelectedDaily(todayDaily);
-      return;
+    if (day === today) { setSelectedDaily(todayDaily); setDayLoading(false); return; }
+    const controller = new AbortController();
+    dayRequest.current = controller;
+    setDayLoading(true);
+    try {
+      const res = await fetch(`/api/nutrition?day=${day}`, { signal: controller.signal });
+      if (!res.ok) throw new Error("Could not load that date. Select it again to retry.");
+      const value = await res.json();
+      if (selectedDayRef.current === day) setSelectedDaily(value);
+    } catch (error) {
+      if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "Could not load the diary.");
+    } finally {
+      if (selectedDayRef.current === day) setDayLoading(false);
     }
-    const res = await fetch(`/api/nutrition?day=${day}`);
-    if (res.ok) setSelectedDaily(await res.json());
   }
 
   async function saveTracker(action: object, successMessage: string) {
@@ -147,7 +192,9 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     }
   }
 
-  async function runNutritionAction(action: { action: string; [k: string]: unknown }, successMessage: string) {
+  async function runNutritionAction(action: { action: string; [k: string]: unknown }, successMessage: string): Promise<boolean> {
+    if (actionLock.current) return false;
+    actionLock.current = true;
     setBusy(true);
     setMessage("");
     try {
@@ -159,14 +206,21 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message ?? "Could not save.");
 
+      // Use the committed response immediately, even if a later refresh is unavailable.
+      const savedDay = typeof payload.day === "object" ? payload.day : payload.meals ? payload : null;
+      if (savedDay) {
+        if (savedDay.day === today) setTodayDaily(savedDay);
+        if (savedDay.day === selectedDayRef.current) setSelectedDaily(savedDay);
+      }
       if (action.action === "target" || action.action === "preferences") {
         setSettings(payload);
       } else if (action.action === "revoke-mcp") {
         setAudit([]);
       }
-      await refreshHistoryAndToday(selectedDay);
+      let refreshed = true;
+      await refreshHistoryAndToday(selectedDayRef.current).catch(() => { refreshed = false; });
       if (action.action === "energy" || action.action === "energy-import" || action.action === "import-health-file") {
-        await refreshTracker();
+        await refreshTracker().catch(() => null);
       }
       if (action.action === "import-health-file") {
         const parts: string[] = [];
@@ -175,12 +229,15 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         if (payload.mealsImported) parts.push(`${payload.mealsImported} meal(s)`);
         if (payload.heightUpdated) parts.push("height profile");
         setMessage(parts.length ? `Imported ${parts.join(", ")}.` : successMessage);
-        return;
+        return true;
       }
-      setMessage(successMessage);
+      setMessage(refreshed ? successMessage : `${successMessage} Refresh the page to see the updated totals.`);
+      return true;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save.");
+      return false;
     } finally {
+      actionLock.current = false;
       setBusy(false);
     }
   }
@@ -247,6 +304,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   }
 
   function openNewMeal(day = selectedDay) {
+    selectedDayRef.current = day;
     setSelectedDay(day);
     setEditingMeal(null);
     setComposerOpen(true);
@@ -294,6 +352,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             tracker={tracker}
             theme={theme}
             busy={busy}
+            loading={dayLoading || selectedDaily.day !== selectedDay}
             onToggleTheme={toggleTheme}
             onSelectDay={(d) => void selectDay(d)}
             onLogMeal={() => openNewMeal(selectedDay)}
@@ -360,18 +419,19 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           defaultDay={tab === "Nutrition" ? selectedDay : today}
           editingMeal={editingMeal}
           busy={busy}
+          timezone={settings.timezone}
           onClose={() => {
             setComposerOpen(false);
             setEditingMeal(null);
           }}
           onSaveMeal={async ({ mode, data }) => {
-            await runNutritionAction(
+            return runNutritionAction(
               { action: mode, data },
               mode === "update" ? "Meal updated." : "Meal saved.",
             );
           }}
           onSaveTemplate={async (data) => {
-            await runNutritionAction({ action: "save-template", data }, "Saved to recipes & templates.");
+            return runNutritionAction({ action: "save-template", data }, "Saved to recipes & templates.");
           }}
         />
       )}
