@@ -28,7 +28,7 @@ interface SettingsViewProps {
   onSetTheme: (mode: ThemeMode) => void;
   onToggleTheme: () => void;
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
-  onNutritionAction: (action: object, successMessage: string) => Promise<void>;
+  onNutritionAction: (action: object, successMessage: string) => Promise<boolean>;
   onSyncGoogle: (days?: number) => Promise<void>;
   onPushGoogle: (days?: number) => Promise<void>;
   onDisconnectGoogle: () => Promise<void>;
@@ -143,18 +143,17 @@ export function SettingsView({
     setImportText(text);
   }
 
-  function submitHealthFileImport(e: FormEvent) {
+  async function submitHealthFileImport(e: FormEvent) {
     e.preventDefault();
     if (!importText.trim()) {
       onMessage("Select a Google Health / Takeout / Fitbit file or paste saved JSON/CSV.");
       return;
     }
-    void onNutritionAction(
+    const saved = await onNutritionAction(
       { action: "import-health-file", rawText: importText },
       "Saved health data imported.",
     );
-    setImportText("");
-    setImportFileName("");
+    if (saved) { setImportText(""); setImportFileName(""); }
   }
 
   function submitProfile(e: FormEvent<HTMLFormElement>) {
@@ -176,6 +175,7 @@ export function SettingsView({
   async function downloadAll(format: "json" | "csv") {
     if (format === "json") {
       const res = await fetch("/api/nutrition?export=json");
+      if (!res.ok) { onMessage("Could not download your export. Please try again."); return; }
       const full = await res.json();
       triggerDownload(JSON.stringify(full, null, 2), "application/json", "mcplogger-export.json");
       return;
@@ -438,13 +438,25 @@ export function SettingsView({
 
         <div style={{ display: "grid", gap: ".65rem", marginTop: ".75rem" }}>
           <div className="mono-box">{mcpUrl}</div>
+          <details>
+            <summary>Connect ChatGPT, then use it on your phone</summary>
+            <ol className="connector-steps">
+              <li>On ChatGPT web or desktop, open Plugins, select +, then Add custom MCP server.</li>
+              <li>Name it MCP Logger and paste the URL above. Choose OAuth with automatic client registration, then create the plugin.</li>
+              <li>Sign in to MCP Logger and approve the read and meal logging permissions.</li>
+              <li>On the ChatGPT mobile app, use the same account and enable MCP Logger from the available plugins in a new chat.</li>
+              <li>Upload a meal photo and ask “Estimate this meal, then log it.” Check that the reply includes a saved meal ID.</li>
+            </ol>
+            <p className="search-hint">Custom MCP setup is done on the web. Plugin availability on mobile depends on your account and workspace. If this endpoint is disabled, it must be enabled before connecting.</p>
+            <a href="https://learn.chatgpt.com/docs/plugins" target="_blank" rel="noreferrer">ChatGPT plugin instructions</a>
+          </details>
           <div className="button-row">
             <button
               type="button"
               className="secondary compact"
-              onClick={() => {
-                void navigator.clipboard?.writeText(mcpUrl);
-                onMessage("MCP URL copied.");
+              onClick={async () => {
+                try { await navigator.clipboard.writeText(mcpUrl); onMessage("MCP URL copied."); }
+                catch { onMessage("Copy was blocked. Select the MCP URL above and copy it."); }
               }}
             >
               <Copy size={14} /> Copy MCP URL
@@ -452,9 +464,9 @@ export function SettingsView({
             <button
               type="button"
               className="secondary compact"
-              onClick={() => {
-                void navigator.clipboard?.writeText(CHATGPT_INSTRUCTIONS);
-                onMessage("ChatGPT skill instructions copied.");
+              onClick={async () => {
+                try { await navigator.clipboard.writeText(CHATGPT_INSTRUCTIONS); onMessage("ChatGPT instructions copied."); }
+                catch { onMessage("Copy was blocked. See the connector guide for the instructions."); }
               }}
             >
               <Copy size={14} /> Copy ChatGPT instructions

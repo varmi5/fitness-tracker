@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -173,6 +173,56 @@ try {
   assert.equal(mcpChallenge.status, 401);
   assert.match(mcpChallenge.headers.get("www-authenticate") ?? "", /resource_metadata="/);
   console.log("MCP OAuth discovery metadata and Bearer challenge passed.");
+
+  const callback = "http://127.0.0.1:3089/callback";
+  const verifier = randomBytes(32).toString("base64url");
+  const registration = await post("/api/auth/oauth2/register", {
+    client_name: "MCP Logger smoke test", application_type: "native", redirect_uris: [callback],
+    grant_types: ["authorization_code", "refresh_token"], response_types: ["code"],
+    token_endpoint_auth_method: "none", scope: "fitness:read fitness:write offline_access",
+  });
+  if (!registration.ok) { const err = await registration.json(); throw new Error(`OAuth registration failed (${registration.status}): ${err.error ?? ""} ${err.error_description ?? err.message ?? ""}`); }
+  const client = await registration.json();
+  const authorization = new URL(asJson.authorization_endpoint);
+  authorization.search = new URLSearchParams({ client_id: client.client_id, response_type: "code",
+    redirect_uri: callback, scope: "fitness:read fitness:write offline_access", state: "synthetic-smoke-state",
+    code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256",
+    resource: `${origin}/mcp` }).toString();
+  const consentRedirect = await fetch(url(authorization.pathname + authorization.search), { headers: { Cookie: cookie }, redirect: "manual" });
+  const redirectBody = consentRedirect.status === 200 ? await consentRedirect.json() : null;
+  const nextUrl = consentRedirect.headers.get("location") ?? redirectBody?.url;
+  assert.ok(nextUrl, `OAuth authorization must redirect to consent (${consentRedirect.status})`);
+  const consentUrl = new URL(nextUrl, origin);
+  assert.equal(consentUrl.pathname, "/oauth/consent");
+  const consent = await post("/api/auth/oauth2/consent", { accept: true, oauth_query: consentUrl.search.slice(1) }, { Cookie: cookie });
+  assert.ok(consent.ok, "OAuth consent must succeed");
+  const consentResult = await consent.json();
+  const authorized = new URL(consentResult.url);
+  assert.equal(authorized.origin, new URL(callback).origin);
+  const tokenResponse = await fetch(url(new URL(asJson.token_endpoint).pathname), {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "authorization_code", code: authorized.searchParams.get("code"),
+      client_id: client.client_id, redirect_uri: callback, code_verifier: verifier, resource: `${origin}/mcp` }),
+  });
+  assert.ok(tokenResponse.ok, "OAuth token exchange must succeed");
+  const grant = await tokenResponse.json();
+  assert.ok(grant.access_token);
+  const mcpCall = async (method, params) => {
+    const response = await post("/mcp", { jsonrpc: "2.0", id: 1, method, params }, {
+      Authorization: `Bearer ${grant.access_token}`, Accept: "application/json, text/event-stream",
+    });
+    assert.equal(response.status, 200, "Authenticated MCP HTTP calls must succeed");
+    const result = await response.json();
+    assert.equal(result.error, undefined);
+    return result.result;
+  };
+  await mcpCall("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "smoke", version: "1" } });
+  const listed = await mcpCall("tools/list", {});
+  assert.equal(listed.tools.length, 10);
+  const dailyLog = await mcpCall("tools/call", { name: "get_daily_log", arguments: { day: "2026-11-17" } });
+  assert.equal(dailyLog.isError, false);
+  assert.equal(JSON.parse(dailyLog.content[0].text).totals.calories, 257);
+  console.log("OAuth registration, PKCE, consent, token exchange and authenticated HTTP MCP tools passed.");
 } finally {
   await stopApp();
   await database.stop();

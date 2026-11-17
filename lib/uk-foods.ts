@@ -1,3 +1,5 @@
+import { foodMatchScore } from "./search-match";
+
 export interface UkStapleFood {
   id: string;
   name: string;
@@ -50,13 +52,9 @@ export const UK_STAPLES: UkStapleFood[] = [
 export function searchUkStaples(query: string, limit = 10): UkStapleFood[] {
   const q = query.trim().toLowerCase();
   if (!q) return UK_STAPLES.slice(0, limit);
-  const terms = q.split(/\s+/).filter(Boolean);
-  return UK_STAPLES
-    .filter((item) => {
-      const hay = `${item.name} ${item.preparation}`.toLowerCase();
-      return terms.every((term) => hay.includes(term));
-    })
-    .slice(0, limit);
+  return UK_STAPLES.map((item) => ({ item, score: foodMatchScore(`${item.name} ${item.preparation}`, q) }))
+    .filter(({ score }) => Number.isFinite(score))
+    .sort((a, b) => a.score - b.score).slice(0, limit).map(({ item }) => item);
 }
 
 export interface BarcodeProduct {

@@ -31,6 +31,7 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
       allowDynamicClientRegistration: true,
       allowUnauthenticatedClientRegistration: true,
       clientRegistrationDefaultResources: [resource],
+      clientRegistrationDefaultApplicationType: "infer",
       grantTypes: ["authorization_code", "refresh_token"],
       accessTokenExpiresIn: 600,
       validateRedirectUri: (uri, _registered, valid) => valid && allowedMcpCallback(uri),
