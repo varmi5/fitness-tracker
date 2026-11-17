@@ -1,6 +1,6 @@
 {
   "name": "mcp-logger",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Log meals and review nutrition, energy balance and body measurements in your private FitnessTrackr account.",
   "author": {
     "name": "FitnessTrackr",
@@ -18,8 +18,8 @@
       "Estimate this meal and ask before logging it.",
       "Show my nutrition and waist trends."
     ],
-    "logo": "./assets/icon.png",
-    "composerIcon": "./assets/icon.png"
+    "logo": "./assets/purple-dumbbell.png",
+    "composerIcon": "./assets/purple-dumbbell.png"
   },
   "skills": "./skills",
   "mcpServers": "./.mcp.json"
