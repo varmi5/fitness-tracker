@@ -427,7 +427,7 @@ export function SettingsView({
         <div style={{ display: "grid", gap: ".65rem", marginTop: ".75rem" }}>
           <div className="mono-box">{mcpUrl}</div>
           <details>
-            <summary>Connect on ChatGPT web first, then use on your phone</summary>
+            <summary>Connect on ChatGPT web first, then use on your phone</summary><p><a href="/connect" target="_blank" rel="noreferrer">Open the connection guide and plugin download</a></p>
             <ol className="connector-steps">
               <li><a href="https://chatgpt.com/plugins" target="_blank" rel="noreferrer">Use this link to open ChatGPT on the web and add FitnessTrackr</a>. Select +, then Add custom MCP server.</li>
               <li>Use the connection URL here: <code>{mcpUrl}</code>. Choose OAuth with automatic client registration, then create the plugin.</li>

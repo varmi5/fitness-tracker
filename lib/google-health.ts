@@ -470,15 +470,21 @@ export async function pushWeightToGoogle(
     }
     const tz = input.timezone ?? DEFAULT_TIMEZONE;
     const recordedAt = resolveLocalDateTime(input.day, "08:00", tz).toISOString();
-    const id = `mcpl-w-${input.day}`;
-    const res = await fetch(`${googleAPI}/dataTypes/weight/dataPoints?dataPointId=${encodeURIComponent(id)}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${grant.accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(buildGoogleWeightDataPoint({ weightKg: input.weightKg, recordedAt, note: input.note })),
+    const name = `users/me/dataTypes/weight/dataPoints/ft-weight-${input.day}`;
+    const headers = { Authorization: `Bearer ${grant.accessToken}`, "Content-Type": "application/json" };
+    const lookup = await fetch(`https://health.googleapis.com/v4/${name}`, { headers, signal: AbortSignal.timeout(8000), cache: "no-store" });
+    if (!lookup.ok && lookup.status !== 404) return { pushed: false, reason: `lookup-http-${lookup.status}` };
+    const res = await fetch(lookup.ok ? `https://health.googleapis.com/v4/${name}` : `${googleAPI}/dataTypes/weight/dataPoints`, {
+      method: lookup.ok ? "PATCH" : "POST", headers,
+      body: JSON.stringify({ name, ...buildGoogleWeightDataPoint({ weightKg: input.weightKg, recordedAt, note: input.note }) }),
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return { pushed: false, reason: `http-${res.status}` };
-    return { pushed: true };
+    const operation = await res.json();
+    if (operation.error) return { pushed: false, reason: "operation-failed" };
+    if (!operation.done) return { pushed: false, reason: "operation-pending" };
+    return { pushed: operation.response?.name?.split("/").at(-1) === name.split("/").at(-1) };
+
   } catch {
     return { pushed: false, reason: "request-failed" };
   }

@@ -1,0 +1,26 @@
+{
+  "name": "mcp-logger",
+  "version": "1.1.0",
+  "description": "Log meals and review nutrition, energy balance and body measurements in your private FitnessTrackr account.",
+  "author": {
+    "name": "FitnessTrackr",
+    "email": "support@fitnesstrackr.co.uk"
+  },
+  "interface": {
+    "displayName": "FitnessTrackr",
+    "shortDescription": "Meals, macros and energy",
+    "longDescription": "Log meals and drinks, search UK and branded foods, review nutrition and body measurements, and manage personal macro targets and opt-in reminders. Connect your FitnessTrackr account securely using OAuth. Food and wearable energy values are estimates. Free personal project hosted in the UK.",
+    "developerName": "FitnessTrackr",
+    "category": "Healthcare",
+    "capabilities": [],
+    "defaultPrompt": [
+      "Review my food diary today.",
+      "Estimate this meal and ask before logging it.",
+      "Show my nutrition and waist trends."
+    ],
+    "logo": "./assets/icon.png",
+    "composerIcon": "./assets/icon.png"
+  },
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json"
+}

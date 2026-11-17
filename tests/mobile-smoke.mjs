@@ -88,7 +88,7 @@ try {
     await page.unroute("**/api/nutrition");
     assert.equal(await page.evaluate(() => document.body.style.position), "");
     await page.getByRole("navigation").getByRole("button", { name: "Nutrition", exact: true }).click();
-    await page.getByText(`${name} review meal`, { exact: true }).waitFor();
+    await page.locator(".meal-card").filter({ hasText: `${name} review meal` }).waitFor();
     await page.getByRole("button", { name: "Edit", exact: true }).last().click();
     await modal.getByLabel("Food name", { exact: true }).fill("oats");
     await modal.getByRole("option").filter({ hasText: "Porridge oats, unfortified UK" }).first().click();

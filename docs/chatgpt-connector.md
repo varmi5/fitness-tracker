@@ -96,3 +96,21 @@ Verified documentation (17 November 2026):
 - [Plugins on supported ChatGPT surfaces](https://learn.chatgpt.com/docs/plugins)
 - [Connect a custom MCP server](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)
 - [Build an MCP server](https://developers.openai.com/plugins/build/mcp-server)
+
+## Version 1.1: personal settings and phone reminders
+
+The server adds `search_foods`, `preview_nutrition_targets`, `get_logging_reminders`,
+`set_nutrition_targets` and `set_logging_reminders`. The two settings writes require
+**fitness:settings:write** plus **fitness:read** and explicit APPLY confirmation.
+Existing tokens are not widened. Refresh/reconnect and grant that permission to use these writes;
+ordinary diary reads/writes continue with existing scopes. Updated plugin instructions apply after
+the host refreshes the plugin; use a new chat after updating. Each user signs in separately.
+
+Phone reminders are delivered by the installed PWA, not the ChatGPT app. On iPhone, install
+from Safari's Add to Home Screen, open the installed app, then enable notifications under Settings.
+Installing the plugin alone does not create a ChatGPT scheduled task.
+
+Public connection guide: https://fitnesstrackr.co.uk/connect
+Publisher: FitnessTrackr. Support: support@fitnesstrackr.co.uk. Personal UK hosting; free service.
+The downloadable package can be imported where supported. The account plugin remains private;
+public directory approval requires the separate submission workflow and is not completed by hosting a ZIP.

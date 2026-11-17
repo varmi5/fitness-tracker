@@ -17,6 +17,7 @@
             "defaultScopes": [
               "fitness:read",
               "fitness:write",
+              "fitness:settings:write",
               "offline_access"
             ]
           }

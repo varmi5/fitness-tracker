@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "mcp-logger": {
+      "type": "streamable-http",
+      "url": "https://fitnesstrackr.co.uk/mcp",
+      "extensions": {
+        "com.openai": {
+          "auth": {
+            "type": "oauth",
+            "client": {
+              "mode": "dcr"
+            },
+            "baseScopes": [
+              "fitness:read"
+            ],
+            "defaultScopes": [
+              "fitness:read",
+              "fitness:write",
+              "fitness:settings:write",
+              "offline_access"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
