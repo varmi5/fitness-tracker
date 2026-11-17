@@ -82,6 +82,7 @@ export const nutritionPreference = pgTable("nutrition_preference", {
   userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
   timezone: text().notNull().default("Europe/London"),
   preferredEnergySource: text("preferred_energy_source").notNull().default("google"),
+  googleTwoWaySync: boolean("google_two_way_sync").notNull().default(false),
 });
 
 export const calorieTarget = pgTable("calorie_target", {
@@ -136,6 +137,7 @@ export const meal = pgTable("meal", {
   ingredients: text().notNull().default(""),
   notes: text().notNull().default(""),
   idempotencyKey: text("idempotency_key"),
+  googleDatapointName: text("google_datapoint_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [

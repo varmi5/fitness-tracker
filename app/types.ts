@@ -14,6 +14,10 @@ export interface GoogleIntegrationStatus {
   status: string | null;
   lastSync: string | null;
   lastError: string | null;
+  canReadWeights: boolean;
+  canWriteWeights: boolean;
+  canReadNutrition: boolean;
+  canWriteNutrition: boolean;
 }
 
 export interface InitialAppData {
@@ -28,6 +32,7 @@ export interface InitialAppData {
 }
 
 export type AppTab = "Home" | "Nutrition" | "Measurements" | "Settings";
+export type ThemeMode = "light" | "dark";
 
 export const METHOD_LABELS: Record<EstimationMethod, string> = {
   weighed: "Weighed",

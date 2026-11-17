@@ -14,7 +14,7 @@ export default async function Home() {
   if (!authConfigured()) {
     return (
       <main className="auth-card">
-        <h1>Fitness</h1>
+        <h1>MCP Logger</h1>
         <p>Setup is not configured.</p>
       </main>
     );

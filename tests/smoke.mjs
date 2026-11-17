@@ -122,7 +122,7 @@ try {
   const signupPage = await waitForSetup();
   assert.equal(signupPage.status, 200);
   const signupHtml = await signupPage.text();
-  assert.match(signupHtml, /Create your Fitness account/);
+  assert.match(signupHtml, /Create your MCP Logger account/);
   assert.doesNotMatch(signupHtml, /name="invite"/);
   assert.match(signupPage.headers.get("content-security-policy"), /challenges\.cloudflare\.com/);
   assert.equal((await post("/api/auth/sign-in/email", { email, password })).status, 200);

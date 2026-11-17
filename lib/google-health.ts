@@ -1,15 +1,33 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { and, eq, gte, lte } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
 import type { AuthDatabase } from "./auth";
-import { NutritionError, nutritionData } from "./nutrition-data";
-import { addDays, energyInput, historyInput, localDay } from "./nutrition-model";
-import { dailyEnergy, healthIntegration } from "./schema";
+import { NutritionError, nutritionData, upsertSyncedWeight, type MealRecord } from "./nutrition-data";
+import {
+  addDays,
+  DEFAULT_TIMEZONE,
+  energyInput,
+  historyInput,
+  localDay,
+  resolveLocalDateTime,
+  type MealCategory,
+} from "./nutrition-model";
+import { dailyEnergy, healthIntegration, meal, measurement, profile } from "./schema";
 
 const googleAPI = "https://health.googleapis.com/v4/users/me";
 const activityScope = "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly";
 const measurementsScope = "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly";
-const scopeValues = [activityScope, measurementsScope];
+const measurementsWriteScope = "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.writeonly";
+const nutritionReadScope = "https://www.googleapis.com/auth/googlehealth.nutrition.readonly";
+const nutritionWriteScope = "https://www.googleapis.com/auth/googlehealth.nutrition.writeonly";
+
+const scopeValues = [
+  activityScope,
+  measurementsScope,
+  measurementsWriteScope,
+  nutritionReadScope,
+  nutritionWriteScope,
+];
 
 const tokens = z.object({
   accessToken: z.string(),
@@ -178,10 +196,18 @@ export function parseGoogleRollup(type: keyof typeof types, payload: unknown) {
     const date = z.iso
       .date()
       .parse([year, String(month).padStart(2, "0"), String(day).padStart(2, "0")].join("-"));
-    const value = (item[section] as Record<string, unknown> | undefined)?.[name];
+    const sectionObj = item[section] as Record<string, unknown> | undefined;
+    const rawVal = sectionObj?.[name];
+    const fallbackKg = type === "weight" && rawVal == null ? sectionObj?.kilogramsAvg : undefined;
+    const value = rawVal ?? fallbackKg;
     if (value == null || value === "") continue;
     const parsed = z.number().nonnegative().parse(typeof value === "string" ? Number(value) : value);
-    rows.set(date, field === "weightKg" ? Math.round((parsed / 1000) * 100) / 100 : field === "steps" ? Math.round(parsed) : Math.round(parsed * 10) / 10);
+    if (field === "weightKg") {
+      const kg = fallbackKg != null ? parsed : parsed / 1000;
+      if (kg > 0 && kg < 500) rows.set(date, Math.round(kg * 100) / 100);
+    } else {
+      rows.set(date, field === "steps" ? Math.round(parsed) : Math.round(parsed * 10) / 10);
+    }
   }
 
   return { field, rows, nextPageToken: envelope.nextPageToken };
@@ -206,20 +232,80 @@ async function fetchRollup(type: keyof typeof types, grant: Tokens, from: string
   throw new NutritionError("Google returned too many pages for one sync.", 502);
 }
 
+async function fetchLatestHeightCm(grant: Tokens): Promise<number | null> {
+  if (!grant.scopes.includes(measurementsScope)) return null;
+  try {
+    const response = await fetch(`${googleAPI}/dataTypes/height/dataPoints?pageSize=5`, {
+      headers: { Authorization: `Bearer ${grant.accessToken}` },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as {
+      dataPoints?: { height?: { heightMillimeters?: number; millimeters?: number } }[];
+    };
+    for (const point of data.dataPoints ?? []) {
+      const mm = point.height?.heightMillimeters ?? point.height?.millimeters;
+      if (typeof mm === "number" && Number.isFinite(mm) && mm > 500 && mm < 3000) {
+        return Math.round((mm / 10) * 10) / 10;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 const own = (userId: string) => and(eq(healthIntegration.userId, userId), eq(healthIntegration.provider, "google"));
 
 export async function googleStatus(db: AuthDatabase, userId: string) {
   const [row] = await db
-    .select({ status: healthIntegration.status, lastSync: healthIntegration.lastSync, lastError: healthIntegration.lastError })
+    .select({
+      status: healthIntegration.status,
+      lastSync: healthIntegration.lastSync,
+      lastError: healthIntegration.lastError,
+      credential: healthIntegration.credential,
+    })
     .from(healthIntegration)
     .where(own(userId));
+
+  let scopes: string[] = [];
+  if (row?.credential) {
+    try {
+      scopes = tokens.parse(unseal(row.credential, userId)).scopes;
+    } catch {
+      scopes = [];
+    }
+  }
+
   return {
     available: googleConfigured(),
     connected: Boolean(row),
     status: row?.status ?? null,
     lastSync: row?.lastSync?.toISOString() ?? null,
     lastError: row?.lastError ?? null,
+    canReadWeights: scopes.includes(measurementsScope),
+    canWriteWeights: scopes.includes(measurementsWriteScope),
+    canReadNutrition: scopes.includes(nutritionReadScope),
+    canWriteNutrition: scopes.includes(nutritionWriteScope),
   };
+}
+
+async function getFreshGrant(db: AuthDatabase, userId: string) {
+  const [linked] = await db.select().from(healthIntegration).where(own(userId));
+  if (!linked) throw new NutritionError("Connect Google Health first.", 409);
+  let grant = tokens.parse(unseal(linked.credential, userId));
+  let refreshed = false;
+  if (grant.expiresAt < Date.now() + 60000) {
+    grant = await exchange({ grant_type: "refresh_token", refresh_token: grant.refreshToken }, grant);
+    refreshed = true;
+  }
+  if (refreshed) {
+    await db
+      .update(healthIntegration)
+      .set({ credential: seal(grant, userId) })
+      .where(and(own(userId), eq(healthIntegration.credential, linked.credential)));
+  }
+  return { linked, grant };
 }
 
 export async function syncGoogle(db: AuthDatabase, userId: string, from: string, to: string) {
@@ -250,6 +336,8 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
       }
     }
 
+    const remoteHeightCm = await fetchLatestHeightCm(grant);
+
     await db.transaction(async (tx) => {
       const [current] = await tx.select().from(healthIntegration).where(own(userId)).for("update");
       if (current?.credential !== linked.credential) {
@@ -277,6 +365,18 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
             complete: day < today && values.totalKcal != null,
           }),
         });
+        if (values.weightKg != null) {
+          await upsertSyncedWeight(tx, userId, day, values.weightKg, "Synced from Google Health");
+        }
+      }
+
+      if (remoteHeightCm != null) {
+        const [prof] = await tx.select({ heightCm: profile.heightCm }).from(profile).where(eq(profile.userId, userId));
+        if (!prof) {
+          await tx.insert(profile).values({ userId, heightCm: remoteHeightCm, units: "metric", goals: "" });
+        } else if (prof.heightCm == null) {
+          await tx.update(profile).set({ heightCm: remoteHeightCm }).where(eq(profile.userId, userId));
+        }
       }
 
       await tx
@@ -285,7 +385,7 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
         .where(own(userId));
     });
 
-    return { syncedDays: readings.size };
+    return { syncedDays: readings.size, syncedHeight: remoteHeightCm != null };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sync failed.";
     await db
@@ -294,6 +394,520 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
       .where(and(own(userId), eq(healthIntegration.credential, linked.credential)));
     throw error;
   }
+}
+
+export function buildGoogleWeightDataPoint(input: { weightKg: number; recordedAt: string; note?: string }) {
+  return {
+    weight: {
+      sampleTime: { physicalTime: new Date(input.recordedAt).toISOString() },
+      weightGrams: Math.round(input.weightKg * 1000),
+      ...(input.note ? { notes: input.note.slice(0, 400) } : {}),
+    },
+  };
+}
+
+function mapCategoryToGoogleMealType(category: MealCategory): string {
+  switch (category) {
+    case "breakfast":
+      return "BREAKFAST";
+    case "lunch":
+      return "LUNCH";
+    case "dinner":
+      return "DINNER";
+    case "snacks":
+    case "drinks":
+    default:
+      return "SNACK";
+  }
+}
+
+export function buildGoogleNutritionLogDataPoint(record: {
+  name: string;
+  category: MealCategory;
+  consumedAt: string;
+  totals: {
+    calories: number | null;
+    proteinG: number | null;
+    carbsG: number | null;
+    fatG: number | null;
+    fibreG: number | null;
+  };
+}) {
+  const start = new Date(record.consumedAt);
+  const end = new Date(start.getTime() + 15 * 60 * 1000);
+  const nutrients: { nutrient: string; quantity: { grams: number } }[] = [];
+  if (record.totals.proteinG != null) {
+    nutrients.push({ nutrient: "PROTEIN", quantity: { grams: Math.round(record.totals.proteinG * 10) / 10 } });
+  }
+  if (record.totals.fibreG != null) {
+    nutrients.push({ nutrient: "DIETARY_FIBER", quantity: { grams: Math.round(record.totals.fibreG * 10) / 10 } });
+  }
+  if (record.totals.carbsG != null) {
+    nutrients.push({ nutrient: "TOTAL_CARBOHYDRATE", quantity: { grams: Math.round(record.totals.carbsG * 10) / 10 } });
+  }
+  if (record.totals.fatG != null) {
+    nutrients.push({ nutrient: "TOTAL_FAT", quantity: { grams: Math.round(record.totals.fatG * 10) / 10 } });
+  }
+
+  return {
+    nutritionLog: {
+      interval: {
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+      },
+      foodDisplayName: record.name.slice(0, 160),
+      mealType: mapCategoryToGoogleMealType(record.category),
+      ...(record.totals.calories != null ? { energy: { kcal: Math.round(record.totals.calories) } } : {}),
+      ...(record.totals.carbsG != null ? { totalCarbohydrate: { grams: Math.round(record.totals.carbsG * 10) / 10 } } : {}),
+      ...(record.totals.fatG != null ? { totalFat: { grams: Math.round(record.totals.fatG * 10) / 10 } } : {}),
+      ...(nutrients.length ? { nutrients } : {}),
+    },
+  };
+}
+
+export async function pushWeightToGoogle(
+  db: AuthDatabase,
+  userId: string,
+  input: { weightKg: number; day: string; timezone?: string; note?: string },
+) {
+  if (!googleConfigured()) return { pushed: false, reason: "not-configured" };
+  try {
+    const { grant } = await getFreshGrant(db, userId);
+    if (!grant.scopes.includes(measurementsWriteScope)) {
+      return { pushed: false, reason: "missing-write-scope" };
+    }
+    const tz = input.timezone ?? DEFAULT_TIMEZONE;
+    const recordedAt = resolveLocalDateTime(input.day, "08:00", tz).toISOString();
+    const id = `mcpl-w-${input.day}`;
+    const res = await fetch(`${googleAPI}/dataTypes/weight/dataPoints?dataPointId=${encodeURIComponent(id)}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${grant.accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(buildGoogleWeightDataPoint({ weightKg: input.weightKg, recordedAt, note: input.note })),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return { pushed: false, reason: `http-${res.status}` };
+    return { pushed: true };
+  } catch {
+    return { pushed: false, reason: "request-failed" };
+  }
+}
+
+export async function pushMealToGoogle(db: AuthDatabase, userId: string, record: MealRecord) {
+  if (!googleConfigured()) return { pushed: false, reason: "not-configured" };
+  try {
+    const { grant } = await getFreshGrant(db, userId);
+    if (!grant.scopes.includes(nutritionWriteScope)) {
+      return { pushed: false, reason: "missing-write-scope" };
+    }
+    const [existing] = await db
+      .select({ googleDatapointName: meal.googleDatapointName })
+      .from(meal)
+      .where(and(eq(meal.userId, userId), eq(meal.id, record.id)));
+
+    if (existing?.googleDatapointName) {
+      await fetch(`${googleAPI}/dataTypes/nutrition-log/dataPoints:batchDelete`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${grant.accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ names: [existing.googleDatapointName] }),
+        signal: AbortSignal.timeout(8000),
+      }).catch(() => null);
+    }
+
+    const suffix = Date.now().toString(36);
+    const pointId = `mcpl-${record.id.slice(0, 24)}-${suffix}`.toLowerCase().replace(/[^a-z0-9-]/g, "");
+    const res = await fetch(`${googleAPI}/dataTypes/nutrition-log/dataPoints?dataPointId=${encodeURIComponent(pointId)}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${grant.accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(buildGoogleNutritionLogDataPoint(record)),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return { pushed: false, reason: `http-${res.status}` };
+    const created = (await res.json().catch(() => null)) as { name?: string } | null;
+    const remoteName = created?.name ?? `users/me/dataTypes/nutrition-log/dataPoints/${pointId}`;
+    await db
+      .update(meal)
+      .set({ googleDatapointName: remoteName })
+      .where(and(eq(meal.userId, userId), eq(meal.id, record.id)));
+    return { pushed: true, name: remoteName };
+  } catch {
+    return { pushed: false, reason: "request-failed" };
+  }
+}
+
+export async function pushPendingToGoogle(db: AuthDatabase, userId: string, from: string, to: string) {
+  historyInput.parse({ from, to });
+  const { grant } = await getFreshGrant(db, userId);
+  const canMeals = grant.scopes.includes(nutritionWriteScope);
+  const canWeights = grant.scopes.includes(measurementsWriteScope);
+  if (!canMeals && !canWeights) {
+    throw new NutritionError("Reconnect Google Health to grant write permissions for meals and weights.", 403);
+  }
+
+  const prefs = await nutritionData(db, userId).settings();
+  let mealsPushed = 0;
+  let weightsPushed = 0;
+
+  if (canMeals) {
+    const history = await nutritionData(db, userId).history(from, to);
+    const unpushedIds = new Set(
+      (
+        await db
+          .select({ id: meal.id })
+          .from(meal)
+          .where(
+            and(
+              eq(meal.userId, userId),
+              gte(meal.localDay, from),
+              lte(meal.localDay, to),
+              isNull(meal.googleDatapointName),
+            ),
+          )
+      ).map((r) => r.id),
+    );
+    for (const dayEntry of history.days) {
+      if (dayEntry.mealCount === 0) continue;
+      const dayView = await nutritionData(db, userId).daily(dayEntry.day);
+      for (const m of dayView.meals) {
+        if (!unpushedIds.has(m.id)) continue;
+        const r = await pushMealToGoogle(db, userId, m);
+        if (r.pushed) mealsPushed += 1;
+      }
+    }
+  }
+
+  if (canWeights) {
+    const weights = await db
+      .select({ date: measurement.date, value: measurement.value, note: measurement.note })
+      .from(measurement)
+      .where(
+        and(
+          eq(measurement.userId, userId),
+          eq(measurement.metric, "weight"),
+          eq(measurement.side, "none"),
+          gte(measurement.date, from),
+          lte(measurement.date, to),
+        ),
+      )
+      .orderBy(asc(measurement.date));
+    for (const row of weights) {
+      if (row.note.startsWith("Synced from Google Health")) continue;
+      const r = await pushWeightToGoogle(db, userId, {
+        weightKg: row.value,
+        day: row.date,
+        timezone: prefs.timezone,
+        note: row.note || "MCP Logger weight",
+      });
+      if (r.pushed) weightsPushed += 1;
+    }
+  }
+
+  return { mealsPushed, weightsPushed };
+}
+
+function normalizeDateString(raw: string): string | null {
+  const s = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  // Support MM/DD/YY or MM/DD/YYYY (common in Fitbit exports) or DD/MM/YYYY if first > 12
+  const slash = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/.exec(s);
+  if (slash) {
+    const a = Number(slash[1]);
+    const b = Number(slash[2]);
+    const yRaw = Number(slash[3]);
+    const year = yRaw < 100 ? 2000 + yRaw : yRaw;
+    const [month, day] = a > 12 ? [b, a] : [a, b];
+    const candidate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    return z.iso.date().safeParse(candidate).success ? candidate : null;
+  }
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  return null;
+}
+
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === "," && !inQuotes) {
+      cells.push(cur.trim());
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  cells.push(cur.trim());
+  return cells;
+}
+
+export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZONE) {
+  const trimmed = rawText.trim();
+  if (!trimmed) throw new NutritionError("Paste or upload saved JSON or CSV health data.");
+
+  const byDay = new Map<
+    string,
+    {
+      day: string;
+      source: "google" | "apple" | "manual";
+      totalKcal?: number | null;
+      activeKcal?: number | null;
+      steps?: number | null;
+      weightKg?: number | null;
+      complete?: boolean;
+    }
+  >();
+  let heightCm: number | null = null;
+  const meals: z.input<typeof energyInput> extends never ? never : {
+    day: string;
+    time: string;
+    name: string;
+    category: MealCategory;
+    items: {
+      name: string;
+      amount: number | null;
+      unit: "g" | "ml" | "serving";
+      calories: number | null;
+      proteinG: number | null;
+      carbsG: number | null;
+      fatG: number | null;
+      fibreG: number | null;
+      estimationMethod: "pack_label" | "weighed" | "measured" | "recipe" | "photo_estimate";
+    }[];
+  }[] = [];
+
+  const mergeDay = (
+    day: string,
+    patch: {
+      source?: "google" | "apple" | "manual";
+      totalKcal?: number | null;
+      activeKcal?: number | null;
+      steps?: number | null;
+      weightKg?: number | null;
+      complete?: boolean;
+    },
+  ) => {
+    const prev = byDay.get(day) ?? { day, source: patch.source ?? "google" };
+    byDay.set(day, {
+      ...prev,
+      ...patch,
+      source: patch.source ?? prev.source,
+      totalKcal: patch.totalKcal ?? prev.totalKcal,
+      activeKcal: patch.activeKcal ?? prev.activeKcal,
+      steps: patch.steps ?? prev.steps,
+      weightKg: patch.weightKg ?? prev.weightKg,
+      complete: patch.complete ?? prev.complete,
+    });
+  };
+
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      throw new NutritionError("Invalid JSON file.");
+    }
+
+    const ingestPoint = (pt: Record<string, unknown>) => {
+      // 1. Native app / Apple Health array entry
+      if (typeof pt.day === "string" && z.iso.date().safeParse(pt.day).success) {
+        const src = pt.source === "apple" || pt.source === "manual" ? pt.source : "google";
+        mergeDay(pt.day, {
+          source: src,
+          totalKcal: typeof pt.totalKcal === "number" ? pt.totalKcal : null,
+          activeKcal: typeof pt.activeKcal === "number" ? pt.activeKcal : null,
+          steps: typeof pt.steps === "number" ? Math.round(pt.steps) : null,
+          weightKg: typeof pt.weightKg === "number" ? Math.round(pt.weightKg * 100) / 100 : null,
+          complete: typeof pt.complete === "boolean" ? pt.complete : typeof pt.totalKcal === "number",
+        });
+        return;
+      }
+
+      // 2. Google Health v4 rollup point
+      const civilDate = (pt.civilStartTime as { date?: { year: number; month: number; day: number } } | undefined)?.date;
+      if (civilDate) {
+        const day = `${civilDate.year}-${String(civilDate.month).padStart(2, "0")}-${String(civilDate.day).padStart(2, "0")}`;
+        const tot = (pt.totalCalories as { kcalSum?: number } | undefined)?.kcalSum;
+        const act = (pt.activeEnergyBurned as { kcalSum?: number } | undefined)?.kcalSum;
+        const st = (pt.steps as { countSum?: number | string } | undefined)?.countSum;
+        const wtObj = pt.weight as { weightGramsAvg?: number; kilogramsAvg?: number } | undefined;
+        const wt = wtObj?.weightGramsAvg != null ? wtObj.weightGramsAvg / 1000 : wtObj?.kilogramsAvg;
+        mergeDay(day, {
+          source: "google",
+          totalKcal: tot != null ? Math.round(Number(tot) * 10) / 10 : undefined,
+          activeKcal: act != null ? Math.round(Number(act) * 10) / 10 : undefined,
+          steps: st != null ? Math.round(Number(st)) : undefined,
+          weightKg: wt != null ? Math.round(Number(wt) * 100) / 100 : undefined,
+          complete: tot != null,
+        });
+        return;
+      }
+
+      // 3. Google Health v4 raw dataPoint (weight, height, nutritionLog)
+      const wtRaw = pt.weight as { sampleTime?: { physicalTime?: string }; weightGrams?: number; kilograms?: number } | undefined;
+      if (wtRaw) {
+        const kg = wtRaw.weightGrams != null ? wtRaw.weightGrams / 1000 : wtRaw.kilograms;
+        const ts = wtRaw.sampleTime?.physicalTime;
+        const day = ts ? localDay(ts, timezone) : null;
+        if (day && kg != null && kg > 0 && kg < 500) {
+          mergeDay(day, { source: "google", weightKg: Math.round(kg * 100) / 100 });
+        }
+      }
+      const htRaw = pt.height as { heightMillimeters?: number; millimeters?: number } | undefined;
+      if (htRaw) {
+        const mm = htRaw.heightMillimeters ?? htRaw.millimeters;
+        if (typeof mm === "number" && mm > 500 && mm < 3000) heightCm = Math.round((mm / 10) * 10) / 10;
+      }
+      const nut = pt.nutritionLog as {
+        interval?: { startTime?: string };
+        foodDisplayName?: string;
+        mealType?: string;
+        energy?: { kcal?: number };
+        totalCarbohydrate?: { grams?: number };
+        totalFat?: { grams?: number };
+        nutrients?: { nutrient?: string; quantity?: { grams?: number } }[];
+      } | undefined;
+      if (nut?.foodDisplayName && nut.interval?.startTime) {
+        const start = new Date(nut.interval.startTime);
+        if (!Number.isNaN(start.getTime())) {
+          const day = localDay(start, timezone);
+          const time = `${String(start.getUTCHours()).padStart(2, "0")}:${String(start.getUTCMinutes()).padStart(2, "0")}`;
+          const catRaw = (nut.mealType ?? "").toLowerCase();
+          const category: MealCategory = catRaw.includes("breakfast")
+            ? "breakfast"
+            : catRaw.includes("lunch")
+              ? "lunch"
+              : catRaw.includes("dinner")
+                ? "dinner"
+                : "snacks";
+          const findNutrient = (name: string) => {
+            const match = nut.nutrients?.find((n) => n.nutrient?.includes(name));
+            return match?.quantity?.grams ?? null;
+          };
+          meals.push({
+            day,
+            time,
+            name: nut.foodDisplayName.slice(0, 160),
+            category,
+            items: [
+              {
+                name: nut.foodDisplayName.slice(0, 160),
+                amount: null,
+                unit: "serving",
+                calories: nut.energy?.kcal ?? null,
+                proteinG: findNutrient("PROTEIN"),
+                carbsG: nut.totalCarbohydrate?.grams ?? findNutrient("CARBOHYDRATE"),
+                fatG: nut.totalFat?.grams ?? findNutrient("FAT"),
+                fibreG: findNutrient("FIBER"),
+                estimationMethod: "pack_label",
+              },
+            ],
+          });
+        }
+      }
+
+      // 4. Fitbit Takeout weight/calories/steps format
+      if (typeof pt.date === "string" && typeof pt.weight === "number") {
+        const day = normalizeDateString(pt.date);
+        if (day) {
+          // Fitbit Takeout sometimes stores lbs by default if > 200 or marked
+          const kg = pt.unit === "lb" || pt.weight > 260 ? Math.round((pt.weight * 0.45359237) * 100) / 100 : Math.round(pt.weight * 100) / 100;
+          mergeDay(day, { source: "google", weightKg: kg });
+        }
+      } else if (typeof pt.dateTime === "string" && pt.value != null) {
+        const day = normalizeDateString(pt.dateTime);
+        const val = Number(pt.value);
+        if (day && Number.isFinite(val)) {
+          if (val >= 1000 && Number.isInteger(val)) mergeDay(day, { source: "google", steps: val });
+          else mergeDay(day, { source: "google", totalKcal: Math.round(val * 10) / 10, complete: true });
+        }
+      }
+    };
+
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (item && typeof item === "object") ingestPoint(item as Record<string, unknown>);
+      }
+    } else if (parsed && typeof parsed === "object") {
+      const obj = parsed as Record<string, unknown>;
+      if (typeof obj.heightCm === "number" && obj.heightCm > 50 && obj.heightCm < 300) {
+        heightCm = Math.round(obj.heightCm * 10) / 10;
+      }
+      for (const keyName of ["dataPoints", "rollupDataPoints", "entries", "dailyEnergy", "weight", "calories", "steps"]) {
+        if (Array.isArray(obj[keyName])) {
+          for (const item of obj[keyName] as unknown[]) {
+            if (item && typeof item === "object") ingestPoint(item as Record<string, unknown>);
+          }
+        }
+      }
+    }
+  } else {
+    // Parse CSV (Google Takeout / Fitbit / custom export)
+    const lines = trimmed.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length < 2) throw new NutritionError("CSV file needs a header row and at least one data row.");
+    const headers = splitCsvLine(lines[0]).map((h) => h.toLowerCase().replace(/[^a-z0-9]/g, ""));
+    const col = (...candidates: string[]) => headers.findIndex((h) => candidates.some((c) => h.includes(c)));
+
+    const iDate = col("date", "day", "time");
+    const iTotal = col("caloriesburned", "totalcalories", "totalkcal", "tdee", "energy");
+    const iActive = col("activitycalories", "activecalories", "activekcal");
+    const iSteps = col("steps");
+    const iWeight = col("weight");
+    const weightInLbs = headers[iWeight]?.includes("lb") || headers[iWeight]?.includes("pound");
+    if (iDate === -1) throw new NutritionError("CSV must contain a Date or Day column.");
+
+    for (const line of lines.slice(1)) {
+      const cells = splitCsvLine(line);
+      const day = normalizeDateString(cells[iDate] ?? "");
+      if (!day) continue;
+      const numAt = (idx: number) => {
+        if (idx === -1 || !cells[idx]) return null;
+        const clean = cells[idx].replace(/,/g, "").trim();
+        const n = Number(clean);
+        return Number.isFinite(n) && n >= 0 ? n : null;
+      };
+      const totalKcal = numAt(iTotal);
+      const activeKcal = numAt(iActive);
+      const steps = numAt(iSteps);
+      const rawWt = numAt(iWeight);
+      const weightKg = rawWt != null && rawWt > 0 ? Math.round((weightInLbs ? rawWt * 0.45359237 : rawWt) * 100) / 100 : null;
+      if (totalKcal == null && activeKcal == null && steps == null && weightKg == null) continue;
+      mergeDay(day, {
+        source: "google",
+        totalKcal,
+        activeKcal: totalKcal != null && activeKcal != null && activeKcal > totalKcal ? null : activeKcal,
+        steps: steps != null ? Math.round(steps) : null,
+        weightKg,
+        complete: totalKcal != null,
+      });
+    }
+  }
+
+  const energyEntries = [...byDay.values()]
+    .slice(0, 365)
+    .map((entry) =>
+      energyInput.parse({
+        day: entry.day,
+        source: entry.source,
+        totalKcal: entry.totalKcal ?? null,
+        activeKcal: entry.activeKcal ?? null,
+        steps: entry.steps ?? null,
+        weightKg: entry.weightKg ?? null,
+        complete: entry.complete ?? entry.totalKcal != null,
+      }),
+    );
+
+  if (energyEntries.length === 0 && meals.length === 0 && heightCm == null) {
+    throw new NutritionError("No valid energy, weight, height, or meal records found in that file.");
+  }
+
+  return { energyEntries, heightCm, meals };
 }
 
 export async function disconnectGoogle(db: AuthDatabase, userId: string) {

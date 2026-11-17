@@ -14,7 +14,7 @@ import { HomeView } from "./home-view";
 import { MeasurementsView } from "./measurements-view";
 import { NutritionView } from "./nutrition-view";
 import { SettingsView } from "./settings-view";
-import type { AppTab, InitialAppData } from "./types";
+import type { AppTab, InitialAppData, ThemeMode } from "./types";
 
 const MealComposer = dynamic(() => import("./meal-composer").then((m) => m.MealComposer), {
   ssr: false,
@@ -27,8 +27,11 @@ const tabs: { title: AppTab; icon: typeof HomeRingIcon }[] = [
   { title: "Settings", icon: SettingsSlidersIcon },
 ];
 
+const THEME_STORAGE_KEY = "mcplogger_theme";
+
 export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [tab, setTab] = useState<AppTab>("Home");
+  const [theme, setThemeState] = useState<ThemeMode>("light");
   const [tracker, setTracker] = useState(initial.tracker);
   const [settings, setSettings] = useState(initial.settings);
   const [today] = useState(initial.today);
@@ -43,7 +46,32 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingMeal, setEditingMeal] = useState<MealRecord | null>(null);
 
+  function applyTheme(next: ThemeMode) {
+    setThemeState(next);
+    document.documentElement.dataset.theme = next;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch {
+      // ignore private-mode storage restrictions
+    }
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", next === "dark" ? "#0A0B0F" : "#F5F7FA");
+  }
+
+  function toggleTheme() {
+    applyTheme(theme === "light" ? "dark" : "light");
+  }
+
   useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+      if (saved === "dark" || saved === "light") {
+        applyTheme(saved);
+      }
+    } catch {
+      // ignore storage errors
+    }
+
     const params = new URLSearchParams(window.location.search);
     const reqTab = params.get("tab") as AppTab | null;
     if (reqTab && tabs.some((t) => t.title === reqTab)) setTab(reqTab);
@@ -62,6 +90,11 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     setMessage("");
     setTab(next);
     window.scrollTo({ top: 0, behavior: "instant" });
+  }
+
+  async function refreshTracker() {
+    const res = await fetch("/api/tracker");
+    if (res.ok) setTracker(await res.json());
   }
 
   async function refreshHistoryAndToday(focusDay = selectedDay) {
@@ -105,6 +138,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         return;
       }
       setTracker(payload);
+      await refreshHistoryAndToday(selectedDay);
       setMessage(successMessage);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save.");
@@ -131,6 +165,18 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         setAudit([]);
       }
       await refreshHistoryAndToday(selectedDay);
+      if (action.action === "energy" || action.action === "energy-import" || action.action === "import-health-file") {
+        await refreshTracker();
+      }
+      if (action.action === "import-health-file") {
+        const parts: string[] = [];
+        if (payload.energyImported) parts.push(`${payload.energyImported} day(s) of energy`);
+        if (payload.weightsSynced) parts.push(`${payload.weightsSynced} weight reading(s)`);
+        if (payload.mealsImported) parts.push(`${payload.mealsImported} meal(s)`);
+        if (payload.heightUpdated) parts.push("height profile");
+        setMessage(parts.length ? `Imported ${parts.join(", ")}.` : successMessage);
+        return;
+      }
       setMessage(successMessage);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save.");
@@ -152,10 +198,31 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Google sync failed.");
       if (payload.status) setGoogle(payload.status);
-      await refreshHistoryAndToday(selectedDay);
-      setMessage(`Synced ${payload.syncedDays} days from Google Health.`);
+      await Promise.all([refreshHistoryAndToday(selectedDay), refreshTracker()]);
+      setMessage(`Synced ${payload.syncedDays} day(s) from Google Health.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Google sync failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pushGoogle(days = 14) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const from = addDays(today, 1 - days);
+      const res = await fetch("/api/integrations/google/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to: today }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.message ?? "Google push failed.");
+      if (payload.status) setGoogle(payload.status);
+      setMessage(`Pushed ${payload.mealsPushed ?? 0} meal(s) and ${payload.weightsPushed ?? 0} weight(s) to Google Health.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Google push failed.");
     } finally {
       setBusy(false);
     }
@@ -170,7 +237,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Could not disconnect.");
       if (payload.status) setGoogle(payload.status);
-      await refreshHistoryAndToday(selectedDay);
+      await Promise.all([refreshHistoryAndToday(selectedDay), refreshTracker()]);
       setMessage("Google Health disconnected and synced data removed.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not disconnect.");
@@ -198,8 +265,12 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             today={today}
             daily={todayDaily}
             history30={history30}
+            tracker={tracker}
             google={google}
+            settings={settings}
+            theme={theme}
             busy={busy}
+            onToggleTheme={toggleTheme}
             onLogMeal={() => openNewMeal(today)}
             onEditMeal={openEditMeal}
             onToggleComplete={(day, complete) =>
@@ -209,6 +280,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
               )
             }
             onSyncGoogle={() => void syncGoogle(14)}
+            onPushGoogle={() => void pushGoogle(14)}
             onNavigate={navigate}
           />
         )}
@@ -220,7 +292,9 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             dayView={selectedDaily}
             history30={history30}
             tracker={tracker}
+            theme={theme}
             busy={busy}
+            onToggleTheme={toggleTheme}
             onSelectDay={(d) => void selectDay(d)}
             onLogMeal={() => openNewMeal(selectedDay)}
             onEditMeal={openEditMeal}
@@ -243,7 +317,14 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         )}
 
         {tab === "Measurements" && (
-          <MeasurementsView snapshot={tracker} today={today} busy={busy} onSaveTracker={saveTracker} />
+          <MeasurementsView
+            snapshot={tracker}
+            today={today}
+            theme={theme}
+            busy={busy}
+            onToggleTheme={toggleTheme}
+            onSaveTracker={saveTracker}
+          />
         )}
 
         {tab === "Settings" && (
@@ -254,10 +335,14 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             google={google}
             audit={audit}
             mcpEnabled={initial.mcpEnabled}
+            theme={theme}
             busy={busy}
+            onSetTheme={applyTheme}
+            onToggleTheme={toggleTheme}
             onSaveTracker={saveTracker}
             onNutritionAction={(action, msg) => runNutritionAction(action as { action: string }, msg)}
             onSyncGoogle={syncGoogle}
+            onPushGoogle={pushGoogle}
             onDisconnectGoogle={disconnectGoogle}
             onMessage={setMessage}
           />
@@ -291,7 +376,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         />
       )}
 
-      <nav className="tabs" aria-label="Fitness views">
+      <nav className="tabs" aria-label="MCP Logger views">
         {tabs.map(({ title, icon: Icon }) => (
           <button
             key={title}

@@ -683,6 +683,16 @@ export function MealComposer({
                       />
                     </label>
                     <label>
+                      Fibre (g) <small>(optional)</small>
+                      <input
+                        inputMode="decimal"
+                        value={item.fibreG}
+                        onChange={(e) =>
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, fibreG: e.target.value } : x)))
+                        }
+                      />
+                    </label>
+                    <label>
                       Carbs (g)
                       <input
                         inputMode="decimal"
@@ -699,16 +709,6 @@ export function MealComposer({
                         value={item.fatG}
                         onChange={(e) =>
                           setItems((p) => p.map((x) => (x.key === item.key ? { ...x, fatG: e.target.value } : x)))
-                        }
-                      />
-                    </label>
-                    <label>
-                      Fibre (g) <small>(optional)</small>
-                      <input
-                        inputMode="decimal"
-                        value={item.fibreG}
-                        onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, fibreG: e.target.value } : x)))
                         }
                       />
                     </label>

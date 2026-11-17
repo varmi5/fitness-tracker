@@ -17,25 +17,29 @@ export function TrendChart({ readings, today, units, height }: { readings: Readi
       <label>Metric<select value={metricKey} onChange={(e) => setMetric(e.target.value)}>{metrics.map((m) =>
         <option key={m.key} value={m.key}>{m.label}</option>)}</select></label>
       <div className="segments" aria-label="Date range">{[[28, "4w"], [84, "12w"], [0, "All"]].map(([value, label]) =>
-        <button key={value} aria-pressed={period === value} onClick={() => setPeriod(Number(value))}>{label}</button>)}</div>
+        <button key={value} type="button" aria-pressed={period === value} onClick={() => setPeriod(Number(value))}>{label}</button>)}</div>
     </div>
     {chart.length === 0 ? <p className="empty">No {metric.label.toLowerCase()} measurements in this range.</p> :
       <>
         <div className="chart" role="img" aria-label={`${metric.label} raw data and 7-day moving average in ${displayUnit(metric, units)}`}>
           <ResponsiveContainer width="100%" height={280}>
             <LineChart data={chart} margin={{ left: -15, right: 12, top: 20 }}>
-              <CartesianGrid vertical={false} stroke="#2c3640" />
-              <XAxis dataKey="date" tickFormatter={(date) => date.slice(5)} stroke="#a6afbb" tick={{ fontSize: 11 }} />
-              <YAxis width={56} domain={["auto", "auto"]} stroke="#a6afbb" tick={{ fontSize: 11 }} />
+              <CartesianGrid vertical={false} stroke="var(--border)" />
+              <XAxis dataKey="date" tickFormatter={(date) => date.slice(5)} stroke="var(--muted)" tick={{ fontSize: 11 }} />
+              <YAxis width={56} domain={["auto", "auto"]} stroke="var(--muted)" tick={{ fontSize: 11 }} />
               <Tooltip formatter={(value) => value == null ? "" : `${Number(value).toFixed(1)} ${displayUnit(metric, units)}`}
-                contentStyle={{ background: "#1a2027", border: "1px solid #3b4653", borderRadius: 12 }} />
-              {metric.key === "waist" && height && <ReferenceLine ifOverflow="extendDomain" y={displayValue(height / 2, metric, units)} stroke="#f7ce87" strokeDasharray="5 5" />}
-              <Line name="Raw" type="linear" dataKey="value" stroke="#739caa" strokeWidth={1.5} dot={{ r: 3 }} isAnimationActive={false} />
-              <Line name="7-day average" type="linear" dataKey="average" stroke="#c8f58c" strokeWidth={2.5} dot={false} isAnimationActive={false} />
+                contentStyle={{ background: "var(--surface)", border: "1px solid var(--border-strong)", borderRadius: 12, color: "var(--text)" }} />
+              {metric.key === "waist" && height && <ReferenceLine ifOverflow="extendDomain" y={displayValue(height / 2, metric, units)} stroke="var(--amber)" strokeDasharray="5 5" />}
+              <Line name="Raw" type="linear" dataKey="value" stroke="var(--accent-2)" strokeWidth={1.7} dot={{ r: 3 }} isAnimationActive={false} />
+              <Line name="7-day average" type="linear" dataKey="average" stroke="var(--accent)" strokeWidth={2.5} dot={false} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
-        <div className="chart-legend"><span>Raw · {displayUnit(metric, units)}</span><span>7-day average</span>{metric.key === "waist" && height && <span>Waist reference</span>}</div>
+        <div className="chart-legend">
+          <span style={{ color: "var(--accent-2)" }}>Raw · {displayUnit(metric, units)}</span>
+          <span style={{ color: "var(--accent)" }}>7-day average</span>
+          {metric.key === "waist" && height && <span style={{ color: "var(--amber)" }}>Waist reference</span>}
+        </div>
       </>}
   </section>;
 }

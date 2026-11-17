@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useState, type FormEvent } from "react";
 import { Activity, ChevronRight, Crosshair, Plus, Ruler } from "lucide-react";
+import { MoonThemeIcon, SunThemeIcon } from "../components/icons";
 import { Button } from "../components/ui/button";
 import {
   displayUnit,
@@ -13,7 +14,7 @@ import {
   summary,
   type Metric,
 } from "../lib/metrics";
-import type { TrackerSnapshot } from "./types";
+import type { ThemeMode, TrackerSnapshot } from "./types";
 
 const TrendChart = dynamic(() => import("./trends").then((m) => m.TrendChart), {
   ssr: false,
@@ -27,11 +28,20 @@ const readout = (value: number | null | undefined, metric: Metric, units: "metri
 interface MeasurementsViewProps {
   snapshot: TrackerSnapshot;
   today: string;
+  theme: ThemeMode;
   busy: boolean;
+  onToggleTheme: () => void;
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
 }
 
-export function MeasurementsView({ snapshot, today, busy, onSaveTracker }: MeasurementsViewProps) {
+export function MeasurementsView({
+  snapshot,
+  today,
+  theme,
+  busy,
+  onToggleTheme,
+  onSaveTracker,
+}: MeasurementsViewProps) {
   const [sub, setSub] = useState<"overview" | "trends" | "log">("overview");
   const [date, setDate] = useState(today);
   const [localMsg, setLocalMsg] = useState("");
@@ -76,13 +86,23 @@ export function MeasurementsView({ snapshot, today, busy, onSaveTracker }: Measu
   return (
     <>
       <div className="page-header">
-        <div>
+        <div className="page-header-title">
           <h1>Measurements</h1>
-          <p style={{ fontSize: ".85rem" }}>Waist, weight, and circumference tracking</p>
+          <p style={{ fontSize: ".84rem" }}>Waist, weight, and circumference tracking</p>
         </div>
-        <button type="button" className="compact" onClick={() => setSub(sub === "log" ? "overview" : "log")}>
-          <Plus size={17} /> {sub === "log" ? "Back" : "Log"}
-        </button>
+        <div className="header-actions">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+            onClick={onToggleTheme}
+          >
+            {theme === "light" ? <MoonThemeIcon size={17} /> : <SunThemeIcon size={17} />}
+          </button>
+          <button type="button" className="compact" onClick={() => setSub(sub === "log" ? "overview" : "log")}>
+            <Plus size={16} /> {sub === "log" ? "Back" : "Log"}
+          </button>
+        </div>
       </div>
 
       <div className="segments" role="tablist" aria-label="Measurement views">

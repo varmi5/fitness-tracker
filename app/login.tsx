@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { Fingerprint } from "lucide-react";
+import { McpBrandMark } from "../components/icons";
 import { authClient } from "../lib/auth-client";
 
 export function Login({ signup, oauth = false }: { signup: boolean; oauth?: boolean }) {
@@ -41,7 +42,7 @@ export function Login({ signup, oauth = false }: { signup: boolean; oauth?: bool
             return;
           }
         }
-        setMessage("Could not connect Fitness. Check your credentials and restart the connection if needed.");
+        setMessage("Could not connect MCP Logger. Check your credentials and restart the connection if needed.");
         return;
       }
       const result = await authClient.signIn.email({
@@ -52,15 +53,19 @@ export function Login({ signup, oauth = false }: { signup: boolean; oauth?: bool
       } else if (result.error) setMessage("Could not sign in. Check your email and password.");
       else location.reload();
     } catch {
-      setMessage("Could not reach Fitness. Try again.");
+      setMessage("Could not reach MCP Logger. Try again.");
     } finally {
       setBusy(false);
     }
   }
 
   return <main className="auth-card">
-    <h1>Fitness</h1>
-    <p>{oauth ? "Sign in to connect your Fitness account." : "Sign in to your nutrition and measurement tracker."}</p>
+    <div className="brand-lockup">
+      <span className="brand-badge"><McpBrandMark size={18} /></span>
+      <span>MCP Logger</span>
+    </div>
+    <h1>{oauth ? "Sign in" : "Welcome back"}</h1>
+    <p>{oauth ? "Sign in to connect your MCP Logger account." : "Sign in to your nutrition, energy balance, and measurement tracker."}</p>
     <form onSubmit={signIn} method="post">
       <label>Email<input type="email" name="email" autoComplete="username webauthn" required /></label>
       {!reset && <label>Password<input type="password" name="password" autoComplete="current-password" required /></label>}

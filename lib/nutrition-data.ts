@@ -33,8 +33,10 @@ import {
   mcpAudit,
   meal,
   mealItem,
+  measurement,
   nutritionDayStatus,
   nutritionPreference,
+  profile,
   savedFood,
 } from "./schema";
 import { searchUkStaples } from "./uk-foods";
@@ -124,6 +126,45 @@ function mapEnergyRow(row: typeof dailyEnergy.$inferSelect): EnergyRecord {
   };
 }
 
+export async function upsertSyncedWeight(
+  tx: Parameters<Parameters<AuthDatabase["transaction"]>[0]>[0] | AuthDatabase,
+  userId: string,
+  date: string,
+  weightKg: number,
+  note: string,
+) {
+  const existing = await tx
+    .select({ id: measurement.id, note: measurement.note })
+    .from(measurement)
+    .where(
+      and(
+        eq(measurement.userId, userId),
+        eq(measurement.metric, "weight"),
+        eq(measurement.side, "none"),
+        eq(measurement.date, date),
+      ),
+    );
+  const current = existing[0];
+  if (!current) {
+    await tx.insert(measurement).values({
+      id: randomUUID(),
+      userId,
+      metric: "weight",
+      side: "none",
+      date,
+      value: weightKg,
+      note,
+    });
+    return;
+  }
+  if (!current.note || current.note.startsWith("Synced") || current.note.startsWith("Imported")) {
+    await tx
+      .update(measurement)
+      .set({ value: weightKg, note })
+      .where(eq(measurement.id, current.id));
+  }
+}
+
 export function nutritionData(db: AuthDatabase, userId: string) {
   if (!userId) throw new Error("A session user ID is required.");
 
@@ -138,6 +179,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     return {
       timezone: pref?.timezone ?? DEFAULT_TIMEZONE,
       preferredEnergySource: (pref?.preferredEnergySource ?? "google") as EnergySource,
+      googleTwoWaySync: pref?.googleTwoWaySync ?? false,
       targets: targets.map((t) => ({ id: t.id, effectiveFrom: t.effectiveFrom, calories: t.calories })),
       hasGoogleConnected: integrations.some((i) => i.provider === "google"),
     };
@@ -613,6 +655,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     return {
       timezone: prefs.timezone,
       preferredEnergySource: prefs.preferredEnergySource,
+      googleTwoWaySync: prefs.googleTwoWaySync,
       targetToday: resolveTargetForDay(prefs.targets, today),
       targets: prefs.targets,
       defaultTarget: DEFAULT_CALORIE_TARGET,
@@ -639,9 +682,14 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       userId,
       timezone: input.timezone,
       preferredEnergySource: input.preferredEnergySource,
+      googleTwoWaySync: input.googleTwoWaySync,
     }).onConflictDoUpdate({
       target: nutritionPreference.userId,
-      set: { timezone: input.timezone, preferredEnergySource: input.preferredEnergySource },
+      set: {
+        timezone: input.timezone,
+        preferredEnergySource: input.preferredEnergySource,
+        googleTwoWaySync: input.googleTwoWaySync,
+      },
     });
     return settings();
   }
@@ -662,26 +710,31 @@ export function nutritionData(db: AuthDatabase, userId: string) {
   async function saveEnergy(rawInput: z.input<typeof energyInput>) {
     const input = energyInput.parse(rawInput);
     // Never silently add activeKcal to totalKcal if totalKcal is provided or omitted.
-    await db.insert(dailyEnergy).values({
-      userId,
-      day: input.day,
-      source: input.source,
-      totalKcal: input.totalKcal ?? null,
-      activeKcal: input.activeKcal ?? null,
-      steps: input.steps ?? null,
-      weightKg: input.weightKg ?? null,
-      complete: input.complete,
-      syncedAt: new Date(),
-    }).onConflictDoUpdate({
-      target: [dailyEnergy.userId, dailyEnergy.source, dailyEnergy.day],
-      set: {
+    await db.transaction(async (tx) => {
+      await tx.insert(dailyEnergy).values({
+        userId,
+        day: input.day,
+        source: input.source,
         totalKcal: input.totalKcal ?? null,
         activeKcal: input.activeKcal ?? null,
         steps: input.steps ?? null,
         weightKg: input.weightKg ?? null,
         complete: input.complete,
         syncedAt: new Date(),
-      },
+      }).onConflictDoUpdate({
+        target: [dailyEnergy.userId, dailyEnergy.source, dailyEnergy.day],
+        set: {
+          totalKcal: input.totalKcal ?? null,
+          activeKcal: input.activeKcal ?? null,
+          steps: input.steps ?? null,
+          weightKg: input.weightKg ?? null,
+          complete: input.complete,
+          syncedAt: new Date(),
+        },
+      });
+      if (input.weightKg != null) {
+        await upsertSyncedWeight(tx, userId, input.day, input.weightKg, `Synced from ${input.source} energy`);
+      }
     });
     return daily(input.day);
   }
@@ -826,12 +879,83 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     ]);
     const energy = await db.select().from(dailyEnergy).where(eq(dailyEnergy.userId, userId)).orderBy(desc(dailyEnergy.day));
     return {
-      preferences: prefs[0] ?? { timezone: DEFAULT_TIMEZONE, preferredEnergySource: "google" },
+      preferences: prefs[0] ?? { timezone: DEFAULT_TIMEZONE, preferredEnergySource: "google", googleTwoWaySync: false },
       targets,
       dayStatuses: statuses,
       meals: await assembleMeals(meals, items, prefs[0]?.timezone ?? DEFAULT_TIMEZONE),
       savedFoods: saved,
       dailyEnergy: energy.map(mapEnergyRow),
+    };
+  }
+
+  async function importHealthRecords(payload: {
+    energyEntries?: z.input<typeof energyInput>[];
+    heightCm?: number | null;
+    meals?: z.input<typeof logMealInput>[];
+  }) {
+    const prefs = await getPrefs();
+    let energyImported = 0;
+    let weightsSynced = 0;
+    let mealsImported = 0;
+    let heightUpdated = false;
+
+    await db.transaction(async (tx) => {
+      if (payload.heightCm != null && Number.isFinite(payload.heightCm) && payload.heightCm > 30 && payload.heightCm < 300) {
+        const [prof] = await tx.select({ heightCm: profile.heightCm }).from(profile).where(eq(profile.userId, userId));
+        if (!prof) {
+          await tx.insert(profile).values({ userId, heightCm: Math.round(payload.heightCm * 10) / 10, units: "metric", goals: "" });
+          heightUpdated = true;
+        } else if (prof.heightCm == null) {
+          await tx.update(profile).set({ heightCm: Math.round(payload.heightCm * 10) / 10 }).where(eq(profile.userId, userId));
+          heightUpdated = true;
+        }
+      }
+
+      for (const raw of payload.energyEntries ?? []) {
+        const entry = energyInput.parse(raw);
+        await tx.insert(dailyEnergy).values({
+          userId,
+          day: entry.day,
+          source: entry.source,
+          totalKcal: entry.totalKcal ?? null,
+          activeKcal: entry.activeKcal ?? null,
+          steps: entry.steps ?? null,
+          weightKg: entry.weightKg ?? null,
+          complete: entry.complete,
+          syncedAt: new Date(),
+        }).onConflictDoUpdate({
+          target: [dailyEnergy.userId, dailyEnergy.source, dailyEnergy.day],
+          set: {
+            totalKcal: entry.totalKcal ?? null,
+            activeKcal: entry.activeKcal ?? null,
+            steps: entry.steps ?? null,
+            weightKg: entry.weightKg ?? null,
+            complete: entry.complete,
+            syncedAt: new Date(),
+          },
+        });
+        energyImported += 1;
+        if (entry.weightKg != null) {
+          await upsertSyncedWeight(tx, userId, entry.day, entry.weightKg, "Imported from Google Health / Fitbit");
+          weightsSynced += 1;
+        }
+      }
+    });
+
+    for (const rawMeal of payload.meals ?? []) {
+      const res = await log({
+        ...rawMeal,
+        idempotencyKey: rawMeal.idempotencyKey ?? `import:${rawMeal.day ?? ""}:${rawMeal.time ?? ""}:${rawMeal.name}`.slice(0, 120),
+      });
+      if (!res.deduplicated) mealsImported += 1;
+    }
+
+    return {
+      timezone: prefs.timezone,
+      energyImported,
+      weightsSynced,
+      mealsImported,
+      heightUpdated,
     };
   }
 
@@ -943,6 +1067,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const settingsView = {
       timezone: prefs.timezone,
       preferredEnergySource: prefs.preferredEnergySource,
+      googleTwoWaySync: prefs.googleTwoWaySync,
       targetToday: todaySummary.target,
       targets: prefs.targets,
       defaultTarget: DEFAULT_CALORIE_TARGET,
@@ -990,6 +1115,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     setPreferences,
     markDay,
     saveEnergy,
+    importHealthRecords,
     saveTemplate,
     removeTemplate,
     library,

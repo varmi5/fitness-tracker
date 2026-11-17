@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
-import { ArrowDownToLine, Copy, Fingerprint, RefreshCw } from "lucide-react";
+import { useState, type ChangeEvent, type FormEvent } from "react";
+import { ArrowDownToLine, Copy, Fingerprint, RefreshCw, Upload } from "lucide-react";
+import { MoonThemeIcon, SunThemeIcon, TwoWaySyncIcon } from "../components/icons";
 import { Button } from "../components/ui/button";
 import { authClient } from "../lib/auth-client";
 import { displayUnit, displayValue, metrics, type Reading } from "../lib/metrics";
@@ -11,6 +12,7 @@ import {
   type AuditEntry,
   type GoogleIntegrationStatus,
   type NutritionSettings,
+  type ThemeMode,
   type TrackerSnapshot,
 } from "./types";
 
@@ -21,10 +23,14 @@ interface SettingsViewProps {
   google: GoogleIntegrationStatus;
   audit: AuditEntry[];
   mcpEnabled: boolean;
+  theme: ThemeMode;
   busy: boolean;
+  onSetTheme: (mode: ThemeMode) => void;
+  onToggleTheme: () => void;
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
   onNutritionAction: (action: object, successMessage: string) => Promise<void>;
   onSyncGoogle: (days?: number) => Promise<void>;
+  onPushGoogle: (days?: number) => Promise<void>;
   onDisconnectGoogle: () => Promise<void>;
   onMessage: (msg: string) => void;
 }
@@ -43,10 +49,14 @@ export function SettingsView({
   google,
   audit,
   mcpEnabled,
+  theme,
   busy,
+  onSetTheme,
+  onToggleTheme,
   onSaveTracker,
   onNutritionAction,
   onSyncGoogle,
+  onPushGoogle,
   onDisconnectGoogle,
   onMessage,
 }: SettingsViewProps) {
@@ -54,13 +64,15 @@ export function SettingsView({
   const [effectiveFrom, setEffectiveFrom] = useState(today);
   const [timezone, setTimezone] = useState(settings.timezone);
   const [preferredSource, setPreferredSource] = useState<EnergySource>(settings.preferredEnergySource);
+  const [twoWaySync, setTwoWaySync] = useState(Boolean(settings.googleTwoWaySync));
 
   const [manualDay, setManualDay] = useState(today);
   const [manualTotal, setManualTotal] = useState("");
   const [manualActive, setManualActive] = useState("");
   const [manualSteps, setManualSteps] = useState("");
   const [manualWeight, setManualWeight] = useState("");
-  const [importJson, setImportJson] = useState("");
+  const [importText, setImportText] = useState("");
+  const [importFileName, setImportFileName] = useState("");
   const [showDelete, setShowDelete] = useState(false);
 
   const waistMetric = metrics[0];
@@ -79,7 +91,14 @@ export function SettingsView({
   function submitPreferences(e: FormEvent) {
     e.preventDefault();
     void onNutritionAction(
-      { action: "preferences", data: { timezone: timezone.trim(), preferredEnergySource: preferredSource } },
+      {
+        action: "preferences",
+        data: {
+          timezone: timezone.trim(),
+          preferredEnergySource: preferredSource,
+          googleTwoWaySync: twoWaySync,
+        },
+      },
       "Preferences updated.",
     );
   }
@@ -112,16 +131,30 @@ export function SettingsView({
     );
   }
 
-  function submitEnergyImport(e: FormEvent) {
-    e.preventDefault();
-    try {
-      const parsed = JSON.parse(importJson);
-      if (!Array.isArray(parsed) || !parsed.length) throw new Error();
-      void onNutritionAction({ action: "energy-import", entries: parsed }, `Imported ${parsed.length} energy entries.`);
-      setImportJson("");
-    } catch {
-      onMessage("Paste a JSON array of { day, source, totalKcal, activeKcal, steps, weightKg } records.");
+  async function handleFileSelect(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2_000_000) {
+      onMessage("Select a JSON or CSV export smaller than 2 MB.");
+      return;
     }
+    const text = await file.text();
+    setImportFileName(file.name);
+    setImportText(text);
+  }
+
+  function submitHealthFileImport(e: FormEvent) {
+    e.preventDefault();
+    if (!importText.trim()) {
+      onMessage("Select a Google Health / Takeout / Fitbit file or paste saved JSON/CSV.");
+      return;
+    }
+    void onNutritionAction(
+      { action: "import-health-file", rawText: importText },
+      "Saved health data imported.",
+    );
+    setImportText("");
+    setImportFileName("");
   }
 
   function submitProfile(e: FormEvent<HTMLFormElement>) {
@@ -144,7 +177,7 @@ export function SettingsView({
     if (format === "json") {
       const res = await fetch("/api/nutrition?export=json");
       const full = await res.json();
-      triggerDownload(JSON.stringify(full, null, 2), "application/json", "fitness-export.json");
+      triggerDownload(JSON.stringify(full, null, 2), "application/json", "mcplogger-export.json");
       return;
     }
     const csvCell = (cell: unknown) => {
@@ -160,21 +193,51 @@ export function SettingsView({
           .join(","),
       ),
     ].join("\r\n");
-    triggerDownload(data, "text/csv", "fitness-measurements.csv");
+    triggerDownload(data, "text/csv", "mcplogger-measurements.csv");
   }
+
+  const missingWriteScopes = google.connected && (!google.canWriteNutrition || !google.canWriteWeights);
 
   return (
     <>
       <div className="page-header">
-        <div>
+        <div className="page-header-title">
           <h1>Settings</h1>
-          <p style={{ fontSize: ".85rem" }}>Targets, Fitbit / Google Health, ChatGPT MCP & privacy</p>
+          <p style={{ fontSize: ".84rem" }}>Theme, targets, two-way Google Health &amp; MCP</p>
+        </div>
+        <div className="header-actions">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+            onClick={onToggleTheme}
+          >
+            {theme === "light" ? <MoonThemeIcon size={17} /> : <SunThemeIcon size={17} />}
+          </button>
         </div>
       </div>
 
+      {/* Appearance Theme Switcher */}
+      <section className="card">
+        <div className="split-row">
+          <div>
+            <h2>Appearance</h2>
+            <p style={{ fontSize: ".8rem" }}>Light clean canvas default or OLED dark mode</p>
+          </div>
+          <div className="segments" role="group" aria-label="Theme mode">
+            <button type="button" aria-pressed={theme === "light"} onClick={() => onSetTheme("light")}>
+              <SunThemeIcon size={15} /> Light
+            </button>
+            <button type="button" aria-pressed={theme === "dark"} onClick={() => onSetTheme("dark")}>
+              <MoonThemeIcon size={15} /> Dark
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* Nutrition Targets & Timezone */}
       <section className="card">
-        <h2>Calorie Targets & Timezone</h2>
+        <h2>Calorie Targets &amp; Timezone</h2>
         <form onSubmit={submitTarget} style={{ marginTop: ".75rem" }}>
           <div className="input-grid">
             <label>
@@ -183,7 +246,12 @@ export function SettingsView({
             </label>
             <label>
               Effective from date
-              <input type="date" value={effectiveFrom} onChange={(e) => e.target.value && setEffectiveFrom(e.target.value)} required />
+              <input
+                type="date"
+                value={effectiveFrom}
+                onChange={(e) => e.target.value && setEffectiveFrom(e.target.value)}
+                required
+              />
             </label>
           </div>
           <Button disabled={busy} type="submit">Save calorie target</Button>
@@ -218,17 +286,25 @@ export function SettingsView({
               </select>
             </label>
           </div>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={twoWaySync}
+              onChange={(e) => setTwoWaySync(e.target.checked)}
+            />
+            Auto-push logged meals &amp; weights to Google Health (two-way write)
+          </label>
           <Button variant="secondary" disabled={busy} type="submit">Save preferences</Button>
         </form>
       </section>
 
-      {/* Google Health / Fitbit Air Integration */}
+      {/* Google Health / Fitbit Air Two-Way Integration & Saved File Importer */}
       <section className="card">
         <div className="split-row">
           <div>
             <h2>Google Health (Fitbit Air)</h2>
             <p style={{ fontSize: ".8rem" }}>
-              Syncs total expenditure (TDEE), active burn, steps, and weight with minimal read-only permissions.
+              Two-way sync: imports TDEE, active burn, steps, weight, and height; writes meals and weights back.
             </p>
           </div>
           <span className={`pill ${google.connected ? "teal-soft" : ""}`}>
@@ -236,29 +312,44 @@ export function SettingsView({
           </span>
         </div>
 
-        <div style={{ marginTop: ".75rem", display: "grid", gap: ".6rem" }}>
+        <div style={{ marginTop: ".75rem", display: "grid", gap: ".65rem" }}>
           {!google.available && (
             <p style={{ fontSize: ".82rem" }}>
               Set <code>GOOGLE_HEALTH_CLIENT_ID</code>, <code>GOOGLE_HEALTH_CLIENT_SECRET</code>, and 64-hex{" "}
-              <code>FITNESS_INTEGRATION_KEY</code> in Coolify to enable OAuth syncing.
+              <code>FITNESS_INTEGRATION_KEY</code> in Coolify to enable live OAuth syncing. You can still import saved Google/Fitbit exports below anytime.
             </p>
           )}
           {google.connected && (
-            <div style={{ fontSize: ".82rem", color: "var(--muted)" }}>
-              Status: <strong style={{ color: "var(--text)" }}>{google.status}</strong> · Last sync:{" "}
-              <strong style={{ color: "var(--text)" }}>{fmtRelativeSync(google.lastSync)}</strong>
+            <div style={{ display: "grid", gap: ".45rem", fontSize: ".82rem", color: "var(--muted)" }}>
+              <div>
+                Status: <strong style={{ color: "var(--text)" }}>{google.status}</strong> · Last sync:{" "}
+                <strong style={{ color: "var(--text)" }}>{fmtRelativeSync(google.lastSync)}</strong>
+              </div>
+              <div className="button-row">
+                <span className="pill accent-soft">Read TDEE &amp; Steps</span>
+                <span className={`pill ${google.canReadWeights ? "teal-soft" : ""}`}>
+                  {google.canReadWeights ? "Read Weights & Height" : "Weights read off"}
+                </span>
+                <span className={`pill ${google.canWriteWeights ? "teal-soft" : "amber-soft"}`}>
+                  {google.canWriteWeights ? "Write Weights" : "Write Weights needs reconnect"}
+                </span>
+                <span className={`pill ${google.canWriteNutrition ? "teal-soft" : "amber-soft"}`}>
+                  {google.canWriteNutrition ? "Write Meals" : "Write Meals needs reconnect"}
+                </span>
+              </div>
               {google.lastError && <div style={{ color: "var(--danger-fg)" }}>Last error: {google.lastError}</div>}
             </div>
           )}
+
           <div className="button-row">
-            {google.available && !google.connected && (
+            {google.available && (!google.connected || missingWriteScopes) && (
               <a
                 href="/api/integrations/google/connect"
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
-                  minHeight: "44px",
-                  padding: ".6rem 1rem",
+                  minHeight: "42px",
+                  padding: ".55rem .95rem",
                   borderRadius: "14px",
                   background: "var(--accent)",
                   color: "var(--accent-ink)",
@@ -266,17 +357,22 @@ export function SettingsView({
                   textDecoration: "none",
                 }}
               >
-                Connect Google Health
+                {missingWriteScopes ? "Reconnect for 2-way write permissions" : "Connect Google Health"}
               </a>
             )}
             {google.connected && (
               <>
                 <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncGoogle(14)}>
-                  <RefreshCw size={15} /> Sync 14 days
+                  <RefreshCw size={14} /> Pull 14 days
                 </button>
                 <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncGoogle(30)}>
-                  Sync 30 days
+                  Pull 30 days
                 </button>
+                {(google.canWriteNutrition || google.canWriteWeights) && (
+                  <button type="button" className="secondary compact" disabled={busy} onClick={() => void onPushGoogle(14)}>
+                    <TwoWaySyncIcon size={14} /> Push pending (14d)
+                  </button>
+                )}
                 <button type="button" className="danger compact" disabled={busy} onClick={() => void onDisconnectGoogle()}>
                   Disconnect &amp; delete Google data
                 </button>
@@ -285,11 +381,37 @@ export function SettingsView({
           </div>
         </div>
 
+        {/* Saved Google Health / Google Takeout / Fitbit Export Importer */}
+        <form onSubmit={submitHealthFileImport} style={{ marginTop: "1rem", borderTop: "1px solid var(--border)", paddingTop: ".9rem" }}>
+          <div>
+            <h3>Import Saved Health Data (Google Health / Takeout / Fitbit)</h3>
+            <p style={{ fontSize: ".79rem" }}>
+              Upload or paste saved JSON (Google Health v4 <code>dataPoints</code>/<code>rollupDataPoints</code>, Fitbit Takeout <code>weight-*.json</code>/<code>calories-*.json</code>, Apple Health JSON) or CSV exports. Weights sync into Measurements &amp; Trends without overwriting manual scale entries.
+            </p>
+          </div>
+          <label className="drop-zone">
+            <span style={{ display: "inline-flex", alignItems: "center", gap: ".4rem" }}>
+              <Upload size={15} /> {importFileName ? `Selected: ${importFileName}` : "Choose saved .json or .csv file"}
+            </span>
+            <input type="file" accept=".json,.csv,application/json,text/csv" onChange={(e) => void handleFileSelect(e)} />
+          </label>
+          <label>
+            Or paste JSON / CSV payload
+            <textarea
+              rows={3}
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              placeholder='Date,Calories Burned,Active Calories,Steps,Weight kg'
+            />
+          </label>
+          <Button variant="secondary" disabled={busy} type="submit">Import saved health data</Button>
+        </form>
+
         {/* Manual Expenditure & Apple Health Fallback */}
         <details style={{ marginTop: ".85rem", borderTop: "1px solid var(--border)", paddingTop: ".5rem" }}>
           <summary>Manual TDEE entry &amp; Apple Health fallback</summary>
           <p style={{ fontSize: ".8rem", margin: ".45rem 0 .7rem" }}>
-            Web PWAs cannot read Apple HealthKit directly. Enter daily TDEE manually below, or import JSON aggregates from a Swift HealthKit companion app. Never add active calories onto total TDEE.
+            Web PWAs cannot read Apple HealthKit directly. Enter daily TDEE manually below. Never add active calories onto total TDEE.
           </p>
           <form onSubmit={submitManualEnergy}>
             <div className="input-grid">
@@ -301,19 +423,6 @@ export function SettingsView({
             </div>
             <Button variant="secondary" disabled={busy} type="submit">Save manual expenditure</Button>
           </form>
-
-          <form onSubmit={submitEnergyImport} style={{ marginTop: ".8rem" }}>
-            <label>
-              Batch JSON import <small>(Apple Health / Bevel export)</small>
-              <textarea
-                rows={3}
-                value={importJson}
-                onChange={(e) => setImportJson(e.target.value)}
-                placeholder='[{"day":"2026-11-17","source":"apple","totalKcal":2300,"activeKcal":450,"steps":8900,"complete":true}]'
-              />
-            </label>
-            <Button variant="secondary" disabled={busy} type="submit">Import JSON entries</Button>
-          </form>
         </details>
       </section>
 
@@ -321,7 +430,7 @@ export function SettingsView({
       <section className="card">
         <div className="split-row">
           <div>
-            <h2>ChatGPT Private MCP Server</h2>
+            <h2>MCP Logger · ChatGPT Server</h2>
             <p style={{ fontSize: ".8rem" }}>OAuth 2.1 protected Streamable HTTP endpoint for photo meal logging.</p>
           </div>
           <span className={`pill ${mcpEnabled ? "accent-soft" : ""}`}>{mcpEnabled ? "Enabled" : "Disabled"}</span>

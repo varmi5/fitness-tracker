@@ -1,6 +1,11 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { googleStatus } from "../../../lib/google-health";
+import {
+  googleStatus,
+  parseSavedHealthImport,
+  pushMealToGoogle,
+  pushWeightToGoogle,
+} from "../../../lib/google-health";
 import { NutritionError, nutritionData, preferencesInput, targetInput } from "../../../lib/nutrition-data";
 import { energyInput, historyInput, logMealInput, templateInput, updateMealInput } from "../../../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
@@ -21,7 +26,8 @@ const mutation = z.discriminatedUnion("action", [
   z.object({ action: z.literal("preferences"), data: preferencesInput }),
   z.object({ action: z.literal("complete"), day: z.iso.date(), complete: z.boolean() }),
   z.object({ action: z.literal("energy"), data: energyInput }),
-  z.object({ action: z.literal("energy-import"), entries: z.array(energyInput).min(1).max(90) }),
+  z.object({ action: z.literal("energy-import"), entries: z.array(energyInput).min(1).max(365) }),
+  z.object({ action: z.literal("import-health-file"), rawText: z.string().min(1).max(2_000_000) }),
   z.object({ action: z.literal("save-template"), data: templateInput }),
   z.object({ action: z.literal("remove-template"), id: z.uuid() }),
   z.object({ action: z.literal("revoke-mcp") }),
@@ -34,7 +40,7 @@ async function getUser(request: Request) {
 function handleError(error: unknown) {
   if (error instanceof NutritionError) return json({ message: error.message }, error.status);
   if (error instanceof z.ZodError) return json({ message: error.issues[0]?.message ?? "Invalid entry." }, 400);
-  return json({ message: "Fitness could not complete this request." }, 500);
+  return json({ message: "MCP Logger could not complete this request." }, 500);
 }
 
 export async function GET(request: Request) {
@@ -84,12 +90,30 @@ export async function POST(request: Request) {
   try {
     const input = mutation.parse(await request.json().catch(() => null));
     switch (input.action) {
-      case "log":
-        return json(await data.log(logMealInput.parse(input.data)));
-      case "update":
-        return json(await data.update(updateMealInput.parse(input.data)));
-      case "duplicate":
-        return json(await data.duplicate(input.id, input.targetDay));
+      case "log": {
+        const res = await data.log(logMealInput.parse(input.data));
+        const prefs = await data.settings();
+        if (prefs.googleTwoWaySync) {
+          await pushMealToGoogle(db, user.id, res.meal).catch(() => null);
+        }
+        return json(res);
+      }
+      case "update": {
+        const res = await data.update(updateMealInput.parse(input.data));
+        const prefs = await data.settings();
+        if (prefs.googleTwoWaySync) {
+          await pushMealToGoogle(db, user.id, res.meal).catch(() => null);
+        }
+        return json(res);
+      }
+      case "duplicate": {
+        const res = await data.duplicate(input.id, input.targetDay);
+        const prefs = await data.settings();
+        if (prefs.googleTwoWaySync) {
+          await pushMealToGoogle(db, user.id, res.meal).catch(() => null);
+        }
+        return json(res);
+      }
       case "delete":
         return json(await data.remove(input.id, true));
       case "target":
@@ -98,13 +122,28 @@ export async function POST(request: Request) {
         return json(await data.setPreferences(input.data));
       case "complete":
         return json(await data.markDay(input.day, input.complete));
-      case "energy":
-        return json(await data.saveEnergy(input.data));
+      case "energy": {
+        const saved = await data.saveEnergy(input.data);
+        const prefs = await data.settings();
+        if (prefs.googleTwoWaySync && input.data.weightKg != null) {
+          await pushWeightToGoogle(db, user.id, {
+            weightKg: input.data.weightKg,
+            day: input.data.day,
+            timezone: prefs.timezone,
+          }).catch(() => null);
+        }
+        return json(saved);
+      }
       case "energy-import": {
         for (const entry of input.entries) {
           await data.saveEnergy(entry);
         }
         return json({ imported: input.entries.length });
+      }
+      case "import-health-file": {
+        const prefs = await data.settings();
+        const parsed = parseSavedHealthImport(input.rawText, prefs.timezone);
+        return json(await data.importHealthRecords(parsed));
       }
       case "save-template":
         return json(await data.saveTemplate(input.data));

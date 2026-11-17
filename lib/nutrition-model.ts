@@ -174,6 +174,7 @@ export const targetInput = z.object({
 export const preferencesInput = z.object({
   timezone: z.string().trim().min(1).max(80).refine(isValidTimezone, { message: "Invalid timezone." }),
   preferredEnergySource: z.enum(ENERGY_SOURCES),
+  googleTwoWaySync: z.boolean().optional().default(false),
 });
 
 export const templateInput = z.object({

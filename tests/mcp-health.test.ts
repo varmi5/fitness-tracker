@@ -6,10 +6,18 @@ import { PGlite } from "@electric-sql/pglite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { drizzle } from "drizzle-orm/pglite";
-import { parseGoogleRollup, seal, unseal } from "../lib/google-health";
+import {
+  buildGoogleNutritionLogDataPoint,
+  buildGoogleWeightDataPoint,
+  parseGoogleRollup,
+  parseSavedHealthImport,
+  seal,
+  unseal,
+} from "../lib/google-health";
 import { allowedMcpCallback } from "../lib/mcp-config";
 import { fitnessMcp } from "../lib/mcp-tools";
 import { nutritionData } from "../lib/nutrition-data";
+import { trackerData } from "../lib/tracker-data";
 import * as schema from "../lib/schema";
 
 const pg = new PGlite();
@@ -22,6 +30,7 @@ before(async () => {
     "003-preserve-owner-access.sql",
     "004-nutrition-health.sql",
     "005-mcp-oauth.sql",
+    "006-google-two-way.sql",
   ]) {
     await pg.exec(await readFile(`migrations/${migration}`, "utf8"));
   }
@@ -148,3 +157,82 @@ test("MCP server enforces read vs write scopes and executes meal + energy tools 
 
   await Promise.all([rwClient.close(), rwServer.close()]);
 });
+
+test("Google Health v4 outbound weight & nutrition payloads follow API schema", () => {
+  const wt = buildGoogleWeightDataPoint({
+    weightKg: 74.35,
+    recordedAt: "2026-11-17T08:00:00.000Z",
+    note: "Morning weigh-in",
+  });
+  assert.equal(wt.weight.weightGrams, 74350);
+  assert.equal(wt.weight.sampleTime.physicalTime, "2026-11-17T08:00:00.000Z");
+
+  const nut = buildGoogleNutritionLogDataPoint({
+    name: "Skyr & berries",
+    category: "breakfast",
+    consumedAt: "2026-11-17T08:30:00.000Z",
+    totals: { calories: 310, proteinG: 26.5, carbsG: 28, fatG: 3.2, fibreG: 5.4 },
+  });
+  assert.equal(nut.nutritionLog.mealType, "BREAKFAST");
+  assert.equal(nut.nutritionLog.energy?.kcal, 310);
+  assert.deepEqual(nut.nutritionLog.nutrients?.map((n) => n.nutrient), [
+    "PROTEIN",
+    "DIETARY_FIBER",
+    "TOTAL_CARBOHYDRATE",
+    "TOTAL_FAT",
+  ]);
+});
+
+test("Saved Google Health JSON & Fitbit CSV imports sync height/weights without overwriting manual scale entries", async () => {
+  // User manually logs scale weight on 2026-11-15
+  await trackerData(db, "M1").saveLog({
+    date: "2026-11-15",
+    values: [{ key: "weight", value: 75.0 }],
+    note: "Home digital scale",
+  });
+
+  const csvPayload = [
+    "Date,Calories Burned,Activity Calories,Steps,Weight (lbs)",
+    "2026-11-15,2410,510,9400,166.0",
+    "2026-11-16,2380,470,8800,164.0",
+  ].join("\n");
+  const parsedCsv = parseSavedHealthImport(csvPayload, "Europe/London");
+  assert.equal(parsedCsv.energyEntries.length, 2);
+
+  const googleRawJson = JSON.stringify({
+    dataPoints: [
+      { height: { heightMillimeters: 1785 } },
+      {
+        nutritionLog: {
+          interval: { startTime: "2026-11-16T12:30:00Z" },
+          foodDisplayName: "Imported Lentil Dhal",
+          mealType: "LUNCH",
+          energy: { kcal: 420 },
+          nutrients: [
+            { nutrient: "PROTEIN", quantity: { grams: 22 } },
+            { nutrient: "DIETARY_FIBER", quantity: { grams: 11 } },
+          ],
+        },
+      },
+    ],
+  });
+  const parsedRaw = parseSavedHealthImport(googleRawJson, "Europe/London");
+  assert.equal(parsedRaw.heightCm, 178.5);
+  assert.equal(parsedRaw.meals.length, 1);
+
+  const data = nutritionData(db, "M1");
+  const res1 = await data.importHealthRecords(parsedCsv);
+  assert.equal(res1.energyImported, 2);
+  const res2 = await data.importHealthRecords(parsedRaw);
+  assert.equal(res2.heightUpdated, true);
+  assert.equal(res2.mealsImported, 1);
+
+  const snap = await trackerData(db, "M1").snapshot();
+  assert.equal(snap.settings.heightCm, 178.5);
+  const nov15Weight = snap.readings.find((r) => r.metric === "weight" && r.date === "2026-11-15");
+  const nov16Weight = snap.readings.find((r) => r.metric === "weight" && r.date === "2026-11-16");
+  // Manual entry stays untouched (75.0 kg), imported entry populates empty day (164 lbs -> 74.39 kg)
+  assert.equal(nov15Weight?.value, 75.0);
+  assert.equal(nov16Weight?.value, 74.39);
+});
+

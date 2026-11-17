@@ -43,14 +43,14 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
     database: drizzleAdapter(db, { provider: "pg", schema }),
     emailAndPassword: { enabled: true, disableSignUp: !creatingOwner && !allowMemberSignup,
       requireEmailVerification: config.mode !== "closed",
-      sendResetPassword: config.sendEmail ? ({ user, url }) => config.sendEmail!(user.email, "Reset your Fitness password", url) : undefined },
+      sendResetPassword: config.sendEmail ? ({ user, url }) => config.sendEmail!(user.email, "Reset your MCP Logger password", url) : undefined },
     emailVerification: config.sendEmail ? {
       sendOnSignUp: true,
       sendOnSignIn: true,
-      sendVerificationEmail: ({ user, url }) => config.sendEmail!(user.email, "Verify your Fitness email", url),
+      sendVerificationEmail: ({ user, url }) => config.sendEmail!(user.email, "Verify your MCP Logger email", url),
     } : undefined,
     plugins: [
-      passkey({ rpName: "Fitness", rpID: new URL(config.baseURL).hostname, origin: new URL(config.baseURL).origin }),
+      passkey({ rpName: "MCP Logger", rpID: new URL(config.baseURL).hostname, origin: new URL(config.baseURL).origin }),
       ...(mcpActive ? oauthPlugins : []),
     ],
     session: { expiresIn: 90 * 86400, updateAge: 86400 },

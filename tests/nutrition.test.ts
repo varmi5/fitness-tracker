@@ -18,6 +18,7 @@ before(async () => {
     "003-preserve-owner-access.sql",
     "004-nutrition-health.sql",
     "005-mcp-oauth.sql",
+    "006-google-two-way.sql",
   ]) {
     await pg.exec(await readFile(`migrations/${migration}`, "utf8"));
   }

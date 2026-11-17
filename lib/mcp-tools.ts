@@ -9,7 +9,7 @@ import { getDatabase } from "./runtime";
 import { trackerData } from "./tracker-data";
 
 export function fitnessMcp(userId: string, permissions: string[], db: AuthDatabase = getDatabase()) {
-  const server = new McpServer({ name: "fitness-tracker", version: "1.0.0" });
+  const server = new McpServer({ name: "mcp-logger", version: "1.0.0" });
   const data = nutritionData(db, userId);
 
   const format = (payload: unknown, isError = false) => ({
@@ -59,7 +59,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
                   ? error.message
                   : error instanceof z.ZodError
                     ? error.issues[0]?.message ?? "Invalid meal or date input."
-                    : "Fitness could not complete that request.",
+                    : "MCP Logger could not complete that request.",
             },
             true,
           );
