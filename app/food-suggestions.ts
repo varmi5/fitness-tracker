@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { FoodUnit, MealItemInput } from "../lib/nutrition-model";
 import { foodSnapshotInput } from "../lib/nutrition-model";
-import { calculateFoodPortion, standardMeasures, type FoodDefinition } from "../lib/food-catalogue-model";
+import { calculateFoodPortion, standardMeasures, type FoodDefinition, type FoodMeasure } from "../lib/food-catalogue-model";
 import { foodMatchScore } from "../lib/search-match";
 import type { FoodLibrary } from "./types";
 export interface FoodChoice {
@@ -21,12 +21,29 @@ export function savedFoodChoice(food: FoodLibrary["saved"][number]): FoodChoice 
     return { key: food.id, name: food.name, source: "Meal template", detail: "Reusable meal", items: food.itemsJson as MealItemInput[],
       ingredients: food.ingredients, cookingMethod: food.cookingMethod, savedFoodId: food.id, isFavourite: food.isFavourite };
   }
-  const portions = Array.isArray(food.portionsJson) && food.portionsJson.length ? food.portionsJson : standardMeasures(food.defaultUnit as FoodUnit, food.defaultAmount);
-  const parsed = foodSnapshotInput.parse({ id: food.sourceId ?? food.id, name: food.name, brand: food.brand, source: food.kind === "recipe" ? "Saved recipe" : food.sourceName,
-    foodType: food.foodType, sourceUrl: food.sourceUrl, basisAmount: food.batchCookedGrams ?? food.defaultAmount, basisUnit: food.defaultUnit,
-    calories: food.calories, proteinG: food.proteinG, carbsG: food.carbsG, fatG: food.fatG, fibreG: food.fibreG,
-    portions, defaultPortionId: food.defaultPortionId ?? (portions as {id: string}[])[0].id });
-  const choice = definitionChoice(parsed, food.id, food.isFavourite);
+  const basisUnit = (food.defaultUnit === "ml" || food.defaultUnit === "serving" ? food.defaultUnit : "g") as FoodUnit;
+  const rawPortions = Array.isArray(food.portionsJson) && food.portionsJson.length
+    ? (food.portionsJson as FoodMeasure[])
+    : standardMeasures(basisUnit, food.defaultAmount);
+  const portions = rawPortions.length ? rawPortions : standardMeasures(basisUnit, food.defaultAmount);
+  const definition: FoodDefinition = {
+    id: food.sourceId ?? food.id,
+    name: food.name,
+    brand: food.brand ?? "",
+    source: food.kind === "recipe" ? "Saved recipe" : (food.sourceName || "Custom"),
+    foodType: food.foodType === "drink" ? "drink" : "food",
+    sourceUrl: food.sourceUrl ?? null,
+    basisAmount: food.batchCookedGrams ?? food.defaultAmount,
+    basisUnit,
+    calories: food.calories ?? null,
+    proteinG: food.proteinG ?? null,
+    carbsG: food.carbsG ?? null,
+    fatG: food.fatG ?? null,
+    fibreG: food.fibreG ?? null,
+    portions,
+    defaultPortionId: food.defaultPortionId ?? portions[0].id,
+  };
+  const choice = definitionChoice(definition, food.id, food.isFavourite);
   if (food.kind === "recipe") { choice.source = "Saved recipe"; choice.items[0].estimationMethod = "recipe"; }
   return { ...choice, ingredients: food.ingredients, cookingMethod: food.cookingMethod };
 }
@@ -45,7 +62,8 @@ export function foodChoices(library: FoodLibrary | null, query: string, products
     }).sort((a, b) => Number(Boolean(b.choice.isFavourite)) - Number(Boolean(a.choice.isFavourite)) || a.score - b.score || a.order - b.order)
     .slice(0, 30).map(({ choice }) => choice);
 }
-export function useFoodSuggestions(query: string) {
+export function useFoodSuggestions(query: string, enabled = true) {
+  const deferredQuery = useDeferredValue(query);
   const [library, setLibrary] = useState<FoodLibrary | null>(null);
   const [products, setProducts] = useState<FoodDefinition[]>([]);
   const [searching, setSearching] = useState(false);
@@ -56,6 +74,7 @@ export function useFoodSuggestions(query: string) {
   const cache = useRef(new Map<string, FoodLibrary>());
   const productCache = useRef(new Map<string, FoodDefinition[]>());
   useEffect(() => {
+    if (!enabled) return;
     const key = query.trim().toLowerCase();
     const cached = cache.current.get(key);
     if (cached) { setLibrary(cached); setSearching(false); setFailed(false); return; }
@@ -69,10 +88,11 @@ export function useFoodSuggestions(query: string) {
         if (cache.current.size >= 30) cache.current.delete(cache.current.keys().next().value!);
         cache.current.set(key, value); setLibrary(value);
       } catch { if (active) setFailed(true); } finally { if (active) setSearching(false); }
-    }, key ? 120 : 0);
+    }, key ? 160 : 0);
     return () => { active = false; clearTimeout(timer); controller.abort(); };
-  }, [query, revision]);
+  }, [query, revision, enabled]);
   useEffect(() => {
+    if (!enabled) { setProductSearching(false); return; }
     const key = query.trim().toLowerCase(); setProviderMessage(null);
     const cached = productCache.current.get(key);
     if (key.length < 3 || cached) { setProducts(cached ?? []); setProductSearching(false); return; }
@@ -89,8 +109,8 @@ export function useFoodSuggestions(query: string) {
       finally { if (active) setProductSearching(false); }
     }, 650);
     return () => { active = false; clearTimeout(timer); controller.abort(); };
-  }, [query]);
-  const suggestions = useMemo(() => foodChoices(library, query, products), [library, query, products]);
+  }, [query, enabled]);
+  const suggestions = useMemo(() => foodChoices(library, deferredQuery, products), [library, deferredQuery, products]);
   return { suggestions, library, searching, productSearching, providerMessage, failed,
     refresh: () => { cache.current.clear(); setRevision((r) => r + 1); } };
 }

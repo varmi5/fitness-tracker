@@ -10,7 +10,13 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   icons: { icon: "/icon-192.png", apple: "/icon-192.png" },
 };
-export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#F5F7FA" };
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  interactiveWidget: "resizes-content",
+  themeColor: "#F5F7FA",
+};
 
 export default function Layout({ children }: { children: ReactNode }) {
   return <html lang="en" data-theme="light" suppressHydrationWarning><body>{children}<RegisterWorker /></body></html>;
