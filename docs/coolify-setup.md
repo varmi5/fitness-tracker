@@ -24,6 +24,19 @@ After reaching the setup page on HTTPS, create the owner and remove `SETUP_CODE`
 
 Configure Actions repository secrets named `COOLIFY_WEBHOOK`, `COOLIFY_TOKEN`, `CF_ACCESS_CLIENT_ID`, and `CF_ACCESS_CLIENT_SECRET`.
 
+## Optional ChatGPT MCP & Google Health (Fitbit Air) variables
+
+Add these runtime variables in Coolify when ready to enable the private ChatGPT MCP connector and Google Health sync:
+
+| Name | Purpose |
+|---|---|
+| `FITNESS_MCP_ENABLED` | Set to `true` to expose `/mcp` and OAuth 2.1 endpoints |
+| `GOOGLE_HEALTH_CLIENT_ID` | OAuth Client ID from Google Cloud with Google Health API enabled |
+| `GOOGLE_HEALTH_CLIENT_SECRET` | OAuth Client Secret from Google Cloud |
+| `FITNESS_INTEGRATION_KEY` | 64-hex-character key (`openssl rand -hex 32`) for AES-256-GCM token encryption |
+
+Authorized Google OAuth redirect URI: `https://<your-fitness-domain>/api/integrations/google/callback`.
+
 ## Password recovery
 
 In the Fitness application terminal, run `node scripts/set-password.mjs <email>`. Enter the new password at the hidden prompt. Existing sessions are revoked. For a source checkout, use `npx tsx scripts/set-password.ts <email>`.

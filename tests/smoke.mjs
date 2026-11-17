@@ -69,7 +69,8 @@ try {
   const loggedIn = await fetch(url("/"), { headers: { Cookie: cookie } });
   assert.equal(loggedIn.status, 200);
   const dashboard = await loggedIn.text();
-  assert.match(dashboard, /Waist-to-height/);
+  assert.match(dashboard, /Energy Balance/);
+  assert.match(dashboard, /Measurements/);
   assert.doesNotMatch(dashboard, /class="masthead"/);
   const result = await post("/api/tracker", {
     action: "log", data: { date: "2026-11-01", values: [{ key: "waist", value: 80 }], note: "Test" },
@@ -77,6 +78,28 @@ try {
   assert.equal(result.status, 200);
   assert.equal((await result.json()).readings[0].value, 80);
   assert.equal((await fetch(url("/api/tracker"))).status, 401);
+
+  // Verify nutrition API endpoints and auth isolation
+  assert.equal((await fetch(url("/api/nutrition"))).status, 401);
+  const mealRes = await post("/api/nutrition", {
+    action: "log",
+    data: {
+      day: "2026-11-17",
+      time: "08:30",
+      name: "Breakfast eggs",
+      category: "breakfast",
+      idempotencyKey: "smoke-breakfast-1",
+      items: [{ name: "Three large eggs", amount: 180, unit: "g", calories: 257, proteinG: 22.7, carbsG: 2, fatG: 17.5, estimationMethod: "weighed" }],
+    },
+  }, { Cookie: cookie });
+  assert.equal(mealRes.status, 200);
+  const mealJson = await mealRes.json();
+  assert.equal(mealJson.dailyTotals.calories, 257);
+  assert.equal(mealJson.remainingCalorieAllowance, 1643);
+  assert.equal((await fetch(url("/api/nutrition/barcode?code=bad"), { headers: { Cookie: cookie } })).status, 400);
+  assert.equal((await fetch(url("/.well-known/oauth-protected-resource/mcp"))).status, 404);
+  assert.equal((await fetch(url("/mcp"), { method: "POST" })).status, 404);
+
   const passkeys = await fetch(url("/api/auth/passkey/list-user-passkeys"), { headers: { Cookie: cookie } });
   assert.equal(passkeys.status, 200);
   assert.deepEqual(await passkeys.json(), []);
@@ -84,7 +107,7 @@ try {
   assert.equal((await post("/api/auth/sign-up/email", { name: "Other", email: "other@example.test", password }, { "X-Setup-Code": code })).status, 403);
   assert.equal((await fetch(url("/sw.js"))).status, 200);
   assert.equal((await fetch(url("/manifest.webmanifest"))).status, 200);
-  console.log("Migrations, owner creation, login, tracker API, passkey listing, CSP and PWA endpoints passed.");
+  console.log("Migrations, owner creation, login, tracker API, nutrition API, passkey listing, CSP and PWA endpoints passed.");
   await stopApp();
 
   // The production server uses its normal HTTP handlers, with only external
@@ -131,6 +154,25 @@ try {
   assert.equal(verified.status, 302);
   assert.equal((await post("/api/auth/sign-in/email", { email: member.email, password })).status, 200);
   console.log("Public signup, bot challenge rejection and replay protection, and verified member sign-in passed with simulated providers.");
+  await stopApp();
+
+  app = spawn(process.execPath, [".next/standalone/server.js"], {
+    stdio: ["ignore", "inherit", "inherit"],
+    env: { ...env, FITNESS_MCP_ENABLED: "true" },
+  });
+  await waitForSetup();
+  const prm = await fetch(url("/.well-known/oauth-protected-resource/mcp"));
+  assert.equal(prm.status, 200);
+  const prmJson = await prm.json();
+  assert.equal(prmJson.resource, `${origin}/mcp`);
+  const asMeta = await fetch(url("/.well-known/oauth-authorization-server"));
+  assert.equal(asMeta.status, 200);
+  const asJson = await asMeta.json();
+  assert.ok(asJson.registration_endpoint);
+  const mcpChallenge = await fetch(url("/mcp"), { method: "POST" });
+  assert.equal(mcpChallenge.status, 401);
+  assert.match(mcpChallenge.headers.get("www-authenticate") ?? "", /resource_metadata="/);
+  console.log("MCP OAuth discovery metadata and Bearer challenge passed.");
 } finally {
   await stopApp();
   await database.stop();

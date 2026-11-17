@@ -1,60 +1,111 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import dynamic from "next/dynamic";
+import { useEffect, useState } from "react";
 import {
-  Activity, ArrowDownToLine, CalendarDays, ChevronRight, Crosshair, Fingerprint, Plus, Ruler, Settings, TrendingUp,
-} from "lucide-react";
-import { Button } from "../components/ui/button";
-import { authClient } from "../lib/auth-client";
-import {
-  displayUnit, displayValue, metrics, readingsFor, recomp, summary, type Metric, type Reading, type Units,
-} from "../lib/metrics";
-import type { trackerData } from "../lib/tracker-data";
-import { TrendChart } from "./trends";
+  HomeRingIcon,
+  MeasurementsCaliperIcon,
+  NutritionBowlIcon,
+  SettingsSlidersIcon,
+} from "../components/icons";
+import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
+import { addDays } from "../lib/nutrition-model";
+import { HomeView } from "./home-view";
+import { MeasurementsView } from "./measurements-view";
+import { NutritionView } from "./nutrition-view";
+import { SettingsView } from "./settings-view";
+import type { AppTab, InitialAppData } from "./types";
 
-type Snapshot = Awaited<ReturnType<ReturnType<typeof trackerData>["snapshot"]>>;
-const tabs = [
-  { title: "Today", icon: Activity }, { title: "Trends", icon: TrendingUp },
-  { title: "Log", icon: Plus }, { title: "Settings", icon: Settings },
-] as const;
-type Tab = (typeof tabs)[number]["title"];
-const number = new Intl.NumberFormat("en", { maximumFractionDigits: 1, minimumFractionDigits: 1 });
-function localDate() {
-  const now = new Date();
-  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-}
-const readout = (value: number | null | undefined, metric: Metric, units: Units) =>
-  value == null ? "—" : number.format(displayValue(value, metric, units));
+const MealComposer = dynamic(() => import("./meal-composer").then((m) => m.MealComposer), {
+  ssr: false,
+});
 
-export function Dashboard({ initial }: { initial: Snapshot }) {
-  const [snapshot, setSnapshot] = useState(initial);
-  const [tab, setTab] = useState<Tab>("Today");
-  const [today, setToday] = useState(() => new Date().toISOString().slice(0, 10));
-  const [date, setDate] = useState(today);
-  const [message, setMessage] = useState("");
+const tabs: { title: AppTab; icon: typeof HomeRingIcon }[] = [
+  { title: "Home", icon: HomeRingIcon },
+  { title: "Nutrition", icon: NutritionBowlIcon },
+  { title: "Measurements", icon: MeasurementsCaliperIcon },
+  { title: "Settings", icon: SettingsSlidersIcon },
+];
+
+export function Dashboard({ initial }: { initial: InitialAppData }) {
+  const [tab, setTab] = useState<AppTab>("Home");
+  const [tracker, setTracker] = useState(initial.tracker);
+  const [settings, setSettings] = useState(initial.settings);
+  const [today] = useState(initial.today);
+  const [selectedDay, setSelectedDay] = useState(initial.today);
+  const [todayDaily, setTodayDaily] = useState<DailyNutritionView>(initial.daily);
+  const [selectedDaily, setSelectedDaily] = useState<DailyNutritionView>(initial.daily);
+  const [history30, setHistory30] = useState(initial.history30);
+  const [google, setGoogle] = useState(initial.google);
+  const [audit, setAudit] = useState(initial.audit);
   const [busy, setBusy] = useState(false);
-  const [showDelete, setShowDelete] = useState(false);
-  const { readings, settings } = snapshot;
-  useEffect(() => { const day = localDate(); setToday(day); setDate(day); }, []);
+  const [message, setMessage] = useState("");
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [editingMeal, setEditingMeal] = useState<MealRecord | null>(null);
 
-  function navigate(next: Tab) {
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reqTab = params.get("tab") as AppTab | null;
+    if (reqTab && tabs.some((t) => t.title === reqTab)) setTab(reqTab);
+    const googleState = params.get("google");
+    if (googleState === "connected") {
+      setMessage("Google Health connected and synced.");
+      window.history.replaceState({}, "", "/");
+    } else if (googleState === "error") {
+      const reason = params.get("reason") ?? "connection failed";
+      setMessage(`Google Health: ${reason}`);
+      window.history.replaceState({}, "", "/");
+    }
+  }, []);
+
+  function navigate(next: AppTab) {
     setMessage("");
     setTab(next);
     window.scrollTo({ top: 0, behavior: "instant" });
   }
 
-  async function save(action: object, success: string) {
+  async function refreshHistoryAndToday(focusDay = selectedDay) {
+    const [histRes, dayRes, todayRes] = await Promise.all([
+      fetch(`/api/nutrition?from=${addDays(today, -29)}&to=${today}`),
+      focusDay === today ? Promise.resolve(null) : fetch(`/api/nutrition?day=${focusDay}`),
+      fetch(`/api/nutrition?day=${today}`),
+    ]);
+    if (histRes.ok) setHistory30(await histRes.json());
+    if (todayRes.ok) {
+      const freshToday = await todayRes.json();
+      setTodayDaily(freshToday);
+      if (focusDay === today) setSelectedDaily(freshToday);
+    }
+    if (dayRes?.ok) setSelectedDaily(await dayRes.json());
+  }
+
+  async function selectDay(day: string) {
+    setSelectedDay(day);
+    if (day === today) {
+      setSelectedDaily(todayDaily);
+      return;
+    }
+    const res = await fetch(`/api/nutrition?day=${day}`);
+    if (res.ok) setSelectedDaily(await res.json());
+  }
+
+  async function saveTracker(action: object, successMessage: string) {
     setBusy(true);
     setMessage("");
     try {
       const response = await fetch("/api/tracker", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message ?? "Could not save.");
-      if (payload.deleted) { location.reload(); return; }
-      setSnapshot(payload);
-      setMessage(success);
+      if (payload.deleted) {
+        location.reload();
+        return;
+      }
+      setTracker(payload);
+      setMessage(successMessage);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save.");
     } finally {
@@ -62,173 +113,197 @@ export function Dashboard({ initial }: { initial: Snapshot }) {
     }
   }
 
-  function submitLog(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const values = metrics.flatMap((metric) => {
-      const raw = String(form.get(metric.key) ?? "").trim();
-      if (raw === "") return [];
-      const value = /^\d+(?:[.,]\d+)?$/.test(raw) ? Number(raw.replace(",", ".")) : NaN;
-      return [{ key: metric.key, value: value / displayValue(1, metric, settings.units) }];
-    });
-    if (!values.length) { setMessage("Enter at least one measurement."); return; }
-    if (values.some(({ value }) => !Number.isFinite(value) || value <= 0)) {
-      setMessage("Enter positive numbers for measurements.");
-      return;
+  async function runNutritionAction(action: { action: string; [k: string]: unknown }, successMessage: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/nutrition", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message ?? "Could not save.");
+
+      if (action.action === "target" || action.action === "preferences") {
+        setSettings(payload);
+      } else if (action.action === "revoke-mcp") {
+        setAudit([]);
+      }
+      await refreshHistoryAndToday(selectedDay);
+      setMessage(successMessage);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save.");
+    } finally {
+      setBusy(false);
     }
-    const note = String(form.get("note") ?? "");
-    void save({
-      action: "log", data: { date, values, note: note || (form.get("clearNotes") ? "" : undefined) },
-    }, "Measurements saved.");
   }
 
-  function submitSettings(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const fields = new FormData(event.currentTarget);
-    void save({
-      action: "settings", data: { heightCm: fields.get("height") ? Number(fields.get("height")) : null,
-        units: fields.get("units"), goals: fields.get("goals") },
-    }, "Settings saved.");
+  async function syncGoogle(days = 14) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const from = addDays(today, 1 - days);
+      const res = await fetch("/api/integrations/google/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to: today }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.message ?? "Google sync failed.");
+      if (payload.status) setGoogle(payload.status);
+      await refreshHistoryAndToday(selectedDay);
+      setMessage(`Synced ${payload.syncedDays} days from Google Health.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Google sync failed.");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  const selected = readings.filter((reading) => reading.date === date);
-  const [waistMetric, leftMetric, rightMetric] = metrics;
-  const [waist, left, right] = [waistMetric, leftMetric, rightMetric].map((metric) =>
-    summary(readingsFor(readings, metric), today).latest?.value);
-  const ratio = (value: number | undefined, base: number | null | undefined) =>
-    value != null && base != null && base > 0 ? (value / base).toFixed(2) : "Insufficient data";
+  async function disconnectGoogle() {
+    if (!window.confirm("Disconnect Google Health and delete all synced Google expenditure data?")) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const res = await fetch("/api/integrations/google/disconnect", { method: "POST" });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.message ?? "Could not disconnect.");
+      if (payload.status) setGoogle(payload.status);
+      await refreshHistoryAndToday(selectedDay);
+      setMessage("Google Health disconnected and synced data removed.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not disconnect.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-  return <main className="shell">
-    <div className="screen" key={tab}>
-      <div className="page-title"><h1>{tab}</h1>{tab === "Today" &&
-        <Button variant="secondary" className="compact" onClick={() => navigate("Log")}><Plus size={18} /> Log</Button>}</div>
-      {tab === "Today" && <>
-        <p className="today-date"><CalendarDays size={17} /> {new Date(today + "T12:00:00Z").toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long" })}</p>
-        <div className="measure-grid">{metrics.filter((metric, index) => index < 3 || readingsFor(readings, metric).length > 0).map((metric) => {
-          const { latest, change, weekly } = summary(readingsFor(readings, metric), today);
-          return <article className="card metric-card" key={metric.key}>
-            <h2>{metric.label}</h2>
-            <div className="reading">{readout(latest?.value, metric, settings.units)} <small>{displayUnit(metric, settings.units)}</small></div>
-            <div className="metric-meta"><span>7-day change</span><span>{change != null && change > 0 ? "+" : ""}{readout(change, metric, settings.units)}</span></div>
-            <div className="metric-meta"><span>7-day average</span><span>{readout(weekly, metric, settings.units)}</span></div>
-          </article>;
-        })}</div>
-        <h2 className="section-title">Insights</h2>
-        <div className="insight-grid">
-          <article className="card"><Ruler className="accent" size={20} /><h3>Waist-to-height</h3><strong>{ratio(waist, settings.heightCm)}</strong></article>
-          <article className="card"><Activity className="accent" size={20} /><h3>Arm-to-waist</h3><strong>{ratio(left == null || right == null ? undefined : (left + right) / 2, waist)}</strong></article>
-          <article className="card recomp"><Crosshair className="accent" size={20} /><h3>Recomp direction</h3><strong>{recomp(readings, today)}</strong><p>Compares the last 4 weeks with the 4 weeks before. Changes up to 0.5 cm count as flat. Each period needs two readings per metric.</p></article>
-        </div>
-      </>}
-      {tab === "Trends" && <TrendChart readings={readings} today={today} units={settings.units} height={settings.heightCm} />}
-      {tab === "Log" && <>
-        <form className="card" key={date + JSON.stringify(selected)} onSubmit={submitLog} method="post">
-          <label>Date<input type="date" required value={date} max={today} onChange={(e) => { if (e.target.value) setDate(e.target.value); }} /></label>
-          <div className="input-grid">{metrics.map((metric) => {
-            const value = readingsFor(selected, metric)[0]?.value;
-            return <label key={metric.key}>{metric.label} ({displayUnit(metric, settings.units)})
-              <input name={metric.key} inputMode="decimal" placeholder="—" defaultValue={value == null ? "" : String(Number(displayValue(value, metric, settings.units).toFixed(4)))} />
-            </label>;
-          })}</div>
-          <label>Note <small>Optional</small><textarea name="note" rows={2} maxLength={1000} placeholder="Leave blank to keep existing notes" /></label>
-          {selected.some((reading) => reading.note) && <label className="check-row"><input type="checkbox" name="clearNotes" /> Clear existing notes when the note field is blank</label>}
-          <Button disabled={busy} type="submit">Save measurements</Button>
-        </form>
-        {readings.length > 0 && <section className="card activity-list">
-          <h2>Recent entries</h2>
-          {[...new Set(readings.map((r) => r.date))].slice(0, 10).map((day) =>
-            <button className="list-item" key={day} onClick={() => setDate(day)}>{day}<ChevronRight size={18} /></button>)}
-        </section>}
-        {selected.length > 0 && <section className="card activity-list">
-          <h2>Entries on {date}</h2>
-          {selected.map((row) => {
-            const metric = metrics.find((m) => m.metric === row.metric && m.side === row.side)!;
-            return <div className="list-item" key={row.id}><span>{metric.label}{row.note && <small className="row-note">{row.note}</small>}</span>
-              <button className="secondary compact" disabled={busy} onClick={() => {
-                if (window.confirm(`Delete ${metric.label} for ${date}?`)) void save({ action: "delete-reading", id: row.id }, "Measurement deleted.");
-              }}>Delete</button></div>;
-          })}
-        </section>}
-      </>}
-      {tab === "Settings" && <>
-        <form className="card" onSubmit={submitSettings} method="post">
-          <h2>Profile</h2>
-          <label>Height (cm)<input name="height" type="number" inputMode="decimal" min="1" max="300" step="0.1" defaultValue={settings.heightCm ?? ""} /></label>
-          <label>Units<select name="units" defaultValue={settings.units}><option value="metric">Metric (cm, kg)</option><option value="imperial">Imperial (in, lb)</option></select></label>
-          <label>Goals<textarea name="goals" maxLength={2000} rows={3} defaultValue={settings.goals} /></label>
-          {settings.heightCm && <p>Waist reference (half of height) · {readout(settings.heightCm / 2, waistMetric, settings.units)} {displayUnit(waistMetric, settings.units)}</p>}
-          <Button disabled={busy} type="submit">Save settings</Button>
-        </form>
-        <details className="card"><summary>How to measure consistently</summary>
-          <p>Use the same tape, landmarks, and time of day. Keep the tape level and snug. Measure your waist after a normal exhale and your arms relaxed at the same point each time. Use the same scale and similar clothing for weight.</p>
-        </details>
-        <Passkeys onMessage={setMessage} />
-        <section className="card"><h2>Your data</h2>
-          <div className="button-row"><button className="secondary" onClick={() => download(snapshot, "csv")}><ArrowDownToLine size={18} /> CSV</button>
-          <button className="secondary" onClick={() => download(snapshot, "json")}><ArrowDownToLine size={18} /> JSON</button></div>
-          <button className="secondary wide" onClick={async () => {
-            const result = await authClient.signOut({});
-            if (result.error) setMessage("Could not sign out.");
-            else location.reload();
-          }}>Sign out</button>
-          <button className="danger wide" onClick={() => setShowDelete(!showDelete)}>Delete my account and data</button>
-          {showDelete && <form onSubmit={(event) => {
-            event.preventDefault();
-            const confirmation = new FormData(event.currentTarget).get("confirmation");
-            void save({ action: "delete-account", confirmation }, "");
-          }} method="post">
-            <label>Type DELETE to permanently remove your account and all measurements.
-              <input name="confirmation" required pattern="DELETE" autoComplete="off" />
-            </label>
-            <Button variant="destructive" disabled={busy} type="submit">Confirm deletion</Button>
-          </form>}
-        </section>
-      </>}
-      {!!message && <div className="feedback" role="status">{message}</div>}
-    </div>
-    <nav className="tabs" aria-label="Fitness views">
-      {tabs.map(({ title, icon: Icon }) => <button key={title} aria-current={tab === title ? "page" : undefined} onClick={() => navigate(title)}>
-        <Icon size={22} aria-hidden="true" /><span>{title}</span>
-      </button>)}
-    </nav>
-  </main>;
-}
+  function openNewMeal(day = selectedDay) {
+    setSelectedDay(day);
+    setEditingMeal(null);
+    setComposerOpen(true);
+  }
 
-function Passkeys({ onMessage }: { onMessage: (message: string) => void }) {
-  const keys = authClient.useListPasskeys();
-  return <section className="card"><h2>Passkeys</h2>
-    {keys.isPending && <p>Loading passkeys…</p>}
-    {keys.error && <p>Could not load passkeys.</p>}
-    {keys.data?.map((key) => <div className="list-item" key={key.id}>
-      <span>{key.name || "Passkey"}</span>
-      <button className="secondary compact" onClick={async () => {
-        if (!window.confirm("Remove this passkey?")) return;
-        const result = await authClient.passkey.deletePasskey({ id: key.id });
-        onMessage(result.error ? "Could not remove passkey." : "Passkey removed.");
-      }}>Remove</button>
-    </div>)}
-    <button className="secondary wide" onClick={async () => {
-      try {
-        const result = await authClient.passkey.addPasskey({});
-        onMessage(result?.error || !result?.data ? "Could not add passkey." : "Passkey added.");
-      } catch { onMessage("Could not add passkey."); }
-    }}><Fingerprint size={18} /> Add passkey</button>
-  </section>;
-}
+  function openEditMeal(meal: MealRecord) {
+    setEditingMeal(meal);
+    setComposerOpen(true);
+  }
 
-function download(snapshot: Snapshot, format: "json" | "csv") {
-  const csvCell = (cell: unknown) => {
-    const value = String(cell ?? "");
-    const safe = /^[\s]*[=+\-@]|^[\t\r]/.test(value) ? "'" + value : value;
-    return '"' + safe.replaceAll('"', '""') + '"';
-  };
-  const data = format === "json" ? JSON.stringify(snapshot, null, 2) :
-    ["date,metric,side,value,unit,note", ...snapshot.readings.map((row: Reading) =>
-      [row.date, row.metric, row.side, row.value, row.metric === "weight" ? "kg" : "cm", row.note].map(csvCell).join(","))].join("\r\n");
-  const url = URL.createObjectURL(new Blob([data], { type: format === "json" ? "application/json" : "text/csv" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `fitness.${format}`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return (
+    <main className="shell">
+      <div className="screen" key={tab}>
+        {tab === "Home" && (
+          <HomeView
+            today={today}
+            daily={todayDaily}
+            history30={history30}
+            google={google}
+            busy={busy}
+            onLogMeal={() => openNewMeal(today)}
+            onEditMeal={openEditMeal}
+            onToggleComplete={(day, complete) =>
+              void runNutritionAction(
+                { action: "complete", day, complete },
+                complete ? "Day marked complete." : "Day marked in progress.",
+              )
+            }
+            onSyncGoogle={() => void syncGoogle(14)}
+            onNavigate={navigate}
+          />
+        )}
+
+        {tab === "Nutrition" && (
+          <NutritionView
+            today={today}
+            selectedDay={selectedDay}
+            dayView={selectedDaily}
+            history30={history30}
+            tracker={tracker}
+            busy={busy}
+            onSelectDay={(d) => void selectDay(d)}
+            onLogMeal={() => openNewMeal(selectedDay)}
+            onEditMeal={openEditMeal}
+            onDuplicateMeal={(id, targetDay) =>
+              void runNutritionAction({ action: "duplicate", id, targetDay }, "Meal duplicated.")
+            }
+            onMoveMeal={(id, targetDay) =>
+              void runNutritionAction({ action: "update", data: { id, day: targetDay } }, `Meal moved to ${targetDay}.`)
+            }
+            onDeleteMeal={(id, name) =>
+              void runNutritionAction({ action: "delete", id }, `Deleted "${name}".`)
+            }
+            onToggleComplete={(day, complete) =>
+              void runNutritionAction(
+                { action: "complete", day, complete },
+                complete ? "Day marked complete." : "Day marked in progress.",
+              )
+            }
+          />
+        )}
+
+        {tab === "Measurements" && (
+          <MeasurementsView snapshot={tracker} today={today} busy={busy} onSaveTracker={saveTracker} />
+        )}
+
+        {tab === "Settings" && (
+          <SettingsView
+            today={today}
+            tracker={tracker}
+            settings={settings}
+            google={google}
+            audit={audit}
+            mcpEnabled={initial.mcpEnabled}
+            busy={busy}
+            onSaveTracker={saveTracker}
+            onNutritionAction={(action, msg) => runNutritionAction(action as { action: string }, msg)}
+            onSyncGoogle={syncGoogle}
+            onDisconnectGoogle={disconnectGoogle}
+            onMessage={setMessage}
+          />
+        )}
+
+        {!!message && (
+          <div className="feedback" role="status">
+            {message}
+          </div>
+        )}
+      </div>
+
+      {composerOpen && (
+        <MealComposer
+          defaultDay={tab === "Nutrition" ? selectedDay : today}
+          editingMeal={editingMeal}
+          busy={busy}
+          onClose={() => {
+            setComposerOpen(false);
+            setEditingMeal(null);
+          }}
+          onSaveMeal={async ({ mode, data }) => {
+            await runNutritionAction(
+              { action: mode, data },
+              mode === "update" ? "Meal updated." : "Meal saved.",
+            );
+          }}
+          onSaveTemplate={async (data) => {
+            await runNutritionAction({ action: "save-template", data }, "Saved to recipes & templates.");
+          }}
+        />
+      )}
+
+      <nav className="tabs" aria-label="Fitness views">
+        {tabs.map(({ title, icon: Icon }) => (
+          <button
+            key={title}
+            type="button"
+            aria-current={tab === title ? "page" : undefined}
+            onClick={() => navigate(title)}
+          >
+            <Icon size={22} />
+            <span>{title}</span>
+          </button>
+        ))}
+      </nav>
+    </main>
+  );
 }

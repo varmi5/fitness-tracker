@@ -1,0 +1,265 @@
+import { z } from "zod";
+
+export const CATEGORIES = ["breakfast", "lunch", "dinner", "snacks", "drinks"] as const;
+export const UNITS = ["g", "ml", "serving"] as const;
+export const ESTIMATION_METHODS = ["weighed", "measured", "pack_label", "recipe", "photo_estimate"] as const;
+export const ENERGY_SOURCES = ["google", "manual", "apple"] as const;
+
+export type MealCategory = (typeof CATEGORIES)[number];
+export type FoodUnit = (typeof UNITS)[number];
+export type EstimationMethod = (typeof ESTIMATION_METHODS)[number];
+export type EnergySource = (typeof ENERGY_SOURCES)[number];
+
+export const DEFAULT_CALORIE_TARGET = 1900;
+export const DEFAULT_TIMEZONE = "Europe/London";
+
+export function isValidTimezone(tz: string): boolean {
+  try {
+    Intl.DateTimeFormat("en-GB", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function localDay(isoOrDate: string | Date, timezone = DEFAULT_TIMEZONE): string {
+  const date = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+export function localTime(isoOrDate: string | Date, timezone = DEFAULT_TIMEZONE): string {
+  const date = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  const formatted = new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+  return formatted.startsWith("24:") ? "00:" + formatted.slice(3) : formatted;
+}
+
+function timezoneOffsetMinutes(utcGuessMs: number, timezone: string): number {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(utcGuessMs));
+  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  const hour = map.hour === "24" ? "00" : map.hour;
+  const asUtc = Date.UTC(
+    Number(map.year),
+    Number(map.month) - 1,
+    Number(map.day),
+    Number(hour),
+    Number(map.minute),
+    Number(map.second),
+  );
+  return (asUtc - utcGuessMs) / 60000;
+}
+
+export function resolveLocalDateTime(day: string, time = "12:00", timezone = DEFAULT_TIMEZONE): Date {
+  const [y, m, d] = day.split("-").map(Number);
+  const [hh, mm] = time.split(":").map(Number);
+  const utcNaive = Date.UTC(y, m - 1, d, hh, mm, 0);
+  const offset1 = timezoneOffsetMinutes(utcNaive, timezone);
+  let candidate = utcNaive - offset1 * 60000;
+  const offset2 = timezoneOffsetMinutes(candidate, timezone);
+  if (offset2 !== offset1) {
+    candidate = utcNaive - offset2 * 60000;
+  }
+  return new Date(candidate);
+}
+
+export function addDays(day: string, offset: number): string {
+  const date = new Date(`${day}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
+
+export function dayRange(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let cur = from; cur <= to; cur = addDays(cur, 1)) {
+    out.push(cur);
+    if (out.length > 400) break;
+  }
+  return out;
+}
+
+const optionalNonNegative = z.number().finite().min(0).max(50000).nullable().optional();
+
+export const mealItemInput = z.object({
+  id: z.string().max(64).optional(),
+  name: z.string().trim().min(1).max(160),
+  amount: z.number().finite().positive().max(20000).nullable().optional(),
+  unit: z.enum(UNITS).default("g"),
+  calories: optionalNonNegative,
+  proteinG: optionalNonNegative,
+  carbsG: optionalNonNegative,
+  fatG: optionalNonNegative,
+  fibreG: optionalNonNegative,
+  calMin: optionalNonNegative,
+  calMax: optionalNonNegative,
+  estimationMethod: z.enum(ESTIMATION_METHODS).default("photo_estimate"),
+  savedFoodId: z.string().max(64).nullable().optional(),
+}).refine(
+  (item) => item.calMin == null || item.calMax == null || item.calMax >= item.calMin,
+  { message: "Maximum calorie estimate must be greater than or equal to minimum estimate." },
+);
+
+export type MealItemInput = z.infer<typeof mealItemInput>;
+
+export const logMealInput = z.object({
+  consumedAt: z.iso.datetime({ offset: true }).optional(),
+  day: z.iso.date().optional(),
+  time: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  name: z.string().trim().min(1).max(160),
+  category: z.enum(CATEGORIES),
+  cookingMethod: z.string().trim().max(240).optional().default(""),
+  ingredients: z.string().trim().max(2000).optional().default(""),
+  notes: z.string().trim().max(1000).optional().default(""),
+  idempotencyKey: z.string().trim().min(1).max(128).optional(),
+  items: z.array(mealItemInput).min(1).max(50),
+});
+
+export type LogMealInput = z.infer<typeof logMealInput>;
+
+export const updateMealInput = z.object({
+  id: z.uuid(),
+  consumedAt: z.iso.datetime({ offset: true }).optional(),
+  day: z.iso.date().optional(),
+  time: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  name: z.string().trim().min(1).max(160).optional(),
+  category: z.enum(CATEGORIES).optional(),
+  cookingMethod: z.string().trim().max(240).optional(),
+  ingredients: z.string().trim().max(2000).optional(),
+  notes: z.string().trim().max(1000).optional(),
+  items: z.array(mealItemInput).min(1).max(50).optional(),
+  appendItems: z.array(mealItemInput).min(1).max(25).optional(),
+  idempotencyKey: z.string().trim().min(1).max(128).optional(),
+});
+
+export type UpdateMealInput = z.infer<typeof updateMealInput>;
+
+export const historyInput = z.object({
+  from: z.iso.date(),
+  to: z.iso.date(),
+}).refine((r) => r.from <= r.to, { message: "Start date must be on or before end date." })
+  .refine((r) => addDays(r.from, 366) >= r.to, { message: "Date range cannot exceed 366 days." });
+
+export const energyInput = z.object({
+  day: z.iso.date(),
+  source: z.enum(ENERGY_SOURCES).default("manual"),
+  totalKcal: z.number().finite().min(0).max(20000).nullable().optional(),
+  activeKcal: z.number().finite().min(0).max(15000).nullable().optional(),
+  steps: z.number().int().min(0).max(250000).nullable().optional(),
+  weightKg: z.number().finite().positive().max(500).nullable().optional(),
+  complete: z.boolean().default(true),
+});
+
+export const targetInput = z.object({
+  effectiveFrom: z.iso.date(),
+  calories: z.number().int().min(500).max(15000),
+});
+
+export const preferencesInput = z.object({
+  timezone: z.string().trim().min(1).max(80).refine(isValidTimezone, { message: "Invalid timezone." }),
+  preferredEnergySource: z.enum(ENERGY_SOURCES),
+});
+
+export const templateInput = z.object({
+  id: z.string().max(64).optional(),
+  kind: z.enum(["food", "recipe", "template"]).default("food"),
+  name: z.string().trim().min(1).max(160),
+  brand: z.string().trim().max(120).optional().default(""),
+  barcode: z.string().trim().max(64).nullable().optional(),
+  defaultAmount: z.number().finite().positive().max(20000).default(100),
+  defaultUnit: z.enum(UNITS).default("g"),
+  batchCookedGrams: z.number().finite().positive().max(50000).nullable().optional(),
+  calories: optionalNonNegative,
+  proteinG: optionalNonNegative,
+  carbsG: optionalNonNegative,
+  fatG: optionalNonNegative,
+  fibreG: optionalNonNegative,
+  ingredients: z.string().trim().max(2000).optional().default(""),
+  cookingMethod: z.string().trim().max(240).optional().default(""),
+  itemsJson: z.array(mealItemInput).max(50).nullable().optional(),
+});
+
+export interface NutrientSummary {
+  calories: number | null;
+  proteinG: number | null;
+  carbsG: number | null;
+  fatG: number | null;
+  fibreG: number | null;
+  calMin: number | null;
+  calMax: number | null;
+  hasUnknownValues: boolean;
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+export function sumNullable(values: (number | null | undefined)[]): number | null {
+  let sum = 0;
+  let seen = false;
+  for (const val of values) {
+    if (val != null && Number.isFinite(val)) {
+      sum += val;
+      seen = true;
+    }
+  }
+  return seen ? round1(sum) : null;
+}
+
+export function summarizeItems(
+  items: {
+    calories?: number | null;
+    proteinG?: number | null;
+    carbsG?: number | null;
+    fatG?: number | null;
+    fibreG?: number | null;
+    calMin?: number | null;
+    calMax?: number | null;
+  }[],
+): NutrientSummary {
+  const calories = sumNullable(items.map((i) => i.calories));
+  const proteinG = sumNullable(items.map((i) => i.proteinG));
+  const carbsG = sumNullable(items.map((i) => i.carbsG));
+  const fatG = sumNullable(items.map((i) => i.fatG));
+  const fibreG = sumNullable(items.map((i) => i.fibreG));
+
+  const hasRange = items.some((i) => i.calMin != null || i.calMax != null);
+  const calMin = hasRange
+    ? sumNullable(items.map((i) => i.calMin ?? i.calories))
+    : null;
+  const calMax = hasRange
+    ? sumNullable(items.map((i) => i.calMax ?? i.calories))
+    : null;
+
+  const hasUnknownValues = items.some(
+    (i) => i.calories == null || i.proteinG == null || i.carbsG == null || i.fatG == null || i.fibreG == null,
+  );
+
+  return { calories, proteinG, carbsG, fatG, fibreG, calMin, calMax, hasUnknownValues };
+}
+
+export function resolveTargetForDay(
+  targets: { effectiveFrom: string; calories: number }[],
+  day: string,
+): number {
+  const sorted = [...targets]
+    .filter((t) => t.effectiveFrom <= day)
+    .sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom));
+  return sorted[0]?.calories ?? DEFAULT_CALORIE_TARGET;
+}
