@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 export const CATEGORIES = ["breakfast", "lunch", "dinner", "snacks", "drinks"] as const;
-export const UNITS = ["g", "ml", "serving"] as const;
-export const ESTIMATION_METHODS = ["weighed", "measured", "pack_label", "recipe", "photo_estimate"] as const;
+export const UNITS = ["g", "kg", "oz", "ml", "l", "tsp", "tbsp", "cup", "fl_oz", "item", "slice", "piece", "scoop", "serving", "bottle", "can", "pack"] as const;
+export const ESTIMATION_METHODS = ["weighed", "measured", "pack_label", "recipe", "photo_estimate", "standard_portion"] as const;
 export const ENERGY_SOURCES = ["google", "manual", "apple"] as const;
 
 export type MealCategory = (typeof CATEGORIES)[number];
@@ -97,6 +97,20 @@ export function dayRange(from: string, to: string): string[] {
 
 const optionalNonNegative = z.number().finite().min(0).max(50000).nullable().optional();
 
+export const foodMeasureInput = z.object({
+  id: z.string().min(1).max(64), label: z.string().trim().min(1).max(100), unit: z.enum(UNITS),
+  baseAmount: z.number().finite().positive().max(100000), defaultAmount: z.number().finite().positive().max(20000).default(1),
+  estimated: z.boolean().default(false),
+});
+export const foodSnapshotInput = z.object({
+  id: z.string().max(160), name: z.string().trim().min(1).max(160), brand: z.string().max(120).default(""),
+  foodType: z.enum(["food", "drink"]).default("food"), source: z.string().max(80),
+  sourceUrl: z.url().max(600).nullable().optional(),
+  basisAmount: z.number().positive().max(50000), basisUnit: z.enum(UNITS),
+  calories: optionalNonNegative, proteinG: optionalNonNegative, carbsG: optionalNonNegative, fatG: optionalNonNegative, fibreG: optionalNonNegative,
+  portions: z.array(foodMeasureInput).min(1).max(30), defaultPortionId: z.string().max(64),
+});
+
 export const mealItemInput = z.object({
   id: z.string().max(64).optional(),
   name: z.string().trim().min(1).max(160),
@@ -111,6 +125,10 @@ export const mealItemInput = z.object({
   calMax: optionalNonNegative,
   estimationMethod: z.enum(ESTIMATION_METHODS).default("photo_estimate"),
   savedFoodId: z.string().max(64).nullable().optional(),
+  portionLabel: z.string().max(100).nullable().optional(), portionId: z.string().max(64).nullable().optional(),
+  gramWeight: z.number().finite().positive().max(100000).nullable().optional(),
+  millilitreVolume: z.number().finite().positive().max(100000).nullable().optional(),
+  foodSnapshot: foodSnapshotInput.nullable().optional(),
 }).refine(
   (item) => item.calMin == null || item.calMax == null || item.calMax >= item.calMin,
   { message: "Maximum calorie estimate must be greater than or equal to minimum estimate." },
@@ -194,6 +212,10 @@ export const templateInput = z.object({
   ingredients: z.string().trim().max(2000).optional().default(""),
   cookingMethod: z.string().trim().max(240).optional().default(""),
   itemsJson: z.array(mealItemInput).max(50).nullable().optional(),
+  isFavourite: z.boolean().optional(), foodType: z.enum(["food", "drink"]).default("food"),
+  portionsJson: z.array(foodMeasureInput).max(30).default([]), defaultPortionId: z.string().max(64).nullable().optional(),
+  sourceName: z.string().max(80).default("Custom"), sourceId: z.string().max(160).nullable().optional(),
+  sourceUrl: z.url().max(600).nullable().optional(),
 });
 
 export interface NutrientSummary {

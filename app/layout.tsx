@@ -5,7 +5,7 @@ import "./style.css";
 import { RegisterWorker } from "./register-worker";
 
 export const metadata: Metadata = {
-  title: "MCP Logger",
+  title: "FitnessTrackr",
   description: "Personal nutrition, energy balance, and measurement tracker",
   manifest: "/manifest.webmanifest",
   icons: { icon: "/icon-192.png", apple: "/icon-192.png" },

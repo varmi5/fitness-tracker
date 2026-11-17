@@ -20,14 +20,15 @@ export default async function Consent({ searchParams }: { searchParams: Promise<
   if (!client) notFound();
   const requested = query.scope.split(" ").filter((entry) => scopes.includes(entry));
   return <main className="auth-card">
-    <h1>Connect MCP Logger</h1>
+    <h1>Connect FitnessTrackr</h1>
     <p>Signed in as {viewer.user.email}</p>
-    <p>{client.name || "The connected app"} is requesting access to MCP Logger:</p>
+    <p>{client.name || "The connected app"} is requesting access to FitnessTrackr:</p>
     <ul>
       {requested.includes("fitness:read") && <li>Read your food diary, energy expenditure, and body measurements.</li>}
       {requested.includes("fitness:write") && <li>Log, edit, and delete meals.</li>}
+      {requested.includes("fitness:settings:write") && <li>Change your nutrition targets and reminder schedules when you ask.</li>}
     </ul>
-    <p>Data read by the connected app is shared with that app. You can revoke access anytime in MCP Logger settings.</p>
+    <p>Data read by the connected app is shared with that app. You can revoke access anytime in FitnessTrackr settings.</p>
     <ConsentForm />
   </main>;
 }

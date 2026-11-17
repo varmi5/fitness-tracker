@@ -1,4 +1,4 @@
-# MCP Logger
+# FitnessTrackr
 
 A private, mobile-first nutrition, energy balance, and body measurement tracker. Log meals and body measurements, connect two-way Google Health (Fitbit Air) for TDEE, steps, and weight sync, and connect ChatGPT via an OAuth-protected MCP endpoint at `/mcp` for photo meal logging. Start with an owner account in closed signup mode.
 

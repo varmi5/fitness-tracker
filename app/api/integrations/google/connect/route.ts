@@ -16,7 +16,7 @@ export async function GET(request: Request) {
   const callback = new URL("/api/integrations/google/callback", config.baseURL).href;
   const state = randomBytes(24).toString("base64url");
   const { verifier, challenge } = pkcePair();
-  const consentUrl = googleConsent(callback, state, challenge);
+  const consentUrl = googleConsent(callback, state, challenge, new URL(request.url).searchParams.get("write") === "1");
 
   const response = NextResponse.redirect(consentUrl);
   response.cookies.set("fitness_google_oauth", seal({ state, verifier, userId: session.user.id }, session.user.id), {

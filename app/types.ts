@@ -18,6 +18,7 @@ export interface GoogleIntegrationStatus {
   canWriteWeights: boolean;
   canReadNutrition: boolean;
   canWriteNutrition: boolean;
+  mealSync?: { pending: number; failed: number; lastError: string | null };
 }
 
 export interface InitialAppData {
@@ -40,6 +41,7 @@ export const METHOD_LABELS: Record<EstimationMethod, string> = {
   pack_label: "Pack label",
   recipe: "Recipe",
   photo_estimate: "Photo estimate",
+  standard_portion: "Portion estimate",
 };
 
 export const CATEGORY_LABELS = {

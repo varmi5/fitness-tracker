@@ -2,8 +2,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { AuthDatabase } from "./auth";
 import { auditTool } from "./mcp-auth";
-import { readScope, writeScope } from "./mcp-config";
+import { readScope, writeScope, settingsScope } from "./mcp-config";
 import { NutritionError, nutritionData } from "./nutrition-data";
+import { macroPlanInput, macroTargetInput, rebalanceMacros, macroEnergy } from "./macro-targets";
+import { reminderInput, reminderSettings, saveReminderSettings } from "./reminders";
+import { searchBrandedFoods } from "./branded-foods";
 import { historyInput, logMealInput, updateMealInput } from "./nutrition-model";
 import { getDatabase } from "./runtime";
 import { trackerData } from "./tracker-data";
@@ -22,9 +25,9 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
     description: string,
     inputSchema: T,
     run: (input: z.output<T>) => Promise<unknown>,
-    options: { write?: boolean; destructive?: boolean; summarize?: (input: z.output<T>) => string } = {},
+    options: { write?: boolean; permission?: string; destructive?: boolean; summarize?: (input: z.output<T>) => string } = {},
   ) {
-    const required = options.write ? writeScope : readScope;
+    const required = options.permission ?? (options.write ? writeScope : readScope);
     // Write responses include diary totals, so writes require both fitness:read and fitness:write.
     if (!permissions.includes(required) || (options.write && !permissions.includes(readScope))) return;
 
@@ -40,7 +43,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
           openWorldHint: false,
         },
         _meta: {
-          securitySchemes: [{ type: "oauth2", scopes: options.write ? [readScope, writeScope] : [readScope] }],
+          securitySchemes: [{ type: "oauth2", scopes: options.write ? [readScope, required] : [readScope] }],
         },
       },
       (async (raw: unknown) => {
@@ -59,7 +62,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
                   ? error.message
                   : error instanceof z.ZodError
                     ? error.issues[0]?.message ?? "Invalid meal or date input."
-                    : "MCP Logger could not complete that request.",
+                    : "FitnessTrackr could not complete that request.",
             },
             true,
           );
@@ -206,6 +209,21 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
     async (input) => ({ ...(await balance(input)), measurements: await measurements(input) }),
     { summarize: ({ from, to }) => `${from}..${to}` },
   );
+
+  register("search_foods", "Search your private foods and 2,887 UK reference foods. Set includeProducts=true to search public branded products by food or brand name. Portion options include eggs, slices, ml and label servings.",
+    z.object({ query: z.string().min(1).max(100), includeProducts: z.boolean().default(false) }),
+    async ({ query, includeProducts }) => ({ ...await data.library(query, 20), products: includeProducts ? await searchBrandedFoods(db, userId, query) : [] }));
+  register("preview_nutrition_targets", "Preview rebalancing a nutrition target. Keeps protein and fibre fixed, adjusts carbs and fat to fit calories. This does not save anything.",
+    macroPlanInput, async (input) => { const plan = rebalanceMacros(input); return { ...plan, macroEnergyKcal: macroEnergy(plan), saved: false }; });
+  register("set_nutrition_targets", "Save the user's calorie, protein, carbohydrate, fat and fibre targets from an effective date. Only after the user explicitly requests or approves this exact plan. Confirm with confirmation='APPLY'. Never change targets while just logging a meal.",
+    z.object({ targets: macroTargetInput, confirmation: z.literal("APPLY") }), ({ targets }) => data.setNutritionTargets(targets),
+    { write: true, permission: settingsScope, summarize: ({ targets }) => `nutrition targets from ${targets.effectiveFrom}` });
+  register("get_logging_reminders", "Retrieve this user's opt-in reminder schedule and today's diary status. Reports only recorded meals, not assumptions about meals eaten. Does not create a ChatGPT scheduled task.",
+    z.object({}), async () => { const settings = await data.settings(); const day = new Intl.DateTimeFormat("en-CA", { timeZone: settings.timezone }).format(new Date()); const log = await data.daily(day); return { reminders: await reminderSettings(db, userId), day, diaryComplete: log.diaryComplete,
+      loggedMeals: log.meals.map((meal) => ({ id: meal.id, name: meal.name, category: meal.category })), suggestions: log.diaryComplete ? [] : ["Log any meals or drinks you have not recorded, then mark the diary complete when finished."] }; });
+  register("set_logging_reminders", "Change only this user's opt-in reminder schedule after their explicit request, with confirmation='APPLY'. Phone notification permission must be granted separately in the installed FitnessTrackr app.",
+    z.object({ settings: reminderInput, confirmation: z.literal("APPLY") }), ({ settings }) => saveReminderSettings(db, userId, settings),
+    { write: true, permission: settingsScope, summarize: () => "reminder schedule" });
 
   return server;
 }

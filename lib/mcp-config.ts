@@ -1,6 +1,7 @@
 export const readScope = "fitness:read";
 export const writeScope = "fitness:write";
-export const scopes = [readScope, writeScope];
+export const settingsScope = "fitness:settings:write";
+export const scopes = [readScope, writeScope, settingsScope];
 
 export const mcpResource = (baseURL: string) => new URL("/mcp", baseURL).href;
 export const metadataURL = (baseURL: string) => new URL("/.well-known/oauth-protected-resource/mcp", baseURL).href;

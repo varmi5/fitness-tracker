@@ -19,6 +19,10 @@ before(async () => {
     "004-nutrition-health.sql",
     "005-mcp-oauth.sql",
     "006-google-two-way.sql",
+    "007-food-catalogue.sql",
+    "008-google-meal-sync.sql",
+    "009-macro-targets.sql",
+    "010-push-reminders.sql",
   ]) {
     await pg.exec(await readFile(`migrations/${migration}`, "utf8"));
   }

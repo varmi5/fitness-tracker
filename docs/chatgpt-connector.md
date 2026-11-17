@@ -1,4 +1,4 @@
-# Connect MCP Logger to ChatGPT
+# Connect FitnessTrackr to ChatGPT
 
 The private Streamable HTTP MCP endpoint is `https://fitness.hadamardsecurities.com/mcp`.
 It uses OAuth authorization code flow with PKCE, dynamic client registration, user consent,
@@ -22,15 +22,15 @@ and must never return meal data. Normal website sessions do not replace MCP OAut
 
 ## Add it to your account
 
-Use ChatGPT web or desktop to install the private MCP Logger plugin or configure it manually:
+Use ChatGPT web or desktop to install the private FitnessTrackr plugin or configure it manually:
 
 1. Open **Plugins**, select **+**, then **Add custom MCP server**.
-2. Name it **MCP Logger** and enter `https://fitness.hadamardsecurities.com/mcp`.
+2. Name it **FitnessTrackr** and enter `https://fitness.hadamardsecurities.com/mcp`.
 3. Choose **OAuth** with dynamic/automatic client registration. No pre-issued client secret is needed.
 4. Request `fitness:read fitness:write offline_access` for meal logging. For read-only access,
    use `fitness:read` (and optionally `offline_access`). Review the connection warning and create the plugin.
-5. Sign in to your existing MCP Logger account and review the consent screen.
-6. Start a new chat and enable MCP Logger. Ask **“What have I eaten today?”** to test a read.
+5. Sign in to your existing FitnessTrackr account and review the consent screen.
+6. Start a new chat and enable FitnessTrackr. Ask **“What have I eaten today?”** to test a read.
 7. To test a write, explicitly request a real meal you want saved. The reply should contain the
    database meal ID and totals. Confirm it appears in your website diary.
 
@@ -40,7 +40,7 @@ is missing, check your workspace permissions; installing a ZIP does not bypass t
 ## Use it on iPhone or Android
 
 Use the same ChatGPT account/workspace as the installation. Open a new chat in the mobile app,
-open the available plugins/tools, and enable **MCP Logger**. A plugin available to your account
+open the available plugins/tools, and enable **FitnessTrackr**. A plugin available to your account
 can be used on mobile, but creating a raw custom MCP connection is currently web-only.
 No separate native bridge, developer certificate or token pasted into your phone is needed.
 
@@ -49,7 +49,7 @@ availability for this particular account has to be verified by the user; a local
 
 Suggested prompt:
 
-> Use MCP Logger. Estimate this meal from my photo and the weights I provide. Search my saved
+> Use FitnessTrackr. Estimate this meal from my photo and the weights I provide. Search my saved
 > recipes first. Include oil and sauces, show an uncertainty range, and log it only when I ask.
 > After logging, report the saved meal ID and actual updated totals from the database.
 
@@ -71,7 +71,7 @@ codex mcp login mcp-logger --scopes fitness:read,fitness:write,offline_access
 
 ## Revoke access
 
-In MCP Logger **Settings → ChatGPT Server → Revoke MCP access**, revoke existing consents,
+In FitnessTrackr **Settings → ChatGPT Server → Revoke MCP access**, revoke existing consents,
 access tokens and refresh tokens. Remove the plugin from ChatGPT if no longer needed.
 
 ## Verification and maintenance

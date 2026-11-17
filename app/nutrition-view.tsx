@@ -1,5 +1,7 @@
 "use client";
 
+import { foodEmoji } from "../lib/food-emoji";
+
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, Plus, Trash2, TrendingUp } from "lucide-react";
@@ -214,19 +216,19 @@ export function NutritionView({
         <div className="macro-grid">
           <div className="energy-cell" style={{ borderColor: "var(--accent-border)" }}>
             <span style={{ color: "var(--macro-protein)", fontWeight: 700 }}>Protein</span>
-            <strong className="num">{fmtGram(dayView.totals.proteinG)}</strong>
+            <strong className="num">{fmtGram(dayView.totals.proteinG)}</strong><small>of {fmtGram(dayView.macroTargets.proteinG)} target</small>
           </div>
           <div className="energy-cell" style={{ borderColor: "var(--accent-border)" }}>
             <span style={{ color: "var(--macro-fibre)", fontWeight: 700 }}>Fibre</span>
-            <strong className="num">{fmtGram(dayView.totals.fibreG)}</strong>
+            <strong className="num">{fmtGram(dayView.totals.fibreG)}</strong><small>of {fmtGram(dayView.macroTargets.fibreG)} target</small>
           </div>
           <div className="energy-cell">
             <span>Carbs</span>
-            <strong className="num">{fmtGram(dayView.totals.carbsG)}</strong>
+            <strong className="num">{fmtGram(dayView.totals.carbsG)}</strong><small>of {fmtGram(dayView.macroTargets.carbsG)} target</small>
           </div>
           <div className="energy-cell">
             <span>Fat</span>
-            <strong className="num">{fmtGram(dayView.totals.fatG)}</strong>
+            <strong className="num">{fmtGram(dayView.totals.fatG)}</strong><small>of {fmtGram(dayView.macroTargets.fatG)} target</small>
           </div>
         </div>
         {dayView.totals.hasUnknownValues && dayView.meals.length > 0 && (
@@ -267,7 +269,7 @@ export function NutritionView({
                       <span className="num" style={{ fontSize: ".8rem", color: "var(--muted)" }}>
                         {meal.localTime}
                       </span>
-                      <strong>{meal.name}</strong>
+                      <strong><span aria-hidden="true">{foodEmoji(meal.name, meal.category)}</span> {meal.name}</strong>
                     </div>
                     <div className="meal-meta" style={{ marginTop: ".35rem" }}>
                       <span className={`pill ${method === "weighed" ? "accent-soft" : method === "photo_estimate" ? "amber-soft" : ""}`}>
@@ -363,10 +365,10 @@ export function NutritionView({
                       <div className="item-row" key={item.id}>
                         <div>
                           <div>
-                            <strong>{item.name}</strong>
+                            <strong><span aria-hidden="true">{foodEmoji(item.name)}</span> {item.name}</strong>
                             {item.amount != null && (
                               <span className="num" style={{ color: "var(--muted)", marginLeft: ".4rem" }}>
-                                {item.amount} {item.unit}
+                                {item.amount} {item.portionLabel ? `× ${item.portionLabel}` : item.unit}
                               </span>
                             )}
                           </div>

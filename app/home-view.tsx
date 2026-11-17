@@ -1,5 +1,7 @@
 "use client";
 
+import { foodEmoji } from "../lib/food-emoji";
+
 import { Plus, RefreshCw } from "lucide-react";
 import {
   BevelDotGauge,
@@ -110,10 +112,10 @@ export function HomeView({
         ? `${fmtKcal(daily.remaining)} left`
         : `${fmtKcal(Math.abs(daily.remaining ?? 0))} over`;
 
-  const proteinGoal = Math.round((target * 0.3) / 4);
-  const fibreGoal = 30;
-  const carbsGoal = Math.round((target * 0.4) / 4);
-  const fatGoal = Math.round((target * 0.3) / 9);
+  const proteinGoal = daily.macroTargets.proteinG;
+  const fibreGoal = daily.macroTargets.fibreG;
+  const carbsGoal = daily.macroTargets.carbsG;
+  const fatGoal = daily.macroTargets.fatG;
 
   // Protein & Fibre prioritized on row 1 above Carbs & Fat
   const macroCards = [
@@ -157,7 +159,7 @@ export function HomeView({
         <div className="page-header-title">
           <div className="brand-lockup" style={{ marginBottom: ".2rem" }}>
             <span className="brand-badge"><McpBrandMark size={16} /></span>
-            <span>MCP Logger</span>
+            <span>FitnessTrackr</span>
           </div>
           <h1>Today</h1>
           <div className="page-sub">
@@ -166,18 +168,7 @@ export function HomeView({
           </div>
         </div>
         <div className="header-actions">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-            title={theme === "light" ? "Dark theme" : "Light theme"}
-            onClick={onToggleTheme}
-          >
-            {theme === "light" ? <MoonThemeIcon size={17} /> : <SunThemeIcon size={17} />}
-          </button>
-          <button type="button" className="compact" onClick={onLogMeal}>
-            <Plus size={16} /> Log meal
-          </button>
+
         </div>
       </div>
 

@@ -42,7 +42,7 @@ export function Login({ signup, oauth = false }: { signup: boolean; oauth?: bool
             return;
           }
         }
-        setMessage("Could not connect MCP Logger. Check your credentials and restart the connection if needed.");
+        setMessage("Could not connect FitnessTrackr. Check your credentials and restart the connection if needed.");
         return;
       }
       const result = await authClient.signIn.email({
@@ -53,7 +53,7 @@ export function Login({ signup, oauth = false }: { signup: boolean; oauth?: bool
       } else if (result.error) setMessage("Could not sign in. Check your email and password.");
       else location.reload();
     } catch {
-      setMessage("Could not reach MCP Logger. Try again.");
+      setMessage("Could not reach FitnessTrackr. Try again.");
     } finally {
       setBusy(false);
     }
@@ -62,10 +62,10 @@ export function Login({ signup, oauth = false }: { signup: boolean; oauth?: bool
   return <main className="auth-card">
     <div className="brand-lockup">
       <span className="brand-badge"><McpBrandMark size={18} /></span>
-      <span>MCP Logger</span>
+      <span>FitnessTrackr</span>
     </div>
     <h1>{oauth ? "Sign in" : "Welcome back"}</h1>
-    <p>{oauth ? "Sign in to connect your MCP Logger account." : "Sign in to your nutrition, energy balance, and measurement tracker."}</p>
+    <p>{oauth ? "Sign in to connect your FitnessTrackr account." : "Sign in to your nutrition, energy balance, and measurement tracker."}</p>
     <form onSubmit={signIn} method="post">
       <label>Email<input type="email" name="email" autoComplete="username webauthn" required /></label>
       {!reset && <label>Password<input type="password" name="password" autoComplete="current-password" required /></label>}

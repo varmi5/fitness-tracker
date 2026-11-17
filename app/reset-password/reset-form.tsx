@@ -14,7 +14,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
       const result = await authClient.resetPassword({ token, newPassword: password });
       if (result.error) setMessage("Could not reset the password. Request a new link and try again.");
       else location.replace("/");
-    } catch { setMessage("Could not reach MCP Logger."); }
+    } catch { setMessage("Could not reach FitnessTrackr."); }
     finally { setBusy(false); }
   }
   return <form method="post" onSubmit={submit}>
