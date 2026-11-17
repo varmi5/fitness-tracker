@@ -768,3 +768,11 @@ summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight:
 @media (prefers-reduced-motion: reduce) {
   .screen, button { animation: none; transition: none; }
 }
+
+.log-meal-fab { position: fixed; right: max(1rem, env(safe-area-inset-right)); bottom: calc(6rem + env(safe-area-inset-bottom)); z-index: 25; min-height: 52px; border-radius: 16px; padding: .8rem 1.15rem; box-shadow: var(--shadow-md); }
+.shell { padding-bottom: calc(11rem + env(safe-area-inset-bottom)); }
+.custom-food-form { display: grid; gap: .9rem; }
+.selected-food-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.selected-food-tools > span { flex: 1 1 100%; font-weight: 600; overflow-wrap: anywhere; }
+.food-suggestion strong > svg { display: inline; vertical-align: middle; }
+@media (max-width: 540px) { .modal-sheet .input-grid { grid-template-columns: 1fr; } }

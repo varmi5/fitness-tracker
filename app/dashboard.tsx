@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   HomeRingIcon,
@@ -34,7 +35,7 @@ const tabs: { title: AppTab; icon: typeof HomeRingIcon }[] = [
   { title: "Settings", icon: SettingsSlidersIcon },
 ];
 
-const THEME_STORAGE_KEY = "mcplogger_theme";
+const THEME_STORAGE_KEY = "fitnesstrackr_theme";
 
 export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [tab, setTab] = useState<AppTab>("Home");
@@ -76,7 +77,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+      const saved = window.localStorage.getItem(THEME_STORAGE_KEY) ?? window.localStorage.getItem("mcplogger_theme");
       if (saved === "dark" || saved === "light") {
         applyTheme(saved);
       }
@@ -212,7 +213,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         if (savedDay.day === today) setTodayDaily(savedDay);
         if (savedDay.day === selectedDayRef.current) setSelectedDaily(savedDay);
       }
-      if (action.action === "target" || action.action === "preferences") {
+      if (action.action === "target" || action.action === "macro-targets" || action.action === "preferences") {
         setSettings(payload);
       } else if (action.action === "revoke-mcp") {
         setAudit([]);
@@ -277,7 +278,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Google push failed.");
       if (payload.status) setGoogle(payload.status);
-      setMessage(`Pushed ${payload.mealsPushed ?? 0} meal(s) and ${payload.weightsPushed ?? 0} weight(s) to Google Health.`);
+      setMessage(payload.mealsQueued != null ? `Queued ${payload.mealsQueued} meal(s) for Google Health. Check sync status for confirmation.` : `Pushed ${payload.mealsPushed ?? 0} meal(s) and ${payload.weightsPushed ?? 0} weight(s) to Google Health.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Google push failed.");
     } finally {
@@ -436,7 +437,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         />
       )}
 
-      <nav className="tabs" aria-label="MCP Logger views">
+      {!composerOpen && <button className="log-meal-fab" type="button" onClick={() => openNewMeal(tab === "Nutrition" ? selectedDay : today)}><Plus size={20} aria-hidden="true" />Log meal</button>}
+      <nav className="tabs" aria-label="FitnessTrackr views">
         {tabs.map(({ title, icon: Icon }) => (
           <button
             key={title}

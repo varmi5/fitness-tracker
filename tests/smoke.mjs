@@ -16,7 +16,7 @@ const code = randomBytes(24).toString("hex");
 const password = randomBytes(24).toString("hex");
 const email = "owner@example.test";
 const env = {
-  ...process.env, HOSTNAME: "127.0.0.1", PORT: "3088", SIGNUP_MODE: "closed",
+  ...process.env, FITNESS_BACKGROUND_WORKER: "false", HOSTNAME: "127.0.0.1", PORT: "3088", SIGNUP_MODE: "closed",
   BETTER_AUTH_URL: origin, SETUP_CODE: code,
   BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
   DATABASE_URL: `postgresql://postgres:postgres@${database.getServerConn()}/postgres`,
@@ -122,7 +122,7 @@ try {
   const signupPage = await waitForSetup();
   assert.equal(signupPage.status, 200);
   const signupHtml = await signupPage.text();
-  assert.match(signupHtml, /Create your MCP Logger account/);
+  assert.match(signupHtml, /Create your FitnessTrackr account/);
   assert.doesNotMatch(signupHtml, /name="invite"/);
   assert.match(signupPage.headers.get("content-security-policy"), /challenges\.cloudflare\.com/);
   assert.equal((await post("/api/auth/sign-in/email", { email, password })).status, 200);
@@ -177,7 +177,7 @@ try {
   const callback = "http://127.0.0.1:3089/callback";
   const verifier = randomBytes(32).toString("base64url");
   const registration = await post("/api/auth/oauth2/register", {
-    client_name: "MCP Logger smoke test", application_type: "native", redirect_uris: [callback],
+    client_name: "FitnessTrackr smoke test", application_type: "native", redirect_uris: [callback],
     grant_types: ["authorization_code", "refresh_token"], response_types: ["code"],
     token_endpoint_auth_method: "none", scope: "fitness:read fitness:write offline_access",
   });
@@ -218,7 +218,7 @@ try {
   };
   await mcpCall("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "smoke", version: "1" } });
   const listed = await mcpCall("tools/list", {});
-  assert.equal(listed.tools.length, 10);
+  assert.equal(listed.tools.length, 13);
   const dailyLog = await mcpCall("tools/call", { name: "get_daily_log", arguments: { day: "2026-11-17" } });
   assert.equal(dailyLog.isError, false);
   assert.equal(JSON.parse(dailyLog.content[0].text).totals.calories, 257);

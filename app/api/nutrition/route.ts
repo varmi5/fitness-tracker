@@ -1,9 +1,9 @@
+import { macroTargetInput } from "../../../lib/macro-targets";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import {
   googleStatus,
   parseSavedHealthImport,
-  pushMealToGoogle,
   pushWeightToGoogle,
 } from "../../../lib/google-health";
 import { NutritionError, nutritionData, preferencesInput, targetInput } from "../../../lib/nutrition-data";
@@ -23,6 +23,7 @@ const mutation = z.discriminatedUnion("action", [
   z.object({ action: z.literal("duplicate"), id: z.uuid(), targetDay: z.iso.date().optional() }),
   z.object({ action: z.literal("delete"), id: z.uuid() }),
   z.object({ action: z.literal("target"), data: targetInput }),
+  z.object({ action: z.literal("macro-targets"), data: macroTargetInput }),
   z.object({ action: z.literal("preferences"), data: preferencesInput }),
   z.object({ action: z.literal("complete"), day: z.iso.date(), complete: z.boolean() }),
   z.object({ action: z.literal("energy"), data: energyInput }),
@@ -40,7 +41,7 @@ async function getUser(request: Request) {
 function handleError(error: unknown) {
   if (error instanceof NutritionError) return json({ message: error.message }, error.status);
   if (error instanceof z.ZodError) return json({ message: error.issues[0]?.message ?? "Invalid entry." }, 400);
-  return json({ message: "MCP Logger could not complete this request." }, 500);
+  return json({ message: "FitnessTrackr could not complete this request." }, 500);
 }
 
 export async function GET(request: Request) {
@@ -92,30 +93,20 @@ export async function POST(request: Request) {
     switch (input.action) {
       case "log": {
         const res = await data.log(logMealInput.parse(input.data));
-        const prefs = await data.settings();
-        if (prefs.googleTwoWaySync) {
-          await pushMealToGoogle(db, user.id, res.meal).catch(() => null);
-        }
         return json(res);
       }
       case "update": {
         const res = await data.update(updateMealInput.parse(input.data));
-        const prefs = await data.settings();
-        if (prefs.googleTwoWaySync) {
-          await pushMealToGoogle(db, user.id, res.meal).catch(() => null);
-        }
         return json(res);
       }
       case "duplicate": {
         const res = await data.duplicate(input.id, input.targetDay);
-        const prefs = await data.settings();
-        if (prefs.googleTwoWaySync) {
-          await pushMealToGoogle(db, user.id, res.meal).catch(() => null);
-        }
         return json(res);
       }
       case "delete":
         return json(await data.remove(input.id, true));
+      case "macro-targets":
+        return json(await data.setNutritionTargets(input.data));
       case "target":
         return json(await data.setTarget(input.data));
       case "preferences":

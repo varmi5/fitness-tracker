@@ -15,7 +15,7 @@ const origin = "http://localhost:3087";
 const code = randomBytes(24).toString("hex");
 const password = randomBytes(24).toString("hex");
 const email = "mobile-review@example.test";
-const env = { ...process.env, HOSTNAME: "127.0.0.1", PORT: "3087", SIGNUP_MODE: "closed",
+const env = { ...process.env, FITNESS_BACKGROUND_WORKER: "false", HOSTNAME: "127.0.0.1", PORT: "3087", SIGNUP_MODE: "closed",
   FITNESS_MCP_ENABLED: "false", SETUP_CODE: code, BETTER_AUTH_URL: origin,
   BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
   DATABASE_URL: `postgresql://postgres:postgres@${database.getServerConn()}/postgres` };
@@ -45,13 +45,19 @@ try {
     const context = await browser.newContext({ ...device, serviceWorkers: "block", reducedMotion: "reduce" });
     assert.ok((await context.request.post(`${origin}/api/auth/sign-in/email`, { headers: { Origin: origin }, data: { email, password } })).ok());
     const page = await context.newPage();
+    await page.route(/\/api\/foods\?.*products=1/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ products: [], providerMessage: null }) }));
     await page.goto(origin);
-    await page.getByRole("button", { name: "Log meal", exact: true }).click();
+    const fab = page.getByRole("button", { name: "Log meal", exact: true });
+    assert.equal(await fab.evaluate((node) => getComputedStyle(node).position), "fixed");
+    const fabBox = await fab.boundingBox(); const navBox = await page.getByRole("navigation").boundingBox();
+    assert.ok(fabBox.x + fabBox.width / 2 > page.viewportSize().width / 2);
+    assert.ok(fabBox.y + fabBox.height < navBox.y);
+    await fab.click();
     const modal = page.getByRole("dialog");
     await modal.waitFor();
     const search = modal.getByRole("combobox", { name: "Find a food" });
     await search.fill("Ehgs");
-    await modal.getByRole("option").filter({ hasText: "whole, boiled" }).filter({ hasText: "UK staple" }).waitFor();
+    await modal.getByRole("option").filter({ hasText: "whole, boiled" }).filter({ hasText: "UK CoFID" }).waitFor();
     assert.ok(await search.evaluate((input) => parseFloat(getComputedStyle(input).fontSize) >= 16));
     assert.equal(await page.evaluate(() => window.visualViewport.scale), 1);
     const bounds = await modal.boundingBox();
@@ -61,7 +67,8 @@ try {
       await mkdir(screenshotDir, { recursive: true });
       await page.screenshot({ path: `${screenshotDir}/${name}-search.png` });
     }
-    await modal.getByRole("option").filter({ hasText: "whole, boiled" }).filter({ hasText: "UK staple" }).click();
+    await modal.getByRole("option").filter({ hasText: "whole, boiled" }).filter({ hasText: "UK CoFID" }).click();
+    await modal.getByLabel("Portion measure", { exact: true }).selectOption("g");
     await modal.getByLabel("Portion amount", { exact: true }).fill("200");
     assert.equal(await modal.getByLabel("Calories", { exact: false }).inputValue(), "286");
     await modal.getByLabel("Meal name", { exact: true }).fill(`${name} review meal`);
@@ -84,8 +91,8 @@ try {
     await page.getByText(`${name} review meal`, { exact: true }).waitFor();
     await page.getByRole("button", { name: "Edit", exact: true }).last().click();
     await modal.getByLabel("Food name", { exact: true }).fill("oats");
-    await modal.getByRole("option").filter({ hasText: "Porridge oats" }).click();
-    assert.equal(await modal.getByLabel("Calories", { exact: false }).inputValue(), "374");
+    await modal.getByRole("option").filter({ hasText: "Porridge oats, unfortified UK" }).first().click();
+    assert.equal(await modal.getByLabel("Calories", { exact: false }).inputValue(), "381");
     await modal.getByRole("button", { name: "Close composer" }).click();
     for (const tab of ["Home", "Nutrition", "Measurements", "Settings"]) {
       await page.getByRole("navigation").getByRole("button", { name: tab, exact: true }).click();

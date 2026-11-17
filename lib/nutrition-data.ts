@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { z } from "zod";
 import type { AuthDatabase } from "./auth";
@@ -39,7 +39,12 @@ import {
   profile,
   savedFood,
 } from "./schema";
+import { macroTargetInput, resolveMacroTargets, rebalanceMacros, type MacroPlan } from "./macro-targets";
+import { queueGoogleMeal } from "./google-sync-queue";
 import { foodMatchScore } from "./search-match";
+import { catalogueById, searchCatalogue, catalogueCount } from "./food-catalogue";
+import { calculateFoodPortion, type FoodDefinition } from "./food-catalogue-model";
+import type { MealItemInput } from "./nutrition-model";
 import { searchUkStaples } from "./uk-foods";
 
 export { preferencesInput, targetInput };
@@ -68,6 +73,8 @@ export interface MealItemRecord {
   calMax: number | null;
   estimationMethod: EstimationMethod;
   savedFoodId: string | null;
+  portionLabel: string | null; portionId: string | null; gramWeight: number | null; millilitreVolume: number | null;
+  foodSnapshot: FoodDefinition | null;
 }
 
 export interface MealRecord {
@@ -99,6 +106,7 @@ export interface DailyNutritionView {
   day: string;
   timezone: string;
   target: number;
+  macroTargets: MacroPlan;
   remaining: number | null;
   diaryComplete: boolean;
   meals: MealRecord[];
@@ -181,7 +189,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       timezone: pref?.timezone ?? DEFAULT_TIMEZONE,
       preferredEnergySource: (pref?.preferredEnergySource ?? "google") as EnergySource,
       googleTwoWaySync: pref?.googleTwoWaySync ?? false,
-      targets: targets.map((t) => ({ id: t.id, effectiveFrom: t.effectiveFrom, calories: t.calories })),
+      targets: targets.map((t) => ({ id: t.id, effectiveFrom: t.effectiveFrom, calories: t.calories, proteinG: t.proteinG, carbsG: t.carbsG, fatG: t.fatG, fibreG: t.fibreG })),
       hasGoogleConnected: integrations.some((i) => i.provider === "google"),
     };
   }
@@ -223,6 +231,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         calMax: item.calMax,
         estimationMethod: item.estimationMethod as EstimationMethod,
         savedFoodId: item.savedFoodId,
+        portionLabel: item.portionLabel, portionId: item.portionId, gramWeight: item.gramWeight, millilitreVolume: item.millilitreVolume,
+        foodSnapshot: item.foodSnapshot as FoodDefinition | null,
       });
       grouped.set(item.mealId, list);
     }
@@ -282,6 +292,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       day,
       timezone: prefs.timezone,
       target,
+      macroTargets: resolveMacroTargets(prefs.targets, day),
       remaining,
       diaryComplete,
       meals,
@@ -348,6 +359,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         mealCount: dayMeals.length,
         totals,
         target,
+        macroTargets: resolveMacroTargets(prefs.targets, day),
         remaining,
         diaryComplete,
         energy,
@@ -411,8 +423,18 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     };
   }
 
+  function materialize(item: MealItemInput): MealItemInput {
+    if (item.foodSnapshot && item.portionId && item.amount != null) {
+      return { ...item, ...calculateFoodPortion(item.foodSnapshot, item.portionId, item.amount), savedFoodId: item.savedFoodId };
+    }
+    return item;
+  }
+  const portionColumns = (item: MealItemInput) => ({ portionLabel: item.portionLabel ?? null, portionId: item.portionId ?? null,
+    gramWeight: item.gramWeight ?? null, millilitreVolume: item.millilitreVolume ?? null, foodSnapshot: item.foodSnapshot ?? null });
+
   async function log(rawInput: z.input<typeof logMealInput>) {
-    const input = logMealInput.parse(rawInput);
+    const parsed = logMealInput.parse(rawInput);
+    const input = logMealInput.parse({ ...parsed, items: parsed.items.map(materialize) });
     const prefs = await getPrefs();
 
     const mealId = await db.transaction(async (tx) => {
@@ -471,6 +493,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
           calMin: item.calMin ?? null,
           calMax: item.calMax ?? null,
           estimationMethod: item.estimationMethod,
+          ...portionColumns(item),
           savedFoodId: item.savedFoodId && ownedFoodIds.has(item.savedFoodId) ? item.savedFoodId : null,
         })),
       );
@@ -481,7 +504,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
           .where(and(eq(savedFood.userId, userId), inArray(savedFood.id, [...ownedFoodIds])));
       }
 
-      return { id, day: resolvedDay, deduplicated: false };
+      const googleSyncQueued = await queueGoogleMeal(tx, userId, id);
+      return { id, day: resolvedDay, deduplicated: false, googleSyncQueued };
     });
 
     const dayView = await daily(mealId.day);
@@ -493,11 +517,13 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       dailyCalorieTarget: dayView.target,
       remainingCalorieAllowance: dayView.remaining,
       day: dayView,
+      googleSync: { queued: Boolean(mealId.googleSyncQueued) },
     };
   }
 
   async function update(rawInput: z.input<typeof updateMealInput>) {
-    const input = updateMealInput.parse(rawInput);
+    const parsed = updateMealInput.parse(rawInput);
+    const input = updateMealInput.parse({ ...parsed, items: parsed.items?.map(materialize), appendItems: parsed.appendItems?.map(materialize) });
     const prefs = await getPrefs();
 
     const updated = await db.transaction(async (tx) => {
@@ -553,6 +579,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
             calMin: item.calMin ?? null,
             calMax: item.calMax ?? null,
             estimationMethod: item.estimationMethod,
+            ...portionColumns(item),
             savedFoodId: null,
           })),
         );
@@ -579,6 +606,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
             calMin: item.calMin ?? null,
             calMax: item.calMax ?? null,
             estimationMethod: item.estimationMethod,
+            ...portionColumns(item),
             savedFoodId: null,
           })),
         );
@@ -592,7 +620,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         }).onConflictDoNothing();
       }
 
-      return { id: existing.id, day: nextLocalDay, deduplicated: false };
+      const googleSyncQueued = await queueGoogleMeal(tx, userId, existing.id);
+      return { id: existing.id, day: nextLocalDay, deduplicated: false, googleSyncQueued };
     });
 
     const dayView = await daily(updated.day);
@@ -603,6 +632,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       dailyCalorieTarget: dayView.target,
       remainingCalorieAllowance: dayView.remaining,
       day: dayView,
+      googleSync: { queued: Boolean(updated.googleSyncQueued) },
     };
   }
 
@@ -637,15 +667,19 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         calMax: item.calMax,
         estimationMethod: item.estimationMethod as EstimationMethod,
         savedFoodId: item.savedFoodId,
+        ...portionColumns(item as MealItemInput),
       })),
     });
   }
 
   async function remove(id: string, confirmed = true) {
     if (!confirmed) throw new NutritionError("Deletion confirmation is required.");
-    const [deleted] = await db.delete(meal)
-      .where(and(eq(meal.userId, userId), eq(meal.id, id)))
-      .returning({ id: meal.id, localDay: meal.localDay, name: meal.name });
+    const deleted = await db.transaction(async (tx) => {
+      await queueGoogleMeal(tx, userId, id, "delete");
+      const [row] = await tx.delete(meal).where(and(eq(meal.userId, userId), eq(meal.id, id)))
+        .returning({ id: meal.id, localDay: meal.localDay, name: meal.name });
+      return row;
+    });
     if (!deleted) throw new NutritionError("Meal not found.", 404);
     return { deleted, day: await daily(deleted.localDay) };
   }
@@ -658,6 +692,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       preferredEnergySource: prefs.preferredEnergySource,
       googleTwoWaySync: prefs.googleTwoWaySync,
       targetToday: resolveTargetForDay(prefs.targets, today),
+      macroTargets: resolveMacroTargets(prefs.targets, today),
       targets: prefs.targets,
       defaultTarget: DEFAULT_CALORIE_TARGET,
     };
@@ -665,14 +700,15 @@ export function nutritionData(db: AuthDatabase, userId: string) {
 
   async function setTarget(rawInput: z.input<typeof targetInput>) {
     const input = targetInput.parse(rawInput);
-    await db.insert(calorieTarget).values({
-      id: randomUUID(),
-      userId,
-      effectiveFrom: input.effectiveFrom,
-      calories: input.calories,
-    }).onConflictDoUpdate({
-      target: [calorieTarget.userId, calorieTarget.effectiveFrom],
-      set: { calories: input.calories },
+    const prefs = await getPrefs();
+    const current = resolveMacroTargets(prefs.targets, input.effectiveFrom);
+    return setNutritionTargets({ ...rebalanceMacros({ ...current, calories: input.calories }), effectiveFrom: input.effectiveFrom });
+  }
+
+  async function setNutritionTargets(rawInput: z.input<typeof macroTargetInput>) {
+    const input = macroTargetInput.parse(rawInput);
+    await db.insert(calorieTarget).values({ id: randomUUID(), userId, ...input }).onConflictDoUpdate({
+      target: [calorieTarget.userId, calorieTarget.effectiveFrom], set: { calories: input.calories, proteinG: input.proteinG, carbsG: input.carbsG, fatG: input.fatG, fibreG: input.fibreG },
     });
     return settings();
   }
@@ -742,8 +778,10 @@ export function nutritionData(db: AuthDatabase, userId: string) {
 
   async function saveTemplate(rawInput: z.input<typeof templateInput>) {
     const input = templateInput.parse(rawInput);
-    const id = input.id && /^[0-9a-f-]{36}$/i.test(input.id) ? input.id : randomUUID();
-    if (input.id) {
+    const digest = input.sourceId ? createHash("sha256").update(`${userId}|${input.sourceName}|${input.sourceId}`).digest("hex") : null;
+    const stable = digest ? `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}` : null;
+    const id = input.id && /^[0-9a-f-]{36}$/i.test(input.id) ? input.id : stable ?? randomUUID();
+    if (input.id || stable) {
       const [existing] = await db.select({ userId: savedFood.userId }).from(savedFood).where(eq(savedFood.id, id));
       if (existing && existing.userId !== userId) throw new NutritionError("Saved food not found.", 404);
     }
@@ -765,6 +803,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       ingredients: input.ingredients,
       cookingMethod: input.cookingMethod,
       itemsJson: input.itemsJson ?? null,
+      isFavourite: input.isFavourite ?? false, foodType: input.foodType, portionsJson: input.portionsJson,
+      defaultPortionId: input.defaultPortionId ?? null, sourceName: input.sourceName, sourceId: input.sourceId ?? null, sourceUrl: input.sourceUrl ?? null,
     }).onConflictDoUpdate({
       target: savedFood.id,
       set: {
@@ -783,6 +823,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         ingredients: input.ingredients,
         cookingMethod: input.cookingMethod,
         itemsJson: input.itemsJson ?? null,
+        isFavourite: input.isFavourite ?? savedFood.isFavourite, foodType: input.foodType, portionsJson: input.portionsJson,
+        defaultPortionId: input.defaultPortionId ?? null, sourceName: input.sourceName, sourceId: input.sourceId ?? null, sourceUrl: input.sourceUrl ?? null,
       },
     }).returning();
     return row;
@@ -800,8 +842,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const clean = query.trim().toLowerCase();
     const savedRows = await db.select().from(savedFood)
       .where(eq(savedFood.userId, userId))
-      .orderBy(desc(savedFood.useCount), desc(savedFood.createdAt))
-      .limit(100);
+      .orderBy(desc(savedFood.isFavourite), desc(savedFood.useCount), desc(savedFood.createdAt))
+      .limit(1000);
 
     const matchingSaved = savedRows
       .filter((row) => Number.isFinite(foodMatchScore(`${row.name} ${row.brand} ${row.ingredients}`, clean)))
@@ -826,6 +868,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       fatG: number | null;
       fibreG: number | null;
       estimationMethod: EstimationMethod;
+      portionLabel: string | null; portionId: string | null; gramWeight: number | null; millilitreVolume: number | null;
+      foodSnapshot: FoodDefinition | null;
     }>();
 
     for (const item of recentItems) {
@@ -846,6 +890,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
           fatG: item.fatG,
           fibreG: item.fibreG,
           estimationMethod: item.estimationMethod as EstimationMethod,
+          portionLabel: item.portionLabel, portionId: item.portionId, gramWeight: item.gramWeight, millilitreVolume: item.millilitreVolume,
+          foodSnapshot: item.foodSnapshot as FoodDefinition | null,
         });
       }
     }
@@ -856,7 +902,15 @@ export function nutritionData(db: AuthDatabase, userId: string) {
 
     const ukStaples = searchUkStaples(query, limit);
 
-    return { saved: matchingSaved, frequent, ukStaples };
+    const popular = ["cofid:12-940", "cofid:11-980", "cofid:12-313", "cofid:17-833", "cofid:17-169", "cofid:17-175", "cofid:17-377"];
+    const catalogue = clean ? searchCatalogue(query, limit) : popular.map(catalogueById).filter((f): f is FoodDefinition => f != null);
+    return { saved: matchingSaved, frequent, ukStaples, catalogue, catalogueCount };
+  }
+
+  async function favourite(id: string, isFavourite: boolean) {
+    const [row] = await db.update(savedFood).set({ isFavourite }).where(and(eq(savedFood.id, id), eq(savedFood.userId, userId))).returning();
+    if (!row) throw new NutritionError("Food not found.", 404);
+    return row;
   }
 
   async function recentAudit(limit = 20) {
@@ -1015,6 +1069,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         mealCount: dayMeals.length,
         totals,
         target,
+        macroTargets: resolveMacroTargets(prefs.targets, day),
         remaining,
         diaryComplete,
         energy,
@@ -1054,6 +1109,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       day: today,
       timezone: prefs.timezone,
       target: todaySummary.target,
+      macroTargets: todaySummary.macroTargets,
       remaining: todaySummary.remaining,
       diaryComplete: todaySummary.diaryComplete,
       meals: mealsByDay.get(today) ?? [],
@@ -1070,6 +1126,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       preferredEnergySource: prefs.preferredEnergySource,
       googleTwoWaySync: prefs.googleTwoWaySync,
       targetToday: todaySummary.target,
+      macroTargets: todaySummary.macroTargets,
       targets: prefs.targets,
       defaultTarget: DEFAULT_CALORIE_TARGET,
     };
@@ -1113,12 +1170,14 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     remove,
     settings,
     setTarget,
+    setNutritionTargets,
     setPreferences,
     markDay,
     saveEnergy,
     importHealthRecords,
     saveTemplate,
     removeTemplate,
+    favourite,
     library,
     recentAudit,
     export: exportAll,

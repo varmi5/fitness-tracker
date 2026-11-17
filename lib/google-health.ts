@@ -12,22 +12,15 @@ import {
   resolveLocalDateTime,
   type MealCategory,
 } from "./nutrition-model";
-import { dailyEnergy, healthIntegration, meal, measurement, profile } from "./schema";
+import { dailyEnergy, googleMealSync, healthIntegration, meal, measurement, profile } from "./schema";
 
 const googleAPI = "https://health.googleapis.com/v4/users/me";
 const activityScope = "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly";
 const measurementsScope = "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly";
 const measurementsWriteScope = "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.writeonly";
-const nutritionReadScope = "https://www.googleapis.com/auth/googlehealth.nutrition.readonly";
 const nutritionWriteScope = "https://www.googleapis.com/auth/googlehealth.nutrition.writeonly";
 
-const scopeValues = [
-  activityScope,
-  measurementsScope,
-  measurementsWriteScope,
-  nutritionReadScope,
-  nutritionWriteScope,
-];
+const scopeValues = [activityScope, measurementsScope];
 
 const tokens = z.object({
   accessToken: z.string(),
@@ -75,7 +68,7 @@ export function pkcePair() {
   return { verifier, challenge };
 }
 
-export function googleConsent(callback: string, state: string, challenge: string) {
+export function googleConsent(callback: string, state: string, challenge: string, allowWrite = false) {
   if (!googleConfigured()) throw new NutritionError("Google Health is not configured.", 503);
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.search = new URLSearchParams({
@@ -84,7 +77,7 @@ export function googleConsent(callback: string, state: string, challenge: string
     redirect_uri: callback,
     access_type: "offline",
     prompt: "consent",
-    scope: scopeValues.join(" "),
+    scope: [...scopeValues, ...(allowWrite ? [measurementsWriteScope, nutritionWriteScope] : [])].join(" "),
     state,
     code_challenge: challenge,
     code_challenge_method: "S256",
@@ -154,8 +147,10 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
       .values({ userId, provider: "google", credential: seal(grant, userId), status: "connected", lastError: null })
       .onConflictDoUpdate({
         target: [healthIntegration.userId, healthIntegration.provider],
-        set: { credential: seal(grant, userId), status: "connected", lastSync: null, lastError: null },
+        set: { credential: seal(grant, userId), connectionId: randomBytes(16).toString("hex"), status: "connected", lastSync: null, lastError: null },
       });
+    await tx.delete(googleMealSync).where(eq(googleMealSync.userId, userId));
+    await tx.update(meal).set({ googleDatapointName: null }).where(eq(meal.userId, userId));
     // Replacing a connection clears prior Google rows so two accounts never mix.
     await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
   });
@@ -277,7 +272,9 @@ export async function googleStatus(db: AuthDatabase, userId: string) {
     }
   }
 
+  const jobs = await db.select({ state: googleMealSync.state, lastError: googleMealSync.lastError }).from(googleMealSync).where(eq(googleMealSync.userId, userId));
   return {
+    mealSync: { pending: jobs.filter((job) => job.state === "pending").length, failed: jobs.filter((job) => job.state === "error").length, lastError: jobs.find((job) => job.lastError)?.lastError ?? null },
     available: googleConfigured(),
     connected: Boolean(row),
     status: row?.status ?? null,
@@ -285,12 +282,12 @@ export async function googleStatus(db: AuthDatabase, userId: string) {
     lastError: row?.lastError ?? null,
     canReadWeights: scopes.includes(measurementsScope),
     canWriteWeights: scopes.includes(measurementsWriteScope),
-    canReadNutrition: scopes.includes(nutritionReadScope),
+    canReadNutrition: scopes.includes(nutritionWriteScope),
     canWriteNutrition: scopes.includes(nutritionWriteScope),
   };
 }
 
-async function getFreshGrant(db: AuthDatabase, userId: string) {
+export async function getFreshGrant(db: AuthDatabase, userId: string) {
   const [linked] = await db.select().from(healthIntegration).where(own(userId));
   if (!linked) throw new NutritionError("Connect Google Health first.", 409);
   let grant = tokens.parse(unseal(linked.credential, userId));
@@ -442,12 +439,6 @@ export function buildGoogleNutritionLogDataPoint(record: {
   if (record.totals.fibreG != null) {
     nutrients.push({ nutrient: "DIETARY_FIBER", quantity: { grams: Math.round(record.totals.fibreG * 10) / 10 } });
   }
-  if (record.totals.carbsG != null) {
-    nutrients.push({ nutrient: "TOTAL_CARBOHYDRATE", quantity: { grams: Math.round(record.totals.carbsG * 10) / 10 } });
-  }
-  if (record.totals.fatG != null) {
-    nutrients.push({ nutrient: "TOTAL_FAT", quantity: { grams: Math.round(record.totals.fatG * 10) / 10 } });
-  }
 
   return {
     nutritionLog: {
@@ -456,6 +447,7 @@ export function buildGoogleNutritionLogDataPoint(record: {
         endTime: end.toISOString(),
       },
       foodDisplayName: record.name.slice(0, 160),
+      serving: { amount: 1 },
       mealType: mapCategoryToGoogleMealType(record.category),
       ...(record.totals.calories != null ? { energy: { kcal: Math.round(record.totals.calories) } } : {}),
       ...(record.totals.carbsG != null ? { totalCarbohydrate: { grams: Math.round(record.totals.carbsG * 10) / 10 } } : {}),
@@ -493,115 +485,17 @@ export async function pushWeightToGoogle(
 }
 
 export async function pushMealToGoogle(db: AuthDatabase, userId: string, record: MealRecord) {
-  if (!googleConfigured()) return { pushed: false, reason: "not-configured" };
-  try {
-    const { grant } = await getFreshGrant(db, userId);
-    if (!grant.scopes.includes(nutritionWriteScope)) {
-      return { pushed: false, reason: "missing-write-scope" };
-    }
-    const [existing] = await db
-      .select({ googleDatapointName: meal.googleDatapointName })
-      .from(meal)
-      .where(and(eq(meal.userId, userId), eq(meal.id, record.id)));
-
-    if (existing?.googleDatapointName) {
-      await fetch(`${googleAPI}/dataTypes/nutrition-log/dataPoints:batchDelete`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${grant.accessToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ names: [existing.googleDatapointName] }),
-        signal: AbortSignal.timeout(8000),
-      }).catch(() => null);
-    }
-
-    const suffix = Date.now().toString(36);
-    const pointId = `mcpl-${record.id.slice(0, 24)}-${suffix}`.toLowerCase().replace(/[^a-z0-9-]/g, "");
-    const res = await fetch(`${googleAPI}/dataTypes/nutrition-log/dataPoints?dataPointId=${encodeURIComponent(pointId)}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${grant.accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(buildGoogleNutritionLogDataPoint(record)),
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return { pushed: false, reason: `http-${res.status}` };
-    const created = (await res.json().catch(() => null)) as { name?: string } | null;
-    const remoteName = created?.name ?? `users/me/dataTypes/nutrition-log/dataPoints/${pointId}`;
-    await db
-      .update(meal)
-      .set({ googleDatapointName: remoteName })
-      .where(and(eq(meal.userId, userId), eq(meal.id, record.id)));
-    return { pushed: true, name: remoteName };
-  } catch {
-    return { pushed: false, reason: "request-failed" };
-  }
+  const { queueGoogleMeal } = await import("./google-sync-queue");
+  return { queued: await queueGoogleMeal(db, userId, record.id, "upsert", true) };
 }
-
 export async function pushPendingToGoogle(db: AuthDatabase, userId: string, from: string, to: string) {
   historyInput.parse({ from, to });
   const { grant } = await getFreshGrant(db, userId);
-  const canMeals = grant.scopes.includes(nutritionWriteScope);
-  const canWeights = grant.scopes.includes(measurementsWriteScope);
-  if (!canMeals && !canWeights) {
-    throw new NutritionError("Reconnect Google Health to grant write permissions for meals and weights.", 403);
-  }
-
-  const prefs = await nutritionData(db, userId).settings();
-  let mealsPushed = 0;
-  let weightsPushed = 0;
-
-  if (canMeals) {
-    const history = await nutritionData(db, userId).history(from, to);
-    const unpushedIds = new Set(
-      (
-        await db
-          .select({ id: meal.id })
-          .from(meal)
-          .where(
-            and(
-              eq(meal.userId, userId),
-              gte(meal.localDay, from),
-              lte(meal.localDay, to),
-              isNull(meal.googleDatapointName),
-            ),
-          )
-      ).map((r) => r.id),
-    );
-    for (const dayEntry of history.days) {
-      if (dayEntry.mealCount === 0) continue;
-      const dayView = await nutritionData(db, userId).daily(dayEntry.day);
-      for (const m of dayView.meals) {
-        if (!unpushedIds.has(m.id)) continue;
-        const r = await pushMealToGoogle(db, userId, m);
-        if (r.pushed) mealsPushed += 1;
-      }
-    }
-  }
-
-  if (canWeights) {
-    const weights = await db
-      .select({ date: measurement.date, value: measurement.value, note: measurement.note })
-      .from(measurement)
-      .where(
-        and(
-          eq(measurement.userId, userId),
-          eq(measurement.metric, "weight"),
-          eq(measurement.side, "none"),
-          gte(measurement.date, from),
-          lte(measurement.date, to),
-        ),
-      )
-      .orderBy(asc(measurement.date));
-    for (const row of weights) {
-      if (row.note.startsWith("Synced from Google Health")) continue;
-      const r = await pushWeightToGoogle(db, userId, {
-        weightKg: row.value,
-        day: row.date,
-        timezone: prefs.timezone,
-        note: row.note || "MCP Logger weight",
-      });
-      if (r.pushed) weightsPushed += 1;
-    }
-  }
-
-  return { mealsPushed, weightsPushed };
+  if (!grant.scopes.includes(nutritionWriteScope)) throw new NutritionError("Reconnect Google Health and grant meal write permission.", 403);
+  const { queueGoogleMeal } = await import("./google-sync-queue");
+  const rows = await db.select({ id: meal.id }).from(meal).where(and(eq(meal.userId, userId), gte(meal.localDay, from), lte(meal.localDay, to)));
+  for (const row of rows) await queueGoogleMeal(db, userId, row.id, "upsert", true);
+  return { mealsQueued: rows.length, mealsPushed: 0, weightsPushed: 0 };
 }
 
 function normalizeDateString(raw: string): string | null {
@@ -777,7 +671,7 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
         const start = new Date(nut.interval.startTime);
         if (!Number.isNaN(start.getTime())) {
           const day = localDay(start, timezone);
-          const time = `${String(start.getUTCHours()).padStart(2, "0")}:${String(start.getUTCMinutes()).padStart(2, "0")}`;
+          const time = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(start);
           const catRaw = (nut.mealType ?? "").toLowerCase();
           const category: MealCategory = catRaw.includes("breakfast")
             ? "breakfast"
@@ -917,6 +811,8 @@ export async function disconnectGoogle(db: AuthDatabase, userId: string) {
       .where(own(userId))
       .returning({ credential: healthIntegration.credential });
     await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
+    await tx.delete(googleMealSync).where(eq(googleMealSync.userId, userId));
+    await tx.update(meal).set({ googleDatapointName: null }).where(eq(meal.userId, userId));
     return removed;
   });
 

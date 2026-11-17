@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { boolean, date, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique } from "drizzle-orm/pg-core";
 
 export const user = pgTable("user", {
@@ -90,6 +91,7 @@ export const calorieTarget = pgTable("calorie_target", {
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   effectiveFrom: date("effective_from").notNull(),
   calories: integer().notNull(),
+  proteinG: doublePrecision("protein_g"), carbsG: doublePrecision("carbs_g"), fatG: doublePrecision("fat_g"), fibreG: doublePrecision("fibre_g"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   unique("calorie_target_user_date_unique").on(t.userId, t.effectiveFrom),
@@ -121,6 +123,10 @@ export const savedFood = pgTable("saved_food", {
   ingredients: text().notNull().default(""),
   cookingMethod: text("cooking_method").notNull().default(""),
   itemsJson: jsonb("items_json"),
+  isFavourite: boolean("is_favourite").notNull().default(false),
+  foodType: text("food_type").notNull().default("food"),
+  portionsJson: jsonb("portions_json").notNull().default([]), defaultPortionId: text("default_portion_id"),
+  sourceName: text("source_name").notNull().default("Custom"), sourceId: text("source_id"), sourceUrl: text("source_url"),
   useCount: integer("use_count").notNull().default(0),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -162,6 +168,9 @@ export const mealItem = pgTable("meal_item", {
   calMax: doublePrecision("cal_max"),
   estimationMethod: text("estimation_method").notNull().default("photo_estimate"),
   savedFoodId: text("saved_food_id").references(() => savedFood.id, { onDelete: "set null" }),
+  portionLabel: text("portion_label"), portionId: text("portion_id"),
+  gramWeight: doublePrecision("gram_weight"), millilitreVolume: doublePrecision("millilitre_volume"),
+  foodSnapshot: jsonb("food_snapshot"),
 }, (t) => [
   index("meal_item_meal_idx").on(t.mealId, t.sortOrder),
   index("meal_item_user_idx").on(t.userId),
@@ -185,6 +194,7 @@ export const dailyEnergy = pgTable("daily_energy", {
 export const healthIntegration = pgTable("health_integration", {
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   provider: text().notNull(),
+  connectionId: text("connection_id").notNull().default(sql`gen_random_uuid()::text`),
   credential: text().notNull(),
   status: text().notNull().default("connected"),
   lastSync: timestamp("last_sync", { withTimezone: true }),
@@ -207,3 +217,31 @@ export const idempotencyRecord = pgTable("idempotency_record", {
 }, (t) => [primaryKey({ columns: [t.userId, t.key] })]);
 
 export * from "./mcp-schema";
+
+export const foodProviderCache = pgTable("food_provider_cache", {
+  key: text().primaryKey(), payload: jsonb().notNull(), expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+export const foodProviderRate = pgTable("food_provider_rate", {
+  key: text().primaryKey(), windowStart: timestamp("window_start", { withTimezone: true }).notNull(), attempts: integer().notNull().default(0),
+});
+export const googleMealSync = pgTable("google_meal_sync", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }), mealId: text("meal_id").notNull(),
+  connectionId: text("connection_id").notNull(), manual: boolean().notNull().default(false), action: text().notNull(), payload: jsonb(), version: text().notNull(),
+  targetName: text("target_name"), remoteName: text("remote_name"), cleanupNames: jsonb("cleanup_names").notNull().default([]), pendingNames: jsonb("pending_names").notNull().default([]),
+  state: text().notNull().default("pending"), attempts: integer().notNull().default(0), nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  leasedUntil: timestamp("leased_until", { withTimezone: true }), lastError: text("last_error"), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.userId, t.mealId] })]);
+export const reminderPreference = pgTable("reminder_preference", {
+ userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }), enabled: boolean().notNull().default(false),
+ times: jsonb().notNull().default(["18:30"]), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const pushSubscription = pgTable("push_subscription", {
+ id: text().primaryKey(), userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }), endpointHash: text("endpoint_hash").notNull().unique(),
+ credential: text().notNull(), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const reminderDelivery = pgTable("reminder_delivery", {
+ userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }), day: date().notNull(), time: text().notNull(),
+ subscriptionId: text("subscription_id").notNull().references(() => pushSubscription.id, { onDelete: "cascade" }),
+ state: text().notNull().default("pending"), attempts: integer().notNull().default(0), nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+ leasedUntil: timestamp("leased_until", { withTimezone: true }),
+}, (t) => [primaryKey({ columns: [t.userId, t.day, t.time, t.subscriptionId] })]);

@@ -1,10 +1,14 @@
 "use client";
 
+import { foodEmoji } from "../lib/food-emoji";
+
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Plus, Search, Trash2, X } from "lucide-react";
+import { Plus, Search, Star, Trash2, X } from "lucide-react";
 import { portionBasis, scalePortion, type PortionBasis } from "../lib/food-portion";
 import { localTime } from "../lib/nutrition-model";
-import { useFoodSuggestions, type FoodChoice } from "./food-suggestions";
+import { CustomFoodForm } from "./custom-food-form";
+import { calculateFoodPortion, foodToSavedInput, UNIT_LABELS, type FoodDefinition } from "../lib/food-catalogue-model";
+import { useFoodSuggestions, definitionChoice, type FoodChoice } from "./food-suggestions";
 import type { MealRecord } from "../lib/nutrition-data";
 import {
   CATEGORIES,
@@ -32,6 +36,8 @@ interface DraftItem {
   estimationMethod: EstimationMethod;
   savedFoodId: string | null;
   basis?: PortionBasis;
+  foodSnapshot?: FoodDefinition | null; portionId?: string | null; portionLabel?: string | null;
+  gramWeight?: number | null; millilitreVolume?: number | null;
 }
 
 const emptyItem = (): DraftItem => ({
@@ -113,12 +119,20 @@ export function MealComposer({
           calMax: toStr(it.calMax),
           estimationMethod: it.estimationMethod,
           savedFoodId: it.savedFoodId,
+          foodSnapshot: it.foodSnapshot, portionId: it.portionId, portionLabel: it.portionLabel,
+          gramWeight: it.gramWeight, millilitreVolume: it.millilitreVolume,
         }))
       : [emptyItem()],
   );
 
   const [query, setQuery] = useState("");
-  const { suggestions, library, searching, failed } = useFoodSuggestions(query);
+  const { suggestions: allSuggestions, library, searching, productSearching, providerMessage, failed, refresh } = useFoodSuggestions(query);
+  const [filter, setFilter] = useState<"all" | "favourites" | "mine" | "drinks">("all");
+  const suggestions = allSuggestions.filter((choice) => filter === "all" || filter === "favourites" && choice.isFavourite || filter === "mine" && choice.savedFoodId || filter === "drinks" && choice.food?.foodType === "drink");
+  const [creatingFood, setCreatingFood] = useState(false);
+  const [editingCustom, setEditingCustom] = useState<FoodLibrary["saved"][number] | undefined>();
+  const [selectedFood, setSelectedFood] = useState<FoodChoice | null>(null);
+  const [foodBusy, setFoodBusy] = useState(false);
   const [activeFoodKey, setActiveFoodKey] = useState<string | null>(null);
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const [submitting, setSubmitting] = useState(false);
@@ -128,6 +142,7 @@ export function MealComposer({
   const sheet = useRef<HTMLDivElement>(null);
   const working = busy || submitting;
   const [barcode, setBarcode] = useState("");
+  const [barcodeDefinition, setBarcodeDefinition] = useState<FoodDefinition | null>(null);
   const [barcodeProduct, setBarcodeProduct] = useState<BarcodeProduct | null>(null);
   const [barcodeGrams, setBarcodeGrams] = useState("100");
   const [lookupBusy, setLookupBusy] = useState(false);
@@ -173,12 +188,16 @@ export function MealComposer({
   }, []);
 
   function chooseFood(choice: FoodChoice) {
+    if (choice.food?.foodType === "drink" && !editingMeal && items.every((item) => !item.name.trim())) setCategory("drinks");
+    setSelectedFood(choice);
     const incoming: DraftItem[] = choice.items.map((item) => {
       const draft: DraftItem = { key: crypto.randomUUID(), name: item.name,
         amount: item.amount == null ? "" : String(item.amount), unit: item.unit,
         calories: toStr(item.calories), proteinG: toStr(item.proteinG), carbsG: toStr(item.carbsG),
         fatG: toStr(item.fatG), fibreG: toStr(item.fibreG), calMin: toStr(item.calMin), calMax: toStr(item.calMax),
-        estimationMethod: item.estimationMethod, savedFoodId: item.savedFoodId ?? null };
+        estimationMethod: item.estimationMethod, savedFoodId: item.savedFoodId ?? null,
+        foodSnapshot: item.foodSnapshot ?? null, portionId: item.portionId, portionLabel: item.portionLabel,
+        gramWeight: item.gramWeight, millilitreVolume: item.millilitreVolume };
       return { ...draft, basis: portionBasis(draft) };
     });
     if (activeFoodKey) {
@@ -191,6 +210,39 @@ export function MealComposer({
     setActiveFoodKey(null); setQuery(""); setActiveSuggestion(-1);
     (document.activeElement as HTMLElement | null)?.blur();
     // Do not focus a field here: choosing a food must not open the phone keyboard.
+  }
+
+  function changeFoodPortion(item: DraftItem, id: string, amount: string): DraftItem {
+    if (!item.foodSnapshot || !amount.trim() || Number(amount) <= 0 || !Number.isFinite(Number(amount))) return { ...item, amount };
+    const calculated = calculateFoodPortion(item.foodSnapshot, id, Number(amount));
+    return { ...item, amount, unit: calculated.unit, portionId: id, portionLabel: calculated.portionLabel,
+      gramWeight: calculated.gramWeight, millilitreVolume: calculated.millilitreVolume,
+      calories: toStr(calculated.calories), proteinG: toStr(calculated.proteinG), carbsG: toStr(calculated.carbsG),
+      fatG: toStr(calculated.fatG), fibreG: toStr(calculated.fibreG), estimationMethod: calculated.estimationMethod };
+  }
+  async function toggleFavourite(choice: FoodChoice) {
+    if (foodBusy) return; setFoodBusy(true); setError("");
+    try {
+      const payload = choice.savedFoodId ? { action: "favourite", id: choice.savedFoodId, isFavourite: !choice.isFavourite } :
+        choice.food ? { action: "save", food: foodToSavedInput(choice.food, true) } : null;
+      if (!payload) return;
+      const response = await fetch("/api/foods", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const result = await response.json(); if (!response.ok) throw new Error(result.message ?? "Could not save favourite.");
+      setSelectedFood({ ...choice, savedFoodId: result.food.id, isFavourite: result.food.isFavourite });
+      setItems((old) => old.map((item) => item.foodSnapshot?.id === choice.food?.id ? { ...item, savedFoodId: result.food.id } : item));
+      refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not update favourite."); }
+    finally { setFoodBusy(false); }
+  }
+  async function deleteCustomFood(id: string) {
+    if (!window.confirm("Delete this saved food? Previously logged meals are kept.")) return;
+    setFoodBusy(true);
+    try {
+      const response = await fetch("/api/foods", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "delete", id }) });
+      if (!response.ok) throw new Error("Could not delete food.");
+      setSelectedFood(null); refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not delete food."); }
+    finally { setFoodBusy(false); }
   }
 
   function suggestionKeys(event: KeyboardEvent<HTMLInputElement>, choices: FoodChoice[]) {
@@ -209,7 +261,7 @@ export function MealComposer({
       {choices.map((choice, index) => <button type="button" role="option" aria-selected={activeSuggestion === index}
         id={`${id}-${index}`} key={choice.key} className="food-suggestion" disabled={working}
         onClick={() => chooseFood(choice)}>
-        <span><strong>{choice.name}</strong><small>{choice.source} · {choice.detail}</small></span>
+        <span><strong>{choice.isFavourite && <Star size={14} aria-label="Favourite" />} <span aria-hidden="true">{foodEmoji(choice.name, choice.food?.foodType === "drink" ? "drinks" : undefined)}</span> {choice.name}</strong><small>{choice.source} · {choice.detail}</small></span>
         <span className="food-suggestion-energy">{choice.items.every((item) => item.calories != null)
           ? `${Math.round(choice.items.reduce((sum, item) => sum + (item.calories ?? 0), 0))} kcal` : "kcal —"}<Plus size={16} aria-hidden="true" /></span>
       </button>)}
@@ -305,10 +357,12 @@ export function MealComposer({
     setBarcodeProduct(null);
     setLookupBusy(true);
     try {
-      const res = await fetch(`/api/nutrition/barcode?code=${encodeURIComponent(barcode.trim())}`);
+      const res = await fetch(`/api/foods?barcode=${encodeURIComponent(barcode.trim())}`);
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Barcode lookup failed.");
-      setBarcodeProduct(payload.product);
+      const food: FoodDefinition = payload.food; setBarcodeDefinition(food);
+      setBarcodeProduct({ barcode: barcode.trim(), name: food.name, brand: food.brand, servingSizeLabel: food.portions.find((p) => p.id === "label-serving")?.label ?? null,
+        basisAmount: food.basisAmount, basisUnit: food.basisUnit as "g" | "ml", calories: food.calories ?? null, proteinG: food.proteinG ?? null, carbsG: food.carbsG ?? null, fatG: food.fatG ?? null, fibreG: food.fibreG ?? null, source: "Open Food Facts" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Barcode lookup failed.");
     } finally {
@@ -318,6 +372,11 @@ export function MealComposer({
 
   function addBarcodeProduct() {
     if (!barcodeProduct) return;
+    if (barcodeDefinition) {
+      const quantity = toNum(barcodeGrams) ?? 100;
+      chooseFood({ ...definitionChoice(barcodeDefinition), items: [calculateFoodPortion(barcodeDefinition, barcodeDefinition.basisUnit, quantity)] });
+      setBarcodeProduct(null); return;
+    }
     const amt = toNum(barcodeGrams) ?? 100;
     const ratio = amt / barcodeProduct.basisAmount;
     addDraftItems(
@@ -390,6 +449,8 @@ export function MealComposer({
         calMax: toNum(i.calMax),
         estimationMethod: i.estimationMethod,
         savedFoodId: i.savedFoodId,
+        foodSnapshot: i.foodSnapshot ?? null, portionId: i.portionId, portionLabel: i.portionLabel,
+        gramWeight: i.gramWeight, millilitreVolume: i.millilitreVolume,
       }));
 
     if (!validItems.length) {
@@ -456,6 +517,8 @@ export function MealComposer({
         </div>
 
         {error && <p role="alert" className="form-error">{error}</p>}
+        {creatingFood ? <CustomFoodForm editing={editingCustom} onCancel={() => { setCreatingFood(false); setEditingCustom(undefined); }}
+          onDone={(name) => { setCreatingFood(false); setEditingCustom(undefined); refresh(); setQuery(name); setFilter("mine"); setSourceTab("recent"); }} /> : <>
         {(sourceTab === "recent" || sourceTab === "recipes") && (
           <label>
             {sourceTab === "recent" ? "Find a food" : "Find a saved recipe"}
@@ -463,13 +526,18 @@ export function MealComposer({
               aria-controls="food-search-results" aria-activedescendant={activeSuggestion >= 0 ? `food-search-results-${activeSuggestion}` : undefined}
               value={query} onChange={(e) => { setQuery(e.target.value); setActiveSuggestion(-1); }}
               onKeyDown={(event) => suggestionKeys(event, suggestions)} autoComplete="off" autoCorrect="off" spellCheck={false}
-              placeholder="Try eggs, oats, dhal…" enterKeyHint="search" />
+              placeholder="Food or brand, e.g. eggs, Huel, Alpro…" enterKeyHint="search" />
           </label>
         )}
         {sourceTab === "recent" && <section className="food-search-panel" aria-label="Find food">
-          <p className="search-hint">{query ? "Suggestions from your foods and UK staples" : "Your recent foods, saved recipes and everyday staples"}</p>
+          <div className="segments" role="group" aria-label="Food filters">{([ ["all", "All"], ["favourites", "Favourites"], ["mine", "My foods"], ["drinks", "Drinks"] ] as const).map(([key, label]) =>
+            <button type="button" key={key} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</button>)}</div>
+          <p className="search-hint">Your foods, {library?.catalogueCount?.toLocaleString("en-GB") ?? "2,887"} UK reference foods and branded products</p>
           {suggestionList(suggestions, "food-search-results")}
-          <p className="search-hint" role="status">{failed ? "Saved foods are unavailable. UK staples still work. Try searching again." : searching ? "Checking your saved foods…" : `${suggestions.length} suggestions`}</p>
+          <p className="search-hint" role="status">{failed ? "Your food library is unavailable. Please try again." : searching ? "Searching your foods and the UK catalogue…" : productSearching ? "Searching branded products…" : `${suggestions.length} suggestions`}</p>
+          {providerMessage && <p className="search-hint">{providerMessage}</p>}
+          {query.trim().length >= 3 && <p className="search-hint">Branded data from <a href="https://world.openfoodfacts.org" target="_blank" rel="noreferrer">Open Food Facts</a>. Check against your packet label.</p>}
+          <button type="button" className="secondary" onClick={() => { setEditingCustom(undefined); setCreatingFood(true); }}>Create custom food or drink</button>
           {suggestions.length === 0 && <p>No matches yet. You can enter the food and its nutrition below.</p>}
           <button type="button" className="secondary" disabled={working} onClick={() => {
             if (query.trim()) {
@@ -592,6 +660,14 @@ export function MealComposer({
 
         {sourceTab === "manual" && (
           <div style={{ display: "grid", gap: ".8rem" }}>
+            {selectedFood && <div className="selected-food-tools">
+              <span>{selectedFood.name}</span>
+              {(selectedFood.food || selectedFood.savedFoodId) && <button type="button" className="secondary compact" disabled={foodBusy} onClick={() => void toggleFavourite(selectedFood)}><Star size={16} fill={selectedFood.isFavourite ? "currentColor" : "none"} />{selectedFood.isFavourite ? "Remove favourite" : "Favourite food"}</button>}
+              {selectedFood.savedFoodId && <>
+                <button type="button" className="secondary compact" onClick={() => { setEditingCustom(library?.saved.find((food) => food.id === selectedFood.savedFoodId)); setCreatingFood(true); }}>Edit saved food</button>
+                <button type="button" className="danger compact" disabled={foodBusy} onClick={() => void deleteCustomFood(selectedFood.savedFoodId!)}>Delete saved food</button>
+              </>}
+            </div>}
             <div className="input-grid">
               <label>
                 Meal name
@@ -648,7 +724,7 @@ export function MealComposer({
                         aria-activedescendant={activeFoodKey === item.key && activeSuggestion >= 0 ? `food-options-${item.key}-${activeSuggestion}` : undefined}
                         onFocus={() => { setActiveFoodKey(item.key); setQuery(item.name); setActiveSuggestion(-1); }}
                         onChange={(e) => {
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, name: e.target.value } : x)));
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, name: e.target.value, foodSnapshot: null, portionId: null } : x)));
                           setActiveFoodKey(item.key); setQuery(e.target.value); setActiveSuggestion(-1);
                         }}
                         onKeyDown={(event) => suggestionKeys(event, suggestions.filter((choice) => choice.items.length === 1))}
@@ -667,24 +743,17 @@ export function MealComposer({
                           inputMode="decimal"
                           value={item.amount}
                           onChange={(e) =>
-                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, basis: x.basis ?? portionBasis(x), amount: e.target.value, ...scalePortion(x.basis ?? portionBasis(x), e.target.value) } : x)))
+                            setItems((p) => p.map((x) => (x.key === item.key ? (x.foodSnapshot && x.portionId ? changeFoodPortion(x, x.portionId, e.target.value) : { ...x, basis: x.basis ?? portionBasis(x), amount: e.target.value, ...scalePortion(x.basis ?? portionBasis(x), e.target.value) }) : x)))
                           }
                           placeholder="g / ml"
                         />
-                        <select
-                          style={{ width: "6.2rem" }}
-                          aria-label="Portion unit"
-                          value={item.unit}
-                          onChange={(e) =>
-                            setItems((p) =>
-                              p.map((x) => (x.key === item.key ? { ...x, unit: e.target.value as FoodUnit } : x)),
-                            )
-                          }
-                        >
-                          {UNITS.map((u) => (
-                            <option key={u} value={u}>{u}</option>
-                          ))}
-                        </select>
+                        {item.foodSnapshot ? <select aria-label="Portion measure" value={item.portionId ?? item.foodSnapshot.defaultPortionId}
+                          onChange={(event) => { const id = event.target.value; setItems((old) => old.map((row) => row.key !== item.key ? row : changeFoodPortion(row, id, String(row.foodSnapshot!.portions.find((p) => p.id === id)!.defaultAmount)))); }}>
+                          {item.foodSnapshot.portions.map((measure) => <option key={measure.id} value={measure.id}>{measure.label}</option>)}
+                        </select> : <select aria-label="Portion unit" value={item.unit} onChange={(event) => setItems((old) => old.map((row) => row.key === item.key ? { ...row, unit: event.target.value as FoodUnit, gramWeight: null, millilitreVolume: null } : row))}>
+                          {UNITS.map((unit) => <option key={unit} value={unit}>{UNIT_LABELS[unit]}</option>)}
+                        </select>}
+
                       </div>
                     </label>
                     <label>
@@ -706,6 +775,7 @@ export function MealComposer({
                     </label>
                   </div>
 
+                  {item.foodSnapshot && <p className="search-hint">{item.gramWeight != null ? `${Number(item.gramWeight.toFixed(1))} g` : ""}{item.millilitreVolume != null ? ` · ${Number(item.millilitreVolume.toFixed(1))} ml` : ""} · {item.estimationMethod === "standard_portion" ? "Estimated portion" : "Nutrition scaled from label/reference"}. You can edit the values.</p>}
                   <div className="input-grid">
                     <label>
                       Calories <small>(blank = unknown)</small>
@@ -713,7 +783,7 @@ export function MealComposer({
                         inputMode="decimal"
                         value={item.calories}
                         onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, calories: e.target.value, basis: portionBasis({ ...x, calories: e.target.value }) } : x)))
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, foodSnapshot: null, portionId: null, calories: e.target.value, basis: portionBasis({ ...x, calories: e.target.value }) } : x)))
                         }
                       />
                     </label>
@@ -723,7 +793,7 @@ export function MealComposer({
                         inputMode="decimal"
                         value={item.proteinG}
                         onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, proteinG: e.target.value, basis: portionBasis({ ...x, proteinG: e.target.value }) } : x)))
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, foodSnapshot: null, portionId: null, proteinG: e.target.value, basis: portionBasis({ ...x, proteinG: e.target.value }) } : x)))
                         }
                       />
                     </label>
@@ -733,7 +803,7 @@ export function MealComposer({
                         inputMode="decimal"
                         value={item.fibreG}
                         onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, fibreG: e.target.value, basis: portionBasis({ ...x, fibreG: e.target.value }) } : x)))
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, foodSnapshot: null, portionId: null, fibreG: e.target.value, basis: portionBasis({ ...x, fibreG: e.target.value }) } : x)))
                         }
                       />
                     </label>
@@ -743,7 +813,7 @@ export function MealComposer({
                         inputMode="decimal"
                         value={item.carbsG}
                         onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, carbsG: e.target.value, basis: portionBasis({ ...x, carbsG: e.target.value }) } : x)))
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, foodSnapshot: null, portionId: null, carbsG: e.target.value, basis: portionBasis({ ...x, carbsG: e.target.value }) } : x)))
                         }
                       />
                     </label>
@@ -753,7 +823,7 @@ export function MealComposer({
                         inputMode="decimal"
                         value={item.fatG}
                         onChange={(e) =>
-                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, fatG: e.target.value, basis: portionBasis({ ...x, fatG: e.target.value }) } : x)))
+                          setItems((p) => p.map((x) => (x.key === item.key ? { ...x, foodSnapshot: null, portionId: null, fatG: e.target.value, basis: portionBasis({ ...x, fatG: e.target.value }) } : x)))
                         }
                       />
                     </label>
@@ -765,7 +835,7 @@ export function MealComposer({
                           placeholder="Min"
                           value={item.calMin}
                           onChange={(e) =>
-                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, calMin: e.target.value, basis: portionBasis({ ...x, calMin: e.target.value }) } : x)))
+                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, foodSnapshot: null, portionId: null, calMin: e.target.value, basis: portionBasis({ ...x, calMin: e.target.value }) } : x)))
                           }
                         />
                         <input
@@ -773,7 +843,7 @@ export function MealComposer({
                           placeholder="Max"
                           value={item.calMax}
                           onChange={(e) =>
-                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, calMax: e.target.value, basis: portionBasis({ ...x, calMax: e.target.value }) } : x)))
+                            setItems((p) => p.map((x) => (x.key === item.key ? { ...x, foodSnapshot: null, portionId: null, calMax: e.target.value, basis: portionBasis({ ...x, calMax: e.target.value }) } : x)))
                           }
                         />
                       </div>
@@ -812,6 +882,7 @@ export function MealComposer({
             </div>
           </div>
         )}
+        </>}
       </div>
     </dialog>
   );

@@ -31,6 +31,10 @@ before(async () => {
     "004-nutrition-health.sql",
     "005-mcp-oauth.sql",
     "006-google-two-way.sql",
+    "007-food-catalogue.sql",
+    "008-google-meal-sync.sql",
+    "009-macro-targets.sql",
+    "010-push-reminders.sql",
   ]) {
     await pg.exec(await readFile(`migrations/${migration}`, "utf8"));
   }
@@ -111,7 +115,9 @@ test("MCP server enforces read vs write scopes and executes meal + energy tools 
   await Promise.all([rwServer.connect(rwServerT), rwClient.connect(rwClientT)]);
 
   const rwTools = (await rwClient.listTools()).tools.map((t) => t.name);
-  assert.equal(rwTools.length, 10);
+  assert.equal(rwTools.length, 13);
+  assert.equal(rwTools.includes("set_nutrition_targets"), false);
+  assert.equal(rwTools.includes("set_logging_reminders"), false);
 
   const logged = await rwClient.callTool({
     name: "log_meal",
@@ -178,8 +184,6 @@ test("Google Health v4 outbound weight & nutrition payloads follow API schema", 
   assert.deepEqual(nut.nutritionLog.nutrients?.map((n) => n.nutrient), [
     "PROTEIN",
     "DIETARY_FIBER",
-    "TOTAL_CARBOHYDRATE",
-    "TOTAL_FAT",
   ]);
 });
 

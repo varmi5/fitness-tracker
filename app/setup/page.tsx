@@ -14,7 +14,7 @@ export default async function SetupPage() {
 
   return (
     <main className="auth-card">
-      <h1>{ready && config.mode !== "closed" ? "Create your MCP Logger account" : "MCP Logger setup"}</h1>
+      <h1>{ready && config.mode !== "closed" ? "Create your FitnessTrackr account" : "FitnessTrackr setup"}</h1>
       {ready && config.mode !== "closed" ? (
         <OpenSignup siteKey={process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY!} invite={config.mode === "invite"} />
       ) : status === "available" ? <SetupForm /> : (

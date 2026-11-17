@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     const response = await fetch(
       `https://world.openfoodfacts.org/api/v2/product/${parsed.data}.json?fields=product_name,generic_name,brands,quantity,serving_size,nutriments`,
       {
-        headers: { "User-Agent": "MCPLogger/1.0 (personal-nutrition-app)" },
+        headers: { "User-Agent": "FitnessTrackr/1.0 (personal-nutrition-app)" },
         signal: AbortSignal.timeout(6000),
       },
     );

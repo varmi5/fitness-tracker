@@ -22,7 +22,7 @@ export async function sendEmail(to: string, subject: string, text: string) {
     body: JSON.stringify({ from: process.env.EMAIL_FROM, to, subject, text }),
     signal: AbortSignal.timeout(8000),
   });
-  if (!response.ok) throw new Error("MCP Logger could not send an email.");
+  if (!response.ok) throw new Error("FitnessTrackr could not send an email.");
 }
 
 export async function verifyTurnstile(token: string, origin: string) {

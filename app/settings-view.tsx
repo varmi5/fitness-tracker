@@ -1,5 +1,7 @@
 "use client";
 
+import { ReminderSettings } from "./reminder-settings";
+import { MacroTargetEditor } from "./macro-target-editor";
 import { useState, type ChangeEvent, type FormEvent } from "react";
 import { ArrowDownToLine, Copy, Fingerprint, RefreshCw, Upload } from "lucide-react";
 import { MoonThemeIcon, SunThemeIcon, TwoWaySyncIcon } from "../components/icons";
@@ -238,24 +240,7 @@ export function SettingsView({
       {/* Nutrition Targets & Timezone */}
       <section className="card">
         <h2>Calorie Targets &amp; Timezone</h2>
-        <form onSubmit={submitTarget} style={{ marginTop: ".75rem" }}>
-          <div className="input-grid">
-            <label>
-              Daily calorie target (kcal)
-              <input inputMode="numeric" value={targetCalories} onChange={(e) => setTargetCalories(e.target.value)} required />
-            </label>
-            <label>
-              Effective from date
-              <input
-                type="date"
-                value={effectiveFrom}
-                onChange={(e) => e.target.value && setEffectiveFrom(e.target.value)}
-                required
-              />
-            </label>
-          </div>
-          <Button disabled={busy} type="submit">Save calorie target</Button>
-        </form>
+        <MacroTargetEditor initial={settings.macroTargets} today={today} busy={busy} onSave={onNutritionAction} />
 
         {settings.targets.length > 0 && (
           <div style={{ marginTop: ".75rem" }}>
@@ -337,6 +322,7 @@ export function SettingsView({
                   {google.canWriteNutrition ? "Write Meals" : "Write Meals needs reconnect"}
                 </span>
               </div>
+              {google.mealSync && <p>Meal write-back: {google.mealSync.pending} queued · {google.mealSync.failed} need attention{google.mealSync.lastError ? ` · ${google.mealSync.lastError}` : ""}</p>}
               {google.lastError && <div style={{ color: "var(--danger-fg)" }}>Last error: {google.lastError}</div>}
             </div>
           )}
@@ -344,7 +330,7 @@ export function SettingsView({
           <div className="button-row">
             {google.available && (!google.connected || missingWriteScopes) && (
               <a
-                href="/api/integrations/google/connect"
+                href={missingWriteScopes || twoWaySync ? "/api/integrations/google/connect?write=1" : "/api/integrations/google/connect"}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -426,11 +412,13 @@ export function SettingsView({
         </details>
       </section>
 
+      <ReminderSettings />
+
       {/* Private MCP / ChatGPT Connector */}
       <section className="card">
         <div className="split-row">
           <div>
-            <h2>MCP Logger · ChatGPT Server</h2>
+            <h2>FitnessTrackr · ChatGPT Server</h2>
             <p style={{ fontSize: ".8rem" }}>OAuth 2.1 protected Streamable HTTP endpoint for photo meal logging.</p>
           </div>
           <span className={`pill ${mcpEnabled ? "accent-soft" : ""}`}>{mcpEnabled ? "Enabled" : "Disabled"}</span>
@@ -439,12 +427,12 @@ export function SettingsView({
         <div style={{ display: "grid", gap: ".65rem", marginTop: ".75rem" }}>
           <div className="mono-box">{mcpUrl}</div>
           <details>
-            <summary>Connect ChatGPT, then use it on your phone</summary>
+            <summary>Connect on ChatGPT web first, then use on your phone</summary>
             <ol className="connector-steps">
-              <li>On ChatGPT web or desktop, open Plugins, select +, then Add custom MCP server.</li>
-              <li>Name it MCP Logger and paste the URL above. Choose OAuth with automatic client registration, then create the plugin.</li>
-              <li>Sign in to MCP Logger and approve the read and meal logging permissions.</li>
-              <li>On the ChatGPT mobile app, use the same account and enable MCP Logger from the available plugins in a new chat.</li>
+              <li><a href="https://chatgpt.com/plugins" target="_blank" rel="noreferrer">Use this link to open ChatGPT on the web and add FitnessTrackr</a>. Select +, then Add custom MCP server.</li>
+              <li>Use the connection URL here: <code>{mcpUrl}</code>. Choose OAuth with automatic client registration, then create the plugin.</li>
+              <li>Sign in to FitnessTrackr and approve the read and meal logging permissions.</li>
+              <li>After connecting on the web, open the ChatGPT phone app with the same account. Enable FitnessTrackr in a new chat.</li>
               <li>Upload a meal photo and ask “Estimate this meal, then log it.” Check that the reply includes a saved meal ID.</li>
             </ol>
             <p className="search-hint">Custom MCP setup is done on the web. Plugin availability on mobile depends on your account and workspace. If this endpoint is disabled, it must be enabled before connecting.</p>
