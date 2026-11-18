@@ -114,3 +114,16 @@ Public connection guide: https://fitness.hadamardsecurities.com/connect
 Publisher: Varmisan S. Support: varmisan.work@gmail.com. Personal UK hosting; free service.
 The downloadable package can be imported where supported. The account plugin remains private;
 public directory approval requires the separate submission workflow and is not completed by hosting a ZIP.
+
+
+## Repeated sign-in after token expiry
+
+The resource policy must allow `offline_access` as well as fitness scopes, or Better Auth
+can issue the initial refresh token but drop renewable access on its first rotation.
+Resource seed mode `merge` updates existing deployments as well as new databases.
+A 30-second refresh-token reuse window tolerates immediate retries without disabling rotation.
+The OAuth smoke test starts from the old persisted policy, refreshes twice, retries each
+rotation, and uses the resulting token for authenticated MCP calls.
+
+Users with previously issued broken refresh grants should reconnect their existing ChatGPT
+connection once and approve offline access. No reinstall or new account plugin is needed.

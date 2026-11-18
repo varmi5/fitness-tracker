@@ -27,7 +27,11 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
       loginPage: "/oauth/login",
       consentPage: "/oauth/consent",
       scopes: [...scopes, "offline_access"],
-      resources: [{ identifier: resource, allowedScopes: scopes }],
+      // Preserve offline access through resource-scoped refresh-token rotation.
+      resources: [{ identifier: resource, allowedScopes: [...scopes, "offline_access"] }],
+      resourceSeedMode: "merge",
+      // Parallel host requests may retry the same rotated token briefly.
+      refreshTokenReuseInterval: 30,
       allowDynamicClientRegistration: true,
       allowUnauthenticatedClientRegistration: true,
       clientRegistrationDefaultResources: [resource],

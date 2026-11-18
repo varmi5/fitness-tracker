@@ -159,6 +159,8 @@ try {
   console.log("Public signup, bot challenge rejection and replay protection, and verified member sign-in passed with simulated providers.");
   await stopApp();
 
+  // Simulate the old production resource policy; startup must merge the fixed scopes.
+  await db.query(`INSERT INTO "oauthResource" (id, name, identifier, "allowedScopes") VALUES ('old-resource', 'Legacy MCP', $1, $2)`, [`${origin}/mcp`, ["fitness:read", "fitness:write"]]);
   app = spawn(process.execPath, [".next/standalone/server.js"], {
     stdio: ["ignore", "inherit", "inherit"],
     env: { ...env, FITNESS_MCP_ENABLED: "true" },
@@ -210,6 +212,27 @@ try {
   assert.ok(tokenResponse.ok, "OAuth token exchange must succeed");
   const grant = await tokenResponse.json();
   assert.ok(grant.access_token);
+  assert.ok(grant.refresh_token, "Offline access must issue a refresh token");
+  for (let refresh = 0; refresh < 2; refresh++) {
+    const previousRefreshToken = grant.refresh_token;
+    const renewed = await fetch(url(new URL(asJson.token_endpoint).pathname), {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: grant.refresh_token,
+        client_id: client.client_id, resource: `${origin}/mcp` }),
+    });
+    assert.ok(renewed.ok, `Refresh ${refresh + 1} must succeed (${renewed.status})`);
+    const result = await renewed.json();
+    assert.ok(result.refresh_token, `Refresh ${refresh + 1} must retain offline access for the next refresh`);
+    const retry = await fetch(url(new URL(asJson.token_endpoint).pathname), {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: previousRefreshToken,
+        client_id: client.client_id, resource: `${origin}/mcp` }),
+    });
+    assert.ok(retry.ok, "Immediate refresh retry must not invalidate the connection");
+    assert.equal((await retry.json()).refresh_token, result.refresh_token);
+    Object.assign(grant, result);
+  }
+
   const mcpCall = async (method, params) => {
     const response = await post("/mcp", { jsonrpc: "2.0", id: 1, method, params }, {
       Authorization: `Bearer ${grant.access_token}`, Accept: "application/json, text/event-stream",

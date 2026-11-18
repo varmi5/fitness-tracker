@@ -26,6 +26,7 @@ export default async function Consent({ searchParams }: { searchParams: Promise<
     <ul>
       {requested.includes("fitness:read") && <li>Read your food diary, energy expenditure, and body measurements.</li>}
       {requested.includes("fitness:write") && <li>Log, edit, and delete meals.</li>}
+      {query.scope.split(" ").includes("offline_access") && <li>Stay connected using renewable access, until you revoke it or it expires.</li>}
       {requested.includes("fitness:settings:write") && <li>Change your nutrition targets and reminder schedules when you ask.</li>}
     </ul>
     <p>Data read by the connected app is shared with that app. You can revoke access anytime in FitnessTrackr settings.</p>
