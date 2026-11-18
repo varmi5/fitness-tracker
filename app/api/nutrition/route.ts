@@ -52,6 +52,9 @@ export async function GET(request: Request) {
   const query = new URL(request.url).searchParams;
 
   try {
+    if (query.get("sync") === "1") {
+      return json({ token: await data.syncToken() });
+    }
     if (query.get("export") === "json") {
       return json({
         body: await trackerData(db, user.id).snapshot(),
@@ -73,7 +76,8 @@ export async function GET(request: Request) {
       googleStatus(db, user.id),
       data.recentAudit(15),
     ]);
-    return json({ settings, google, audit, mcpEnabled: getAuthConfig().mcpEnabled });
+    const homeState = await data.homeState({ canReadSleep: google.canReadSleep, timezone: settings.timezone });
+    return json({ settings, google, audit, homeState, mcpEnabled: getAuthConfig().mcpEnabled });
   } catch (error) {
     return handleError(error);
   }

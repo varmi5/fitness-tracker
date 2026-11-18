@@ -114,7 +114,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
 
   register(
     "log_meal",
-    "Save a meal with one or more food items and return the saved meal ID, items, meal totals, and updated daily totals/allowance. Reuse the same idempotencyKey on retries.",
+    "Save a meal with one or more food items and return the saved meal ID, items, meal totals, and updated daily totals/allowance. When day, time, and consumedAt are omitted, this logs at the exact current local date and time; pass explicit day/time/consumedAt whenever the user specifies a different time (e.g. yesterday or before sleep). Reuse the same idempotencyKey on retries.",
     logMealInput,
     (input) => data.log(input),
     { write: true, summarize: (input) => `${input.category}: ${input.name}` },
@@ -122,7 +122,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
 
   register(
     "get_daily_log",
-    "Retrieve all meals, items, nutritional totals, target, remaining allowance, and energy balance for a local calendar date (YYYY-MM-DD).",
+    "Retrieve all meals, items, nutritional totals (including fibre), Nutrition Quality Score, target, remaining allowance, sleep (when synced), and energy balance for a local calendar date (YYYY-MM-DD).",
     z.object({ day: z.iso.date() }),
     ({ day }) => data.daily(day),
     { summarize: ({ day }) => day },

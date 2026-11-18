@@ -152,7 +152,10 @@ try {
   assert.equal(link.pathname, "/api/auth/verify-email");
   const verified = await fetch(url(link.pathname + link.search), { redirect: "manual" });
   assert.equal(verified.status, 302);
-  assert.equal((await post("/api/auth/sign-in/email", { email: member.email, password })).status, 200);
+  const memberSignIn = await post("/api/auth/sign-in/email", { email: member.email, password });
+  assert.equal(memberSignIn.status, 200);
+  const memberCookie = memberSignIn.headers.getSetCookie().map((header) => header.split(";")[0]).join("; ");
+  assert.ok(memberCookie);
   console.log("Public signup, bot challenge rejection and replay protection, and verified member sign-in passed with simulated providers.");
   await stopApp();
 
@@ -222,7 +225,30 @@ try {
   const dailyLog = await mcpCall("tools/call", { name: "get_daily_log", arguments: { day: "2026-11-17" } });
   assert.equal(dailyLog.isError, false);
   assert.equal(JSON.parse(dailyLog.content[0].text).totals.calories, 257);
-  console.log("OAuth registration, PKCE, consent, token exchange and authenticated HTTP MCP tools passed.");
+
+  // User-scoped /api/nutrition?sync=1 token must reflect owner's MCP writes without affecting other users
+  assert.equal((await fetch(url("/api/nutrition?sync=1"))).status, 401);
+  const ownerSyncBefore = await (await fetch(url("/api/nutrition?sync=1"), { headers: { Cookie: cookie } })).json();
+  const memberSyncBefore = await (await fetch(url("/api/nutrition?sync=1"), { headers: { Cookie: memberCookie } })).json();
+  assert.ok(ownerSyncBefore.token && memberSyncBefore.token);
+  assert.notEqual(ownerSyncBefore.token, memberSyncBefore.token);
+  const mcpLogged = await mcpCall("tools/call", {
+    name: "log_meal",
+    arguments: {
+      day: "2026-11-17",
+      time: "19:10",
+      name: "ChatGPT dinner bowl",
+      category: "dinner",
+      idempotencyKey: "smoke-mcp-sync-1",
+      items: [{ name: "Chicken", amount: 150, unit: "g", calories: 250, proteinG: 45, carbsG: 0, fatG: 6, estimationMethod: "weighed" }],
+    },
+  });
+  assert.equal(mcpLogged.isError, false);
+  const ownerSyncAfter = await (await fetch(url("/api/nutrition?sync=1"), { headers: { Cookie: cookie } })).json();
+  const memberSyncAfter = await (await fetch(url("/api/nutrition?sync=1"), { headers: { Cookie: memberCookie } })).json();
+  assert.notEqual(ownerSyncAfter.token, ownerSyncBefore.token);
+  assert.equal(memberSyncAfter.token, memberSyncBefore.token);
+  console.log("OAuth registration, PKCE, consent, token exchange, authenticated HTTP MCP tools, and user-scoped sync token passed.");
 } finally {
   await stopApp();
   await database.stop();

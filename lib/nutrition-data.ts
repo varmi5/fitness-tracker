@@ -13,8 +13,10 @@ import {
   localTime,
   logMealInput,
   preferencesInput,
+  resolveActiveHomeDay,
   resolveLocalDateTime,
   resolveTargetForDay,
+  sleepInput,
   summarizeItems,
   targetInput,
   templateInput,
@@ -24,16 +26,24 @@ import {
   type FoodUnit,
   type MealCategory,
   type NutrientSummary,
+  type SleepRecord,
 } from "./nutrition-model";
+import {
+  scoreDayNutrition,
+  scoreMealNutrition,
+  type DailyNutritionScore,
+  type MealQualityScore,
+} from "./nutrition-score";
 import {
   calorieTarget,
   dailyEnergy,
+  dailySleep,
   healthIntegration,
   idempotencyRecord,
-  mcpAudit,
   meal,
   mealItem,
   measurement,
+  mcpAudit,
   nutritionDayStatus,
   nutritionPreference,
   profile,
@@ -89,6 +99,7 @@ export interface MealRecord {
   notes: string;
   items: MealItemRecord[];
   totals: NutrientSummary;
+  qualityScore: MealQualityScore;
 }
 
 export interface EnergyRecord {
@@ -111,9 +122,11 @@ export interface DailyNutritionView {
   diaryComplete: boolean;
   meals: MealRecord[];
   totals: NutrientSummary;
+  nutritionScore: DailyNutritionScore;
   preferredEnergySource: EnergySource;
   energy: EnergyRecord | null;
   energySources: Partial<Record<EnergySource, EnergyRecord>>;
+  sleep: SleepRecord | null;
   deficit: number | null;
   provisional: boolean;
 }
@@ -131,6 +144,23 @@ function mapEnergyRow(row: typeof dailyEnergy.$inferSelect): EnergyRecord {
     steps: row.steps,
     weightKg: row.weightKg,
     complete: row.complete,
+    syncedAt: row.syncedAt.toISOString(),
+  };
+}
+
+function mapSleepRow(row: typeof dailySleep.$inferSelect): SleepRecord {
+  return {
+    day: row.day,
+    source: row.source as EnergySource,
+    sessionId: row.sessionId,
+    sleepStart: row.sleepStart?.toISOString() ?? null,
+    sleepEnd: row.sleepEnd?.toISOString() ?? null,
+    minutesAsleep: row.minutesAsleep,
+    minutesAwake: row.minutesAwake,
+    deepMinutes: row.deepMinutes,
+    remMinutes: row.remMinutes,
+    lightMinutes: row.lightMinutes,
+    stages: Array.isArray(row.stagesJson) ? (row.stagesJson as SleepRecord["stages"]) : [],
     syncedAt: row.syncedAt.toISOString(),
   };
 }
@@ -189,6 +219,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       timezone: pref?.timezone ?? DEFAULT_TIMEZONE,
       preferredEnergySource: (pref?.preferredEnergySource ?? "google") as EnergySource,
       googleTwoWaySync: pref?.googleTwoWaySync ?? false,
+      sleepRolloverEnabled: pref?.sleepRolloverEnabled ?? true,
       targets: targets.map((t) => ({ id: t.id, effectiveFrom: t.effectiveFrom, calories: t.calories, proteinG: t.proteinG, carbsG: t.carbsG, fatG: t.fatG, fibreG: t.fibreG })),
       hasGoogleConnected: integrations.some((i) => i.provider === "google"),
     };
@@ -238,7 +269,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     }
     return mealRows.map((m) => {
       const items = (grouped.get(m.id) ?? []).sort((a, b) => a.sortOrder - b.sortOrder);
-      return {
+      const totals = summarizeItems(items);
+      const base = {
         id: m.id,
         localDay: m.localDay,
         consumedAt: m.consumedAt.toISOString(),
@@ -249,14 +281,25 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         ingredients: m.ingredients,
         notes: m.notes,
         items,
-        totals: summarizeItems(items),
+        totals,
+      };
+      return {
+        ...base,
+        qualityScore: scoreMealNutrition(base),
       };
     });
   }
 
+  function pickSleep(
+    bySource: Partial<Record<EnergySource, SleepRecord>>,
+    preferred: EnergySource,
+  ): SleepRecord | null {
+    return bySource[preferred] ?? bySource.google ?? bySource.manual ?? null;
+  }
+
   async function daily(day: string): Promise<DailyNutritionView> {
     const prefs = await getPrefs();
-    const [mealRows, statusRows, energyRows] = await Promise.all([
+    const [mealRows, statusRows, energyRows, sleepRows] = await Promise.all([
       db.select().from(meal)
         .where(and(eq(meal.userId, userId), eq(meal.localDay, day)))
         .orderBy(asc(meal.consumedAt), asc(meal.createdAt)),
@@ -264,6 +307,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         .where(and(eq(nutritionDayStatus.userId, userId), eq(nutritionDayStatus.day, day))),
       db.select().from(dailyEnergy)
         .where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.day, day))),
+      db.select().from(dailySleep)
+        .where(and(eq(dailySleep.userId, userId), eq(dailySleep.day, day))),
     ]);
 
     const itemRows = mealRows.length
@@ -276,6 +321,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const allItems = meals.flatMap((m) => m.items);
     const totals = summarizeItems(allItems);
     const target = resolveTargetForDay(prefs.targets, day);
+    const macroTargets = resolveMacroTargets(prefs.targets, day);
     const remaining = totals.calories == null ? target : round1(target - totals.calories);
     const diaryComplete = statusRows[0]?.complete ?? false;
 
@@ -284,22 +330,31 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       energySources[row.source as EnergySource] = mapEnergyRow(row);
     }
     const energy = pickEnergy(energySources, prefs.preferredEnergySource, prefs.hasGoogleConnected);
+    const sleepSources: Partial<Record<EnergySource, SleepRecord>> = {};
+    for (const row of sleepRows) {
+      sleepSources[row.source as EnergySource] = mapSleepRow(row);
+    }
+    const sleep = pickSleep(sleepSources, prefs.preferredEnergySource);
+
     const totalBurn = energy?.totalKcal ?? null;
     const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
     const provisional = !diaryComplete || totalBurn == null || totals.calories == null;
+    const nutritionScore = scoreDayNutrition(meals, totals, target, macroTargets);
 
     return {
       day,
       timezone: prefs.timezone,
       target,
-      macroTargets: resolveMacroTargets(prefs.targets, day),
+      macroTargets,
       remaining,
       diaryComplete,
       meals,
       totals,
+      nutritionScore,
       preferredEnergySource: prefs.preferredEnergySource,
       energy,
       energySources,
+      sleep,
       deficit,
       provisional,
     };
@@ -308,7 +363,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
   async function history(from: string, to: string) {
     historyInput.parse({ from, to });
     const prefs = await getPrefs();
-    const [mealRows, itemRows, statusRows, energyRows] = await Promise.all([
+    const [mealRows, itemRows, statusRows, energyRows, sleepRows] = await Promise.all([
       db.select().from(meal)
         .where(and(eq(meal.userId, userId), gte(meal.localDay, from), lte(meal.localDay, to)))
         .orderBy(asc(meal.localDay), asc(meal.consumedAt), asc(meal.createdAt)),
@@ -321,6 +376,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         .where(and(eq(nutritionDayStatus.userId, userId), gte(nutritionDayStatus.day, from), lte(nutritionDayStatus.day, to))),
       db.select().from(dailyEnergy)
         .where(and(eq(dailyEnergy.userId, userId), gte(dailyEnergy.day, from), lte(dailyEnergy.day, to))),
+      db.select().from(dailySleep)
+        .where(and(eq(dailySleep.userId, userId), gte(dailySleep.day, from), lte(dailySleep.day, to))),
     ]);
 
     const meals = await assembleMeals(mealRows, itemRows.map((r) => r.item), prefs.timezone);
@@ -341,28 +398,40 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       energyByDay.set(e.day, entry);
     }
 
+    const sleepByDay = new Map<string, Partial<Record<EnergySource, SleepRecord>>>();
+    for (const s of sleepRows) {
+      const entry = sleepByDay.get(s.day) ?? {};
+      entry[s.source as EnergySource] = mapSleepRow(s);
+      sleepByDay.set(s.day, entry);
+    }
+
     const calendarDays = dayRange(from, to);
     const days = calendarDays.map((day) => {
       const dayMeals = mealsByDay.get(day) ?? [];
       const totals = summarizeItems(dayMeals.flatMap((m) => m.items));
       const target = resolveTargetForDay(prefs.targets, day);
+      const macroTargets = resolveMacroTargets(prefs.targets, day);
       const remaining = totals.calories == null ? target : round1(target - totals.calories);
       const diaryComplete = statusByDay.get(day) ?? false;
       const sources = energyByDay.get(day) ?? {};
       const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected);
+      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.preferredEnergySource);
       const totalBurn = energy?.totalKcal ?? null;
       const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
       const provisional = !diaryComplete || totalBurn == null || totals.calories == null;
+      const nutritionScore = scoreDayNutrition(dayMeals, totals, target, macroTargets);
 
       return {
         day,
         mealCount: dayMeals.length,
         totals,
+        nutritionScore,
         target,
-        macroTargets: resolveMacroTargets(prefs.targets, day),
+        macroTargets,
         remaining,
         diaryComplete,
         energy,
+        sleep,
         deficit,
         provisional,
       };
@@ -414,6 +483,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         carbsG: avg(completeNutritionDays.map((d) => d.totals.carbsG)),
         fatG: avg(completeNutritionDays.map((d) => d.totals.fatG)),
         fibreG: avg(completeNutritionDays.map((d) => d.totals.fibreG)),
+        nutritionScore: avg(completeNutritionDays.map((d) => d.nutritionScore.score)),
         expenditureKcal: avg(comparable.map((d) => d.energy?.totalKcal ?? null)),
         deficitKcal: avg(comparable.map((d) => d.deficit)),
         steps: avg(days.map((d) => d.energy?.steps ?? null)),
@@ -691,6 +761,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       timezone: prefs.timezone,
       preferredEnergySource: prefs.preferredEnergySource,
       googleTwoWaySync: prefs.googleTwoWaySync,
+      sleepRolloverEnabled: prefs.sleepRolloverEnabled,
       targetToday: resolveTargetForDay(prefs.targets, today),
       macroTargets: resolveMacroTargets(prefs.targets, today),
       targets: prefs.targets,
@@ -715,17 +786,21 @@ export function nutritionData(db: AuthDatabase, userId: string) {
 
   async function setPreferences(rawInput: z.input<typeof preferencesInput>) {
     const input = preferencesInput.parse(rawInput);
+    const existing = await getPrefs();
+    const sleepRolloverEnabled = input.sleepRolloverEnabled ?? existing.sleepRolloverEnabled;
     await db.insert(nutritionPreference).values({
       userId,
       timezone: input.timezone,
       preferredEnergySource: input.preferredEnergySource,
       googleTwoWaySync: input.googleTwoWaySync,
+      sleepRolloverEnabled,
     }).onConflictDoUpdate({
       target: nutritionPreference.userId,
       set: {
         timezone: input.timezone,
         preferredEnergySource: input.preferredEnergySource,
         googleTwoWaySync: input.googleTwoWaySync,
+        sleepRolloverEnabled,
       },
     });
     return settings();
@@ -932,24 +1007,30 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       db.select().from(mealItem).where(eq(mealItem.userId, userId)).orderBy(asc(mealItem.sortOrder)),
       db.select().from(savedFood).where(eq(savedFood.userId, userId)),
     ]);
-    const energy = await db.select().from(dailyEnergy).where(eq(dailyEnergy.userId, userId)).orderBy(desc(dailyEnergy.day));
+    const [energy, sleepRows] = await Promise.all([
+      db.select().from(dailyEnergy).where(eq(dailyEnergy.userId, userId)).orderBy(desc(dailyEnergy.day)),
+      db.select().from(dailySleep).where(eq(dailySleep.userId, userId)).orderBy(desc(dailySleep.day)),
+    ]);
     return {
-      preferences: prefs[0] ?? { timezone: DEFAULT_TIMEZONE, preferredEnergySource: "google", googleTwoWaySync: false },
+      preferences: prefs[0] ?? { timezone: DEFAULT_TIMEZONE, preferredEnergySource: "google", googleTwoWaySync: false, sleepRolloverEnabled: true },
       targets,
       dayStatuses: statuses,
       meals: await assembleMeals(meals, items, prefs[0]?.timezone ?? DEFAULT_TIMEZONE),
       savedFoods: saved,
       dailyEnergy: energy.map(mapEnergyRow),
+      dailySleep: sleepRows.map(mapSleepRow),
     };
   }
 
   async function importHealthRecords(payload: {
     energyEntries?: z.input<typeof energyInput>[];
+    sleepEntries?: z.input<typeof sleepInput>[];
     heightCm?: number | null;
     meals?: z.input<typeof logMealInput>[];
   }) {
     const prefs = await getPrefs();
     let energyImported = 0;
+    let sleepImported = 0;
     let weightsSynced = 0;
     let mealsImported = 0;
     let heightUpdated = false;
@@ -995,6 +1076,40 @@ export function nutritionData(db: AuthDatabase, userId: string) {
           weightsSynced += 1;
         }
       }
+
+      for (const rawSleep of payload.sleepEntries ?? []) {
+        const entry = sleepInput.parse(rawSleep);
+        await tx.insert(dailySleep).values({
+          userId,
+          day: entry.day,
+          source: entry.source,
+          sessionId: entry.sessionId ?? null,
+          sleepStart: entry.sleepStart ? new Date(entry.sleepStart) : null,
+          sleepEnd: entry.sleepEnd ? new Date(entry.sleepEnd) : null,
+          minutesAsleep: entry.minutesAsleep,
+          minutesAwake: entry.minutesAwake ?? null,
+          deepMinutes: entry.deepMinutes ?? null,
+          remMinutes: entry.remMinutes ?? null,
+          lightMinutes: entry.lightMinutes ?? null,
+          stagesJson: entry.stagesJson,
+          syncedAt: new Date(),
+        }).onConflictDoUpdate({
+          target: [dailySleep.userId, dailySleep.source, dailySleep.day],
+          set: {
+            sessionId: entry.sessionId ?? null,
+            sleepStart: entry.sleepStart ? new Date(entry.sleepStart) : null,
+            sleepEnd: entry.sleepEnd ? new Date(entry.sleepEnd) : null,
+            minutesAsleep: entry.minutesAsleep,
+            minutesAwake: entry.minutesAwake ?? null,
+            deepMinutes: entry.deepMinutes ?? null,
+            remMinutes: entry.remMinutes ?? null,
+            lightMinutes: entry.lightMinutes ?? null,
+            stagesJson: entry.stagesJson,
+            syncedAt: new Date(),
+          },
+        });
+        sleepImported += 1;
+      }
     });
 
     for (const rawMeal of payload.meals ?? []) {
@@ -1008,23 +1123,26 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     return {
       timezone: prefs.timezone,
       energyImported,
+      sleepImported,
       weightsSynced,
       mealsImported,
       heightUpdated,
     };
   }
 
-  async function homeSnapshot(today: string) {
+  async function homeSnapshot(calendarToday: string, options: { canReadSleep?: boolean } = {}) {
     const prefs = await getPrefs();
-    const from = addDays(today, -29);
-    const [mealRows, statusRows, energyRows] = await Promise.all([
+    const from = addDays(calendarToday, -29);
+    const [mealRows, statusRows, energyRows, sleepRows] = await Promise.all([
       db.select().from(meal)
-        .where(and(eq(meal.userId, userId), gte(meal.localDay, from), lte(meal.localDay, today)))
+        .where(and(eq(meal.userId, userId), gte(meal.localDay, from), lte(meal.localDay, calendarToday)))
         .orderBy(asc(meal.localDay), asc(meal.consumedAt), asc(meal.createdAt)),
       db.select().from(nutritionDayStatus)
-        .where(and(eq(nutritionDayStatus.userId, userId), gte(nutritionDayStatus.day, from), lte(nutritionDayStatus.day, today))),
+        .where(and(eq(nutritionDayStatus.userId, userId), gte(nutritionDayStatus.day, from), lte(nutritionDayStatus.day, calendarToday))),
       db.select().from(dailyEnergy)
-        .where(and(eq(dailyEnergy.userId, userId), gte(dailyEnergy.day, from), lte(dailyEnergy.day, today))),
+        .where(and(eq(dailyEnergy.userId, userId), gte(dailyEnergy.day, from), lte(dailyEnergy.day, calendarToday))),
+      db.select().from(dailySleep)
+        .where(and(eq(dailySleep.userId, userId), gte(dailySleep.day, from), lte(dailySleep.day, calendarToday))),
     ]);
 
     const itemRows = mealRows.length
@@ -1051,28 +1169,51 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       energyByDay.set(e.day, entry);
     }
 
-    const calendarDays = dayRange(from, today);
+    const sleepByDay = new Map<string, Partial<Record<EnergySource, SleepRecord>>>();
+    const googleSleepDates = new Set<string>();
+    for (const s of sleepRows) {
+      const entry = sleepByDay.get(s.day) ?? {};
+      entry[s.source as EnergySource] = mapSleepRow(s);
+      sleepByDay.set(s.day, entry);
+      if (s.source === "google") googleSleepDates.add(s.day);
+    }
+
+    const hasFitbitSleep = Boolean(options.canReadSleep) || googleSleepDates.size > 0;
+    const { activeDay, waitingForSleep } = resolveActiveHomeDay({
+      calendarToday,
+      hasFitbitSleep,
+      sleepRolloverEnabled: prefs.sleepRolloverEnabled,
+      sleepDates: googleSleepDates,
+    });
+    const showSleep = hasFitbitSleep || sleepRows.length > 0;
+
+    const calendarDays = dayRange(from, calendarToday);
     const days = calendarDays.map((day) => {
       const dayMeals = mealsByDay.get(day) ?? [];
       const totals = summarizeItems(dayMeals.flatMap((m) => m.items));
       const target = resolveTargetForDay(prefs.targets, day);
+      const macroTargets = resolveMacroTargets(prefs.targets, day);
       const remaining = totals.calories == null ? target : round1(target - totals.calories);
       const diaryComplete = statusByDay.get(day) ?? false;
       const sources = energyByDay.get(day) ?? {};
       const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected);
+      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.preferredEnergySource);
       const totalBurn = energy?.totalKcal ?? null;
       const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
       const provisional = !diaryComplete || totalBurn == null || totals.calories == null;
+      const nutritionScore = scoreDayNutrition(dayMeals, totals, target, macroTargets);
 
       return {
         day,
         mealCount: dayMeals.length,
         totals,
+        nutritionScore,
         target,
-        macroTargets: resolveMacroTargets(prefs.targets, day),
+        macroTargets,
         remaining,
         diaryComplete,
         energy,
+        sleep,
         deficit,
         provisional,
       };
@@ -1103,40 +1244,47 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       };
     });
 
-    const todaySummary = days[days.length - 1]!;
-    const todayEnergySources = energyByDay.get(today) ?? {};
-    const dailyToday: DailyNutritionView = {
-      day: today,
+    const activeSummary = days.find((d) => d.day === activeDay) ?? days[days.length - 1]!;
+    const activeEnergySources = energyByDay.get(activeDay) ?? {};
+    const dailyActive: DailyNutritionView = {
+      day: activeDay,
       timezone: prefs.timezone,
-      target: todaySummary.target,
-      macroTargets: todaySummary.macroTargets,
-      remaining: todaySummary.remaining,
-      diaryComplete: todaySummary.diaryComplete,
-      meals: mealsByDay.get(today) ?? [],
-      totals: todaySummary.totals,
+      target: activeSummary.target,
+      macroTargets: activeSummary.macroTargets,
+      remaining: activeSummary.remaining,
+      diaryComplete: activeSummary.diaryComplete,
+      meals: mealsByDay.get(activeDay) ?? [],
+      totals: activeSummary.totals,
+      nutritionScore: activeSummary.nutritionScore,
       preferredEnergySource: prefs.preferredEnergySource,
-      energy: todaySummary.energy,
-      energySources: todayEnergySources,
-      deficit: todaySummary.deficit,
-      provisional: todaySummary.provisional,
+      energy: activeSummary.energy,
+      energySources: activeEnergySources,
+      sleep: activeSummary.sleep,
+      deficit: activeSummary.deficit,
+      provisional: activeSummary.provisional,
     };
 
     const settingsView = {
       timezone: prefs.timezone,
       preferredEnergySource: prefs.preferredEnergySource,
       googleTwoWaySync: prefs.googleTwoWaySync,
-      targetToday: todaySummary.target,
-      macroTargets: todaySummary.macroTargets,
+      sleepRolloverEnabled: prefs.sleepRolloverEnabled,
+      targetToday: resolveTargetForDay(prefs.targets, calendarToday),
+      macroTargets: resolveMacroTargets(prefs.targets, calendarToday),
       targets: prefs.targets,
       defaultTarget: DEFAULT_CALORIE_TARGET,
     };
 
     return {
+      calendarToday,
+      activeDay,
+      waitingForSleep,
+      showSleep,
       settings: settingsView,
-      daily: dailyToday,
+      daily: dailyActive,
       history30: {
         from,
-        to: today,
+        to: calendarToday,
         timezone: prefs.timezone,
         preferredEnergySource: prefs.preferredEnergySource,
         totalDays: days.length,
@@ -1150,6 +1298,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
           carbsG: avg(completeNutritionDays.map((d) => d.totals.carbsG)),
           fatG: avg(completeNutritionDays.map((d) => d.totals.fatG)),
           fibreG: avg(completeNutritionDays.map((d) => d.totals.fibreG)),
+          nutritionScore: avg(completeNutritionDays.map((d) => d.nutritionScore.score)),
           expenditureKcal: avg(comparable.map((d) => d.energy?.totalKcal ?? null)),
           deficitKcal: avg(comparable.map((d) => d.deficit)),
           steps: avg(days.map((d) => d.energy?.steps ?? null)),
@@ -1160,8 +1309,59 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     };
   }
 
+  async function homeState(options: { canReadSleep?: boolean; timezone?: string } = {}) {
+    const prefs = await getPrefs();
+    const tz = options.timezone ?? prefs.timezone;
+    const calendarToday = localDay(new Date(), tz);
+    const from = addDays(calendarToday, -29);
+    const sleepRows = await db
+      .select({ day: dailySleep.day, source: dailySleep.source })
+      .from(dailySleep)
+      .where(and(eq(dailySleep.userId, userId), gte(dailySleep.day, from), lte(dailySleep.day, calendarToday)));
+    const googleSleepDates = new Set(sleepRows.filter((s) => s.source === "google").map((s) => s.day));
+    const hasFitbitSleep = Boolean(options.canReadSleep) || googleSleepDates.size > 0;
+    const { activeDay, waitingForSleep } = resolveActiveHomeDay({
+      calendarToday,
+      hasFitbitSleep,
+      sleepRolloverEnabled: prefs.sleepRolloverEnabled,
+      sleepDates: googleSleepDates,
+    });
+    return {
+      calendarToday,
+      activeDay,
+      waitingForSleep,
+      showSleep: hasFitbitSleep || sleepRows.length > 0,
+    };
+  }
+
+  async function syncToken(): Promise<string> {
+    const res = await db.execute(sql`
+      SELECT json_build_object(
+        'meals', (SELECT json_build_object('n', count(*)::int, 'm', max(updated_at)::text) FROM meal WHERE user_id = ${userId}),
+        'items', (SELECT count(*)::int FROM meal_item WHERE user_id = ${userId}),
+        'statuses', (SELECT json_build_object('n', count(*)::int, 'c', coalesce(sum(case when complete then 1 else 0 end), 0)::int, 'm', max(updated_at)::text) FROM nutrition_day_status WHERE user_id = ${userId}),
+        'targets', (SELECT json_build_object('n', count(*)::int, 'cal', coalesce(sum(calories), 0)::text, 'pro', coalesce(sum(protein_g), 0)::text, 'fib', coalesce(sum(fibre_g), 0)::text, 'm', max(created_at)::text) FROM calorie_target WHERE user_id = ${userId}),
+        'prefs', (SELECT json_build_object('tz', timezone, 'src', preferred_energy_source, 'g', google_two_way_sync, 'sr', sleep_rollover_enabled) FROM nutrition_preference WHERE user_id = ${userId} LIMIT 1),
+        'energy', (SELECT json_build_object('n', count(*)::int, 'm', max(synced_at)::text) FROM daily_energy WHERE user_id = ${userId}),
+        'sleep', (SELECT json_build_object('n', count(*)::int, 'd', max(day)::text, 'm', max(synced_at)::text) FROM daily_sleep WHERE user_id = ${userId}),
+        'health', (SELECT json_build_object('s', status, 'a', account_label, 'm', last_sync::text, 'e', last_error) FROM health_integration WHERE user_id = ${userId} AND provider = 'google' LIMIT 1),
+        'audit', (SELECT json_build_object('n', count(*)::int, 'm', max(created_at)::text) FROM mcp_audit WHERE user_id = ${userId}),
+        'measurements', (SELECT json_build_object('n', count(*)::int, 's', coalesce(sum(value), 0)::text) FROM measurement WHERE user_id = ${userId}),
+        'reminders', (SELECT json_build_object('e', enabled, 't', times, 'm', updated_at::text) FROM reminder_preference WHERE user_id = ${userId} LIMIT 1)
+      ) AS state
+    `);
+    const rows = Array.isArray(res) ? res : ((res as { rows?: { state?: unknown }[] }).rows ?? []);
+    const state = rows[0]?.state ?? {};
+    return createHash("sha256")
+      .update(JSON.stringify({ userId, state }))
+      .digest("hex")
+      .slice(0, 24);
+  }
+
   return {
     homeSnapshot,
+    homeState,
+    syncToken,
     daily,
     history,
     log,

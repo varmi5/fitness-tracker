@@ -992,3 +992,95 @@ summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight:
 .selected-food-tools > span { flex: 1 1 100%; font-weight: 600; overflow-wrap: anywhere; }
 .food-suggestion strong > svg { display: inline; vertical-align: middle; }
 @media (max-width: 540px) { .modal-sheet .input-grid { grid-template-columns: 1fr; } }
+
+.home-date-nav {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+}
+.home-date-nav h1 {
+  margin: 0;
+  min-width: 0;
+}
+.home-step-btn {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  flex-shrink: 0;
+}
+.home-step-btn:disabled {
+  opacity: .38;
+  cursor: not-allowed;
+}
+
+@media (min-width: 640px) {
+  .energy-strip.energy-strip-compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.sleep-card,
+.score-card {
+  display: grid;
+  gap: .75rem;
+}
+.sleep-stages,
+.score-pillars {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .55rem;
+}
+@media (min-width: 640px) {
+  .sleep-stages,
+  .score-pillars {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.score-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 78px;
+  padding: .4rem .75rem;
+  border-radius: 16px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-soft);
+  text-align: center;
+}
+.score-badge strong {
+  font-size: 1.4rem;
+  line-height: 1.1;
+}
+.score-badge span {
+  font-size: .7rem;
+  color: var(--muted);
+  font-weight: 620;
+}
+
+.score-grade-A, .score-pill-A {
+  background: rgba(13, 148, 136, 0.14);
+  border-color: rgba(13, 148, 136, 0.42);
+  color: var(--teal);
+}
+.score-grade-B, .score-pill-B {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.score-grade-C, .score-pill-C {
+  background: rgba(224, 122, 0, 0.12);
+  border-color: rgba(224, 122, 0, 0.36);
+  color: var(--amber);
+}
+.score-grade-D, .score-pill-D,
+.score-grade-E, .score-pill-E {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-fg);
+}
+
+.contrib-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+}

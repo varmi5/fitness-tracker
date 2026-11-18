@@ -95,7 +95,36 @@ export function dayRange(from: string, to: string): string[] {
   return out;
 }
 
+export function resolveActiveHomeDay(input: {
+  calendarToday: string;
+  hasFitbitSleep: boolean;
+  sleepRolloverEnabled: boolean;
+  sleepDates: ReadonlySet<string>;
+}): { activeDay: string; waitingForSleep: boolean } {
+  if (!input.hasFitbitSleep || !input.sleepRolloverEnabled) {
+    return { activeDay: input.calendarToday, waitingForSleep: false };
+  }
+  if (input.sleepDates.has(input.calendarToday)) {
+    return { activeDay: input.calendarToday, waitingForSleep: false };
+  }
+  return { activeDay: addDays(input.calendarToday, -1), waitingForSleep: true };
+}
+
 const optionalNonNegative = z.number().finite().min(0).max(50000).nullable().optional();
+
+export const foodQualityMetaInput = z.object({
+  cofidGroup: z.string().max(16).optional(),
+  sugarsG: optionalNonNegative,
+  saturatedFatG: optionalNonNegative,
+  sodiumMg: optionalNonNegative,
+  nutriScoreGrade: z.enum(["a", "b", "c", "d", "e"]).nullable().optional(),
+  nutriScoreScore: z.number().finite().min(-30).max(55).nullable().optional(),
+  novaGroup: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).nullable().optional(),
+  categoriesTags: z.array(z.string().max(80)).max(24).optional(),
+  ingredientsText: z.string().max(500).optional(),
+}).optional();
+
+export type FoodQualityMeta = NonNullable<z.infer<typeof foodQualityMetaInput>>;
 
 export const foodMeasureInput = z.object({
   id: z.string().min(1).max(64), label: z.string().trim().min(1).max(100), unit: z.enum(UNITS),
@@ -109,6 +138,7 @@ export const foodSnapshotInput = z.object({
   basisAmount: z.number().positive().max(50000), basisUnit: z.enum(UNITS),
   calories: optionalNonNegative, proteinG: optionalNonNegative, carbsG: optionalNonNegative, fatG: optionalNonNegative, fibreG: optionalNonNegative,
   portions: z.array(foodMeasureInput).min(1).max(30), defaultPortionId: z.string().max(64),
+  qualityMeta: foodQualityMetaInput,
 });
 
 export const mealItemInput = z.object({
@@ -184,6 +214,40 @@ export const energyInput = z.object({
   complete: z.boolean().default(true),
 });
 
+export const sleepStageInput = z.object({
+  stage: z.enum(["AWAKE", "LIGHT", "DEEP", "REM"]),
+  minutes: z.number().int().min(0).max(1440),
+});
+
+export const sleepInput = z.object({
+  day: z.iso.date(),
+  source: z.enum(ENERGY_SOURCES).default("google"),
+  sessionId: z.string().max(160).nullable().optional(),
+  sleepStart: z.iso.datetime({ offset: true }).nullable().optional(),
+  sleepEnd: z.iso.datetime({ offset: true }).nullable().optional(),
+  minutesAsleep: z.number().int().min(0).max(1440),
+  minutesAwake: z.number().int().min(0).max(1440).nullable().optional(),
+  deepMinutes: z.number().int().min(0).max(1440).nullable().optional(),
+  remMinutes: z.number().int().min(0).max(1440).nullable().optional(),
+  lightMinutes: z.number().int().min(0).max(1440).nullable().optional(),
+  stagesJson: z.array(sleepStageInput).max(12).optional().default([]),
+});
+
+export interface SleepRecord {
+  day: string;
+  source: EnergySource;
+  sessionId: string | null;
+  sleepStart: string | null;
+  sleepEnd: string | null;
+  minutesAsleep: number;
+  minutesAwake: number | null;
+  deepMinutes: number | null;
+  remMinutes: number | null;
+  lightMinutes: number | null;
+  stages: { stage: "AWAKE" | "LIGHT" | "DEEP" | "REM"; minutes: number }[];
+  syncedAt: string;
+}
+
 export const targetInput = z.object({
   effectiveFrom: z.iso.date(),
   calories: z.number().int().min(500).max(15000),
@@ -193,6 +257,7 @@ export const preferencesInput = z.object({
   timezone: z.string().trim().min(1).max(80).refine(isValidTimezone, { message: "Invalid timezone." }),
   preferredEnergySource: z.enum(ENERGY_SOURCES),
   googleTwoWaySync: z.boolean().optional().default(false),
+  sleepRolloverEnabled: z.boolean().optional(),
 });
 
 export const templateInput = z.object({

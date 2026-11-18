@@ -7,7 +7,7 @@ import { foodSnapshotInput } from "./nutrition-model";
 import { standardMeasures, type FoodDefinition } from "./food-catalogue-model";
 
 const agent = "FitnessTrackr/1.1 (https://fitness.hadamardsecurities.com)";
-const fields = "code,product_name,product_name_en,generic_name,brands,quantity,serving_size,serving_quantity,serving_quantity_unit,nutriments,nutrition_data_per,categories_tags";
+const fields = "code,product_name,product_name_en,generic_name,brands,quantity,serving_size,serving_quantity,serving_quantity_unit,nutriments,nutrition_data_per,categories_tags,nutriscore_score,nutriscore_grade,nova_group,ingredients_text_en,ingredients_text";
 const inflight = new Map<string, Promise<FoodDefinition[]>>();
 export class FoodProviderError extends Error { constructor(message: string, public status = 502) { super(message); } }
 const value = (v: unknown) => { const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : NaN; return Number.isFinite(n) && n >= 0 && n <= 50000 ? n : null; };
@@ -52,9 +52,28 @@ export function parseBrandedFood(raw: unknown): FoodDefinition | null {
       if (size > 0 && size <= 50000) portions.push({ id: "pack", label: `Whole pack (${size} ${unit})`, unit: "pack", baseAmount: size, defaultAmount: 1, estimated: false });
     }
   }
+  const sodiumG = nutrient("sodium") ?? (nutrient("salt") == null ? null : nutrient("salt")! / 2.5);
+  const gradeRaw = typeof p.nutriscore_grade === "string" ? p.nutriscore_grade.toLowerCase() : "";
+  const nutriScoreGrade = ["a", "b", "c", "d", "e"].includes(gradeRaw) ? (gradeRaw as "a" | "b" | "c" | "d" | "e") : null;
+  const nutriRaw = typeof p.nutriscore_score === "number" ? p.nutriscore_score : typeof p.nutriscore_score === "string" && p.nutriscore_score.trim() ? Number(p.nutriscore_score) : NaN;
+  const nutriScoreScore = Number.isFinite(nutriRaw) && nutriRaw >= -30 && nutriRaw <= 55 ? Math.round(nutriRaw) : null;
+  const novaRaw = Number(p.nova_group ?? n["nova-group_100g"] ?? n["nova-group"]);
+  const novaGroup = novaRaw === 1 || novaRaw === 2 || novaRaw === 3 || novaRaw === 4 ? (novaRaw as 1 | 2 | 3 | 4) : null;
+  const categoriesTags = Array.isArray(p.categories_tags) ? p.categories_tags.filter((t): t is string => typeof t === "string").slice(0, 12).map((t) => t.slice(0, 80)) : undefined;
+  const ingRaw = [p.ingredients_text_en, p.ingredients_text].find((v) => typeof v === "string" && v.trim()) as string | undefined;
   return foodSnapshotInput.parse({ id: `off:${code}`, name: name.trim().slice(0, 160), brand, source: "Open Food Facts",
     sourceUrl: `https://world.openfoodfacts.org/product/${code}`, foodType: liquid ? "drink" : "food", basisAmount: 100, basisUnit: unit,
-    calories, proteinG: nutrient("proteins"), carbsG: nutrient("carbohydrates"), fatG: nutrient("fat"), fibreG: nutrient("fiber"), portions, defaultPortionId });
+    calories, proteinG: nutrient("proteins"), carbsG: nutrient("carbohydrates"), fatG: nutrient("fat"), fibreG: nutrient("fiber"), portions, defaultPortionId,
+    qualityMeta: {
+      sugarsG: nutrient("sugars"),
+      saturatedFatG: nutrient("saturated-fat"),
+      sodiumMg: sodiumG != null && sodiumG * 1000 <= 50000 ? Math.round(sodiumG * 1000) : null,
+      nutriScoreGrade,
+      nutriScoreScore,
+      novaGroup,
+      ...(categoriesTags?.length ? { categoriesTags } : {}),
+      ...(ingRaw ? { ingredientsText: ingRaw.trim().slice(0, 500) } : {}),
+    } });
 }
 
 async function quota(db: AuthDatabase, key: string, maximum: number) {

@@ -27,25 +27,31 @@ export default async function Home() {
   const nutrition = nutritionData(db, userId);
 
   const tracker = await trackerData(db, userId).snapshot();
-  const [google, audit] = await Promise.all([
+  const [google, audit, syncToken] = await Promise.all([
     googleStatus(db, userId),
     nutrition.recentAudit(15),
+    nutrition.syncToken(),
   ]);
 
   const prefToday = localDay(new Date(), (await nutrition.settings()).timezone);
-  const home = await nutrition.homeSnapshot(prefToday);
+  const home = await nutrition.homeSnapshot(prefToday, { canReadSleep: google.canReadSleep });
 
   return (
     <Dashboard
       initial={{
         tracker,
         settings: home.settings,
-        today: prefToday,
+        today: home.calendarToday,
+        calendarToday: home.calendarToday,
+        activeDay: home.activeDay,
+        waitingForSleep: home.waitingForSleep,
+        showSleep: home.showSleep,
         daily: home.daily,
         history30: home.history30,
         google,
         audit,
         mcpEnabled: Boolean(config.mcpEnabled),
+        syncToken,
       }}
     />
   );
