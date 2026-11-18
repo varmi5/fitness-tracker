@@ -22,6 +22,7 @@ const mutation = z.discriminatedUnion("action", [
   z.object({ action: z.literal("update"), data: z.unknown() }),
   z.object({ action: z.literal("duplicate"), id: z.uuid(), targetDay: z.iso.date().optional() }),
   z.object({ action: z.literal("delete"), id: z.uuid() }),
+  z.object({ action: z.literal("complete"), data: z.object({ day: z.iso.date(), completed: z.boolean().optional() }) }),
   z.object({ action: z.literal("target"), data: targetInput }),
   z.object({ action: z.literal("macro-targets"), data: macroTargetInput }),
   z.object({ action: z.literal("preferences"), data: preferencesInput }),
@@ -86,13 +87,24 @@ export async function POST(request: Request) {
   if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) {
     return json({ message: "A same-origin request is required." }, 403);
   }
+  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  if (contentLength > 2_500_000) {
+    return json({ message: "Request payload is too large." }, 413);
+  }
   const user = await getUser(request);
   if (!user) return json({ message: "Please sign in." }, 401);
   const db = getDatabase();
   const data = nutritionData(db, user.id);
 
   try {
-    const input = mutation.parse(await request.json().catch(() => null));
+    const rawBody = await request.text();
+    if (rawBody.length > 2_500_000) {
+      return json({ message: "Request payload is too large." }, 413);
+    }
+    const parsedJson = (() => {
+      try { return JSON.parse(rawBody); } catch { return null; }
+    })();
+    const input = mutation.parse(parsedJson);
     switch (input.action) {
       case "log": {
         const res = await data.log(logMealInput.parse(input.data));
@@ -108,6 +120,8 @@ export async function POST(request: Request) {
       }
       case "delete":
         return json(await data.remove(input.id, true));
+      case "complete":
+        return json(await data.daily(input.data.day));
       case "macro-targets":
         return json(await data.setNutritionTargets(input.data));
       case "target":

@@ -2003,7 +2003,7 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
     throw new NutritionError("No valid energy, sleep, recovery, workout, weight, height, or meal records found in that file.");
   }
 
-  return { energyEntries, sleepEntries, recoveryEntries, workoutEntries, heightCm, meals };
+  return { energyEntries, sleepEntries, recoveryEntries, workoutEntries, heightCm, meals: meals.slice(0, 500) };
 }
 
 export async function disconnectGoogle(db: AuthDatabase, userId: string) {

@@ -72,6 +72,7 @@ export function SettingsView({
     resolvedInitialMode === "fitbit" ? "google" : "manual",
   );
   const [twoWaySync, setTwoWaySync] = useState(Boolean(settings.googleTwoWaySync));
+  const [bulkMode, setBulkMode] = useState(Boolean(settings.bulkMode));
 
   useEffect(() => {
     const nextMode: TrackingMode =
@@ -80,12 +81,14 @@ export function SettingsView({
     setTrackingMode(nextMode);
     setPreferredSource(nextMode === "fitbit" ? "google" : "manual");
     setTwoWaySync(Boolean(settings.googleTwoWaySync));
+    setBulkMode(Boolean(settings.bulkMode));
     setTargetCalories(String(settings.targetToday));
   }, [
     settings.timezone,
     settings.trackingMode,
     settings.preferredEnergySource,
     settings.googleTwoWaySync,
+    settings.bulkMode,
     settings.targetToday,
   ]);
 
@@ -104,6 +107,25 @@ export function SettingsView({
   function selectMode(mode: TrackingMode) {
     setTrackingMode(mode);
     setPreferredSource(mode === "fitbit" ? "google" : "manual");
+  }
+
+  function selectBulkMode(nextBulk: boolean) {
+    setBulkMode(nextBulk);
+    const resolvedMode: TrackingMode = trackingMode === "fitbit" || preferredSource === "google" ? "fitbit" : "manual";
+    const resolvedSource: EnergySource = resolvedMode === "fitbit" ? "google" : "manual";
+    void onNutritionAction(
+      {
+        action: "preferences",
+        data: {
+          timezone: timezone.trim(),
+          trackingMode: resolvedMode,
+          preferredEnergySource: resolvedSource,
+          googleTwoWaySync: twoWaySync,
+          bulkMode: nextBulk,
+        },
+      },
+      nextBulk ? "Bulk mode enabled (green = at/over target, red = under)." : "Cut / Deficit mode enabled (green = under target, red = over).",
+    );
   }
 
   function submitTarget(e: FormEvent) {
@@ -128,6 +150,7 @@ export function SettingsView({
           trackingMode: resolvedMode,
           preferredEnergySource: resolvedSource,
           googleTwoWaySync: twoWaySync,
+          bulkMode,
         },
       },
       "Preferences updated.",
@@ -268,7 +291,37 @@ export function SettingsView({
 
       {/* Nutrition Targets */}
       <section className="card">
-        <h2>Calorie &amp; Macro Targets</h2>
+        <div className="split-row" style={{ marginBottom: ".55rem" }}>
+          <div>
+            <h2>Calorie &amp; Macro Targets</h2>
+            <p style={{ fontSize: ".8rem" }}>
+              {bulkMode
+                ? "Bulk mode: green when intake meets/exceeds target, red when under target."
+                : "Cut / Deficit mode: green when intake stays at/under target, red when over target."}
+            </p>
+          </div>
+          <span className={`pill ${bulkMode ? "accent-soft" : "teal-soft"}`}>
+            {bulkMode ? "Bulk mode" : "Cut / Deficit"}
+          </span>
+        </div>
+        <div className="segments" role="group" aria-label="Calorie goal mode" style={{ marginBottom: ".75rem" }}>
+          <button
+            type="button"
+            aria-pressed={!bulkMode}
+            disabled={busy}
+            onClick={() => selectBulkMode(false)}
+          >
+            Cut / Deficit (under = green)
+          </button>
+          <button
+            type="button"
+            aria-pressed={bulkMode}
+            disabled={busy}
+            onClick={() => selectBulkMode(true)}
+          >
+            Bulk mode (over = green)
+          </button>
+        </div>
         <MacroTargetEditor initial={settings.macroTargets} today={today} busy={busy} onSave={onNutritionAction} />
 
         {settings.targets.length > 0 && (

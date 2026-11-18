@@ -43,6 +43,7 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
     secret: config.secret,
     database: drizzleAdapter(db, { provider: "pg", schema }),
     emailAndPassword: { enabled: true, disableSignUp: !creatingOwner && !allowMemberSignup,
+      revokeSessionsOnPasswordReset: true,
       requireEmailVerification: config.mode !== "closed",
       sendResetPassword: config.sendEmail ? ({ user, url }) => config.sendEmail!(user.email, "Reset your FitnessTrackr password", url) : undefined },
     emailVerification: config.sendEmail ? {
@@ -58,6 +59,9 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
     advanced: {
       useSecureCookies: new URL(config.baseURL).protocol === "https:",
       defaultCookieAttributes: { sameSite: "lax", httpOnly: true },
+      ipAddress: {
+        ipAddressHeaders: ["cf-connecting-ip", "x-forwarded-for"],
+      },
     },
     disabledPaths: ["/token", ...(config.mode === "closed" ? ["/request-password-reset", "/reset-password", "/send-verification-email"] : [])],
     rateLimit: {

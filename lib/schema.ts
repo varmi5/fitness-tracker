@@ -86,6 +86,7 @@ export const nutritionPreference = pgTable("nutrition_preference", {
   preferredEnergySource: text("preferred_energy_source").notNull().default("google"),
   googleTwoWaySync: boolean("google_two_way_sync").notNull().default(false),
   sleepRolloverEnabled: boolean("sleep_rollover_enabled").notNull().default(true),
+  bulkMode: boolean("bulk_mode").notNull().default(false),
 });
 
 export const calorieTarget = pgTable("calorie_target", {
