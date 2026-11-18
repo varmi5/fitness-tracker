@@ -281,6 +281,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       preferredEnergySource,
       googleTwoWaySync: pref?.googleTwoWaySync ?? false,
       sleepRolloverEnabled: pref?.sleepRolloverEnabled ?? true,
+      bulkMode: pref?.bulkMode ?? false,
       targets: targets.map((t) => ({ id: t.id, effectiveFrom: t.effectiveFrom, calories: t.calories, proteinG: t.proteinG, carbsG: t.carbsG, fatG: t.fatG, fibreG: t.fibreG })),
       hasGoogleConnected: integrations.some((i) => i.provider === "google"),
     };
@@ -884,6 +885,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       preferredEnergySource: prefs.preferredEnergySource,
       googleTwoWaySync: prefs.googleTwoWaySync,
       sleepRolloverEnabled: prefs.sleepRolloverEnabled,
+      bulkMode: prefs.bulkMode,
       targetToday: resolveTargetForDay(prefs.targets, today),
       macroTargets: resolveMacroTargets(prefs.targets, today),
       targets: prefs.targets,
@@ -911,6 +913,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const existing = await getPrefs();
     const resolved = resolveTrackingPreferences(input, existing);
     const sleepRolloverEnabled = input.sleepRolloverEnabled ?? existing.sleepRolloverEnabled;
+    const bulkMode = input.bulkMode ?? existing.bulkMode;
     await db.insert(nutritionPreference).values({
       userId,
       timezone: input.timezone,
@@ -918,6 +921,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       preferredEnergySource: resolved.preferredEnergySource,
       googleTwoWaySync: input.googleTwoWaySync,
       sleepRolloverEnabled,
+      bulkMode,
     }).onConflictDoUpdate({
       target: nutritionPreference.userId,
       set: {
@@ -926,6 +930,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         preferredEnergySource: resolved.preferredEnergySource,
         googleTwoWaySync: input.googleTwoWaySync,
         sleepRolloverEnabled,
+        bulkMode,
       },
     });
     return settings();
@@ -1215,6 +1220,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
           ...rawPref,
           trackingMode: resolvedTracking.trackingMode,
           preferredEnergySource: resolvedTracking.preferredEnergySource,
+          bulkMode: Boolean(rawPref.bulkMode),
         }
       : {
           timezone: DEFAULT_TIMEZONE,
@@ -1222,6 +1228,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
           preferredEnergySource: "manual" as EnergySource,
           googleTwoWaySync: false,
           sleepRolloverEnabled: true,
+          bulkMode: false,
         };
     return {
       preferences: normalizedPreferences,
@@ -1578,6 +1585,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       preferredEnergySource: prefs.preferredEnergySource,
       googleTwoWaySync: prefs.googleTwoWaySync,
       sleepRolloverEnabled: prefs.sleepRolloverEnabled,
+      bulkMode: prefs.bulkMode,
       targetToday: resolveTargetForDay(prefs.targets, calendarToday),
       macroTargets: resolveMacroTargets(prefs.targets, calendarToday),
       targets: prefs.targets,
@@ -1640,7 +1648,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         'meals', (SELECT json_build_object('n', count(*)::int, 'm', max(updated_at)::text) FROM meal WHERE user_id = ${userId}),
         'items', (SELECT count(*)::int FROM meal_item WHERE user_id = ${userId}),
         'targets', (SELECT json_build_object('n', count(*)::int, 'cal', coalesce(sum(calories), 0)::text, 'pro', coalesce(sum(protein_g), 0)::text, 'fib', coalesce(sum(fibre_g), 0)::text, 'm', max(created_at)::text) FROM calorie_target WHERE user_id = ${userId}),
-        'prefs', (SELECT json_build_object('tz', timezone, 'tm', tracking_mode, 'src', preferred_energy_source, 'g', google_two_way_sync, 'sr', sleep_rollover_enabled) FROM nutrition_preference WHERE user_id = ${userId} LIMIT 1),
+        'prefs', (SELECT json_build_object('tz', timezone, 'tm', tracking_mode, 'src', preferred_energy_source, 'g', google_two_way_sync, 'sr', sleep_rollover_enabled, 'bm', bulk_mode) FROM nutrition_preference WHERE user_id = ${userId} LIMIT 1),
         'energy', (SELECT json_build_object('n', count(*)::int, 'm', max(synced_at)::text) FROM daily_energy WHERE user_id = ${userId}),
         'sleep', (SELECT json_build_object('n', count(*)::int, 'd', max(day)::text, 'm', max(synced_at)::text) FROM daily_sleep WHERE user_id = ${userId}),
         'recovery', (SELECT json_build_object('n', count(*)::int, 'd', max(day)::text, 'm', max(synced_at)::text) FROM daily_recovery WHERE user_id = ${userId}),

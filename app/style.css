@@ -485,6 +485,7 @@ label small { color: var(--muted); font-weight: 400; }
 .pill.amber-soft { background: rgba(224, 122, 0, 0.12); border-color: rgba(224, 122, 0, 0.34); color: var(--amber); }
 .pill.teal-soft { background: rgba(13, 148, 136, 0.12); border-color: rgba(13, 148, 136, 0.34); color: var(--teal); }
 .pill.protein-soft { background: rgba(142, 36, 170, 0.11); border-color: rgba(142, 36, 170, 0.32); color: var(--macro-protein); }
+.pill.danger-soft { background: var(--danger-bg); border-color: var(--danger-border); color: var(--danger-fg); }
 
 .meal-list { display: grid; gap: .6rem; }
 .meal-card {

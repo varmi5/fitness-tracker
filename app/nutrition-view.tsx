@@ -13,7 +13,7 @@ import {
   SunThemeIcon,
 } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
-import { addDays } from "../lib/nutrition-model";
+import { addDays, isCalorieGoalMet } from "../lib/nutrition-model";
 import {
   CATEGORY_LABELS,
   fmtGram,
@@ -107,6 +107,9 @@ export function NutritionView({
   const [moveTargetDay, setMoveTargetDay] = useState(selectedDay);
   const [subView, setSubView] = useState<"diary" | "trends">("diary");
 
+  const isBulkMode = Boolean(settings.bulkMode);
+  const dayGoalMet = isCalorieGoalMet(dayView.totals.calories, dayView.target, isBulkMode);
+
   const formattedDate = new Date(`${selectedDay}T12:00:00Z`).toLocaleDateString("en-GB", {
     timeZone: "UTC",
     weekday: "short",
@@ -123,32 +126,55 @@ export function NutritionView({
   const weekSummary = summarizeWindow(history30, addDays(today, -6));
   const monthSummary = summarizeWindow(history30, addDays(today, -29));
 
-  const last7 = history30.days.slice(-7);
-  const target = dayView.target;
-  const barCeiling = Math.max(target * 1.15, ...last7.map((d) => d.totals.calories ?? 0), 1000);
-  const targetLinePct = Math.min(92, Math.max(8, Math.round((target / barCeiling) * 100)));
-
   const diaryContent = (
     <>
       {/* Daily Summary Card: Protein & Fibre above Carbs & Fat */}
       <section className="card">
         <div className="split-row" style={{ marginBottom: ".65rem" }}>
           <div>
-            <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>Intake vs {fmtKcal(dayView.target)} kcal target</div>
+            <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
+              Intake vs {fmtKcal(dayView.target)} kcal {isBulkMode ? "bulk target" : "target"}
+            </div>
             <strong className="num" style={{ fontSize: "1.45rem" }}>
               {dayView.totals.calories == null ? "—" : `${fmtKcal(dayView.totals.calories)} kcal`}
             </strong>{" "}
-            <span style={{ fontSize: ".85rem", color: "var(--muted)" }}>
+            <span
+              style={{
+                fontSize: ".85rem",
+                color: dayGoalMet === null ? "var(--muted)" : dayGoalMet ? "var(--accent)" : "var(--danger-fg)",
+                fontWeight: dayGoalMet === null ? 400 : 600,
+              }}
+            >
               · {dayView.remaining == null
-                ? `${fmtKcal(dayView.target)} remaining`
-                : dayView.remaining >= 0
-                  ? `${fmtKcal(dayView.remaining)} remaining`
-                  : `${fmtKcal(Math.abs(dayView.remaining))} over`}
+                ? isBulkMode
+                  ? `${fmtKcal(dayView.target)} to target`
+                  : `${fmtKcal(dayView.target)} remaining`
+                : isBulkMode
+                  ? dayView.remaining > 0
+                    ? `${fmtKcal(dayView.remaining)} under target`
+                    : `${fmtKcal(Math.abs(dayView.remaining))} over · target met`
+                  : dayView.remaining >= 0
+                    ? `${fmtKcal(dayView.remaining)} remaining`
+                    : `${fmtKcal(Math.abs(dayView.remaining))} over`}
             </span>
           </div>
-          <span className={`pill ${dayView.diaryComplete ? "teal-soft" : ""}`}>
-            {dayView.diaryComplete ? "Past day" : "Active day"}
-          </span>
+          <div className="button-row">
+            {isBulkMode && <span className="pill accent-soft">Bulk mode</span>}
+            {dayGoalMet !== null && (
+              <span className={`pill ${dayGoalMet ? "accent-soft" : "danger-soft"}`}>
+                {isBulkMode
+                  ? dayGoalMet
+                    ? "Target met"
+                    : "Under target"
+                  : dayGoalMet
+                    ? "Under target"
+                    : "Over target"}
+              </span>
+            )}
+            <span className={`pill ${dayView.diaryComplete ? "teal-soft" : ""}`}>
+              {dayView.diaryComplete ? "Past day" : "Active day"}
+            </span>
+          </div>
         </div>
 
         <div className="button-row" style={{ marginBottom: ".6rem" }}>
@@ -373,47 +399,6 @@ export function NutritionView({
 
   const trendsAndSummaryContent = (
     <>
-      {/* 7-Day Calorie Intake Mini Bars */}
-      <section className="card week-bars-card" aria-label="7-day calorie intake">
-        <div className="split-row" style={{ flexWrap: "nowrap" }}>
-          <div style={{ minWidth: 0 }}>
-            <h2>Last 7 Days Intake</h2>
-            <p style={{ fontSize: ".76rem" }}>Daily intake vs {fmtKcal(target)} kcal target</p>
-          </div>
-          <span className="pill num">{last7.filter((d) => d.totals.calories != null).length} of 7 logged</span>
-        </div>
-        <div className="week-bars-wrap">
-          <div className="week-target-line" style={{ bottom: `calc(${targetLinePct}% * 0.72 + 18px)` }} />
-          {last7.map((d) => {
-            const cal = d.totals.calories;
-            const barH = cal == null ? 0 : Math.max(8, Math.min(100, Math.round((cal / barCeiling) * 100)));
-            const dow = new Date(`${d.day}T12:00:00Z`).toLocaleDateString("en-GB", {
-              timeZone: "UTC",
-              weekday: "narrow",
-            });
-            return (
-              <div
-                className="week-bar-col"
-                key={d.day}
-                title={`${d.day}: ${cal == null ? "no data" : `${cal} kcal`}`}
-                onClick={() => onSelectDay(d.day)}
-                style={{ cursor: "pointer" }}
-              >
-                <div className="week-bar-track">
-                  {cal != null && (
-                    <div
-                      className={`week-bar-fill ${cal > d.target ? "over" : ""}`}
-                      style={{ height: `${barH}%` }}
-                    />
-                  )}
-                </div>
-                <span className="week-bar-label num">{dow}</span>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
       {/* Weekly & Monthly Net Calorie Balance & Macro Summary Widgets */}
       <section className="two-col" aria-label="Weekly and monthly net calorie balance">
         {[
@@ -541,6 +526,7 @@ export function NutritionView({
             const cal = entry?.totals.calories;
             const tgt = entry?.target ?? dayView.target;
             const fillPct = cal != null && tgt > 0 ? Math.min(100, Math.round((cal / tgt) * 100)) : 0;
+            const goalMet = isCalorieGoalMet(cal, tgt, isBulkMode);
             return (
               <button
                 type="button"
@@ -551,7 +537,7 @@ export function NutritionView({
                 <span className="week-cell-dow">{dow}</span>
                 <span className="week-cell-day num">{dom}</span>
                 <span className="week-mini-bar">
-                  <i style={{ width: `${fillPct}%`, background: cal != null && cal > tgt ? "var(--amber)" : "var(--accent)" }} />
+                  <i style={{ width: `${fillPct}%`, background: goalMet === false ? "var(--danger-fg)" : "var(--accent)" }} />
                 </span>
               </button>
             );

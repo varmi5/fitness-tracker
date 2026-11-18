@@ -17,6 +17,9 @@ export function getDatabase() {
       new Pool({
         connectionString: process.env.DATABASE_URL,
         max: Number.isFinite(max) && max > 0 ? max : 10,
+        connectionTimeoutMillis: 10000,
+        idleTimeoutMillis: 30000,
+        statement_timeout: 15000,
       }),
       { schema },
     );

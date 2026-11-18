@@ -608,8 +608,9 @@ test("migration 012 backfills tracking_mode safely and is idempotent", async () 
   const freshPg = new PGlite();
   try {
     const migrations = (await readdir("migrations")).filter((f) => f.endsWith(".sql")).sort();
-    const pre012 = migrations.filter((m) => !m.startsWith("012-"));
+    const pre012 = migrations.filter((m) => m < "012-");
     const m012 = migrations.find((m) => m.startsWith("012-"));
+    const post012 = migrations.filter((m) => m >= "013-");
     assert.ok(m012, "migration 012 should exist");
 
     for (const m of pre012) {
@@ -647,6 +648,9 @@ test("migration 012 backfills tracking_mode safely and is idempotent", async () 
     await freshPg.exec(sql012);
     // Re-run 012 to verify idempotency
     await freshPg.exec(sql012);
+    for (const m of post012) {
+      await freshPg.exec(await readFile(`migrations/${m}`, "utf8"));
+    }
 
     const freshDb = drizzle(freshPg, { schema });
     const b1 = nutritionData(freshDb, "B1");
@@ -722,4 +726,31 @@ test("log() defaults omitted day/time to exact current local clock while honorin
   assert.equal(overrideMeal.meal.localDay, "2026-11-24");
   assert.equal(overrideMeal.meal.localTime, "00:35");
 });
+
+test("isCalorieGoalMet and bulkMode preference invert under/over target evaluation cleanly", async () => {
+  const { isCalorieGoalMet } = await import("../lib/nutrition-model");
+  assert.equal(isCalorieGoalMet(null, 2000, false), null);
+  assert.equal(isCalorieGoalMet(null, 2000, true), null);
+
+  // Cut / Deficit mode (bulkMode = false): under/at target = true (green), over target = false (red)
+  assert.equal(isCalorieGoalMet(1750, 2000, false), true);
+  assert.equal(isCalorieGoalMet(2000, 2000, false), true);
+  assert.equal(isCalorieGoalMet(2150, 2000, false), false);
+
+  // Bulk mode (bulkMode = true): under target = false (red), at/over target = true (green)
+  assert.equal(isCalorieGoalMet(1750, 2000, true), false);
+  assert.equal(isCalorieGoalMet(2000, 2000, true), true);
+  assert.equal(isCalorieGoalMet(2350, 2000, true), true);
+
+  const u2 = nutritionData(db, "U2");
+  assert.equal((await u2.settings()).bulkMode, false);
+  const tokBefore = await u2.syncToken();
+  const updated = await u2.setPreferences({ timezone: "Europe/London", bulkMode: true });
+  assert.equal(updated.bulkMode, true);
+  const tokAfter = await u2.syncToken();
+  assert.notEqual(tokAfter, tokBefore);
+  await u2.setPreferences({ timezone: "Europe/London", bulkMode: false });
+  assert.equal((await u2.settings()).bulkMode, false);
+});
+
 

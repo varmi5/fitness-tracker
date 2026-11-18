@@ -358,7 +358,17 @@ export const preferencesInput = z.object({
   preferredEnergySource: z.enum(ENERGY_SOURCES).optional(),
   googleTwoWaySync: z.boolean().optional().default(false),
   sleepRolloverEnabled: z.boolean().optional(),
+  bulkMode: z.boolean().optional(),
 });
+
+export function isCalorieGoalMet(
+  intake: number | null | undefined,
+  target: number,
+  bulkMode = false,
+): boolean | null {
+  if (intake == null || !Number.isFinite(intake) || target <= 0) return null;
+  return bulkMode ? intake >= target : intake <= target;
+}
 
 export const templateInput = z.object({
   id: z.string().max(64).optional(),

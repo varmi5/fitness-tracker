@@ -15,6 +15,7 @@ export type { EnergyRecord, RecoveryRecord, SleepRecord, TrackingMode, WorkoutRe
 export type TrackerSnapshot = Awaited<ReturnType<ReturnType<typeof trackerData>["snapshot"]>>;
 export type NutritionSettings = Awaited<ReturnType<ReturnType<typeof nutritionData>["settings"]>> & {
   trackingMode: TrackingMode;
+  bulkMode?: boolean;
 };
 export type NutritionHistory = Awaited<ReturnType<ReturnType<typeof nutritionData>["history"]>>;
 export type HistoryDay = NutritionHistory["days"][number];

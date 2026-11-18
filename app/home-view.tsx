@@ -15,7 +15,7 @@ import {
   WeightScaleIcon,
 } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
-import { addDays } from "../lib/nutrition-model";
+import { addDays, isCalorieGoalMet } from "../lib/nutrition-model";
 import { metrics, readingsFor, summary } from "../lib/metrics";
 import {
   CATEGORY_LABELS,
@@ -95,18 +95,26 @@ export function HomeView({
   onNavigate,
 }: HomeViewProps) {
   const isFitbitMode = settings.trackingMode === "fitbit";
+  const isBulkMode = Boolean(settings.bulkMode);
 
   const intake = daily.totals.calories;
   const target = daily.target;
   const pct = intake == null || target <= 0 ? 0 : Math.min(100, Math.round((intake / target) * 100));
-  const overTarget = intake != null && intake > target;
+  const goalMet = isCalorieGoalMet(intake, target, isBulkMode);
+  const overTarget = goalMet === false;
 
   const remainingLabel =
     intake == null
-      ? `${fmtKcal(target)} kcal left`
-      : daily.remaining != null && daily.remaining >= 0
-        ? `${fmtKcal(daily.remaining)} left`
-        : `${fmtKcal(Math.abs(daily.remaining ?? 0))} over`;
+      ? isBulkMode
+        ? `${fmtKcal(target)} kcal to target`
+        : `${fmtKcal(target)} kcal left`
+      : isBulkMode
+        ? daily.remaining != null && daily.remaining > 0
+          ? `${fmtKcal(daily.remaining)} under target`
+          : `${fmtKcal(Math.abs(daily.remaining ?? 0))} over · target met`
+        : daily.remaining != null && daily.remaining >= 0
+          ? `${fmtKcal(daily.remaining)} left`
+          : `${fmtKcal(Math.abs(daily.remaining ?? 0))} over`;
 
   const proteinGoal = daily.macroTargets.proteinG;
   const fibreGoal = daily.macroTargets.fibreG;
@@ -221,8 +229,16 @@ export function HomeView({
           <div className="hero-stats">
             <div className="split-row">
               <div>
-                <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>Allowance status</div>
-                <strong className="num" style={{ fontSize: "1.18rem" }}>
+                <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
+                  {isBulkMode ? "Bulk target status" : "Allowance status"}
+                </div>
+                <strong
+                  className="num"
+                  style={{
+                    fontSize: "1.18rem",
+                    color: goalMet === null ? "var(--text)" : goalMet ? "var(--accent)" : "var(--danger-fg)",
+                  }}
+                >
                   {remainingLabel}
                 </strong>
               </div>

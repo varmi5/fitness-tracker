@@ -237,7 +237,7 @@ export function BevelSegmentedRing({
             y1={y1}
             x2={x2}
             y2={y2}
-            stroke={isLit ? (overTarget ? "var(--amber)" : "var(--accent)") : "var(--track)"}
+            stroke={isLit ? (overTarget ? "var(--danger-fg)" : "var(--accent)") : "var(--track)"}
             strokeWidth={3.1}
             strokeLinecap="round"
           />
