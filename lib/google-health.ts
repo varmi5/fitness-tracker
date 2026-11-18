@@ -10,17 +10,19 @@ import {
   historyInput,
   localDay,
   resolveLocalDateTime,
+  sleepInput,
   type MealCategory,
 } from "./nutrition-model";
-import { dailyEnergy, googleMealSync, healthIntegration, meal, measurement, profile } from "./schema";
+import { dailyEnergy, dailySleep, googleMealSync, healthIntegration, meal, measurement, profile } from "./schema";
 
 const googleAPI = "https://health.googleapis.com/v4/users/me";
 const activityScope = "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly";
 const measurementsScope = "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly";
+const sleepScope = "https://www.googleapis.com/auth/googlehealth.sleep.readonly";
 const measurementsWriteScope = "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.writeonly";
 const nutritionWriteScope = "https://www.googleapis.com/auth/googlehealth.nutrition.writeonly";
 
-const scopeValues = [activityScope, measurementsScope];
+const scopeValues = ["openid", "email", activityScope, measurementsScope, sleepScope];
 
 const tokens = z.object({
   accessToken: z.string(),
@@ -76,7 +78,7 @@ export function googleConsent(callback: string, state: string, challenge: string
     response_type: "code",
     redirect_uri: callback,
     access_type: "offline",
-    prompt: "consent",
+    prompt: "select_account consent",
     scope: [...scopeValues, ...(allowWrite ? [measurementsWriteScope, nutritionWriteScope] : [])].join(" "),
     state,
     code_challenge: challenge,
@@ -118,6 +120,28 @@ async function exchange(params: Record<string, string>, previous?: Tokens) {
   return result;
 }
 
+async function fetchGoogleAccountLabel(accessToken: string, fallbackHealthUserId?: string): Promise<string | null> {
+  try {
+    const infoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (infoRes.ok) {
+      const info = (await infoRes.json()) as { email?: string };
+      if (typeof info.email === "string" && info.email.trim()) {
+        return info.email.trim().slice(0, 120);
+      }
+    }
+  } catch {
+    // Non-fatal fallback below
+  }
+  if (fallbackHealthUserId && fallbackHealthUserId.trim()) {
+    const clean = fallbackHealthUserId.trim();
+    return clean.length > 10 ? `Fitbit ID ${clean.slice(0, 8)}…` : clean;
+  }
+  return null;
+}
+
 export async function connectGoogle(db: AuthDatabase, userId: string, code: string, verifier: string, callback: string) {
   const grant = await exchange({
     grant_type: "authorization_code",
@@ -130,9 +154,9 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
     headers: { Authorization: `Bearer ${grant.accessToken}` },
     signal: AbortSignal.timeout(10000),
   });
+  const identityPayload = await identity.json().catch(() => null);
   if (!identity.ok) {
-    const missing = await identity.json().catch(() => null);
-    const unlinked = missing?.error?.details?.some((value: { reason?: string }) => value.reason === "ACCOUNT_NOT_LINKED");
+    const unlinked = identityPayload?.error?.details?.some((value: { reason?: string }) => value.reason === "ACCOUNT_NOT_LINKED");
     throw new NutritionError(
       unlinked
         ? "Link your Fitbit / Google account in the Fitbit or Google Health app first."
@@ -140,19 +164,29 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
       422,
     );
   }
+  const healthUserId = typeof identityPayload?.healthUserId === "string" ? identityPayload.healthUserId : undefined;
+  const accountLabel = await fetchGoogleAccountLabel(grant.accessToken, healthUserId);
 
   await db.transaction(async (tx) => {
     await tx
       .insert(healthIntegration)
-      .values({ userId, provider: "google", credential: seal(grant, userId), status: "connected", lastError: null })
+      .values({ userId, provider: "google", credential: seal(grant, userId), accountLabel, status: "connected", lastError: null })
       .onConflictDoUpdate({
         target: [healthIntegration.userId, healthIntegration.provider],
-        set: { credential: seal(grant, userId), connectionId: randomBytes(16).toString("hex"), status: "connected", lastSync: null, lastError: null },
+        set: {
+          credential: seal(grant, userId),
+          accountLabel,
+          connectionId: randomBytes(16).toString("hex"),
+          status: "connected",
+          lastSync: null,
+          lastError: null,
+        },
       });
     await tx.delete(googleMealSync).where(eq(googleMealSync.userId, userId));
     await tx.update(meal).set({ googleDatapointName: null }).where(eq(meal.userId, userId));
-    // Replacing a connection clears prior Google rows so two accounts never mix.
+    // Replacing a connection clears prior Google energy & sleep rows so two accounts never mix.
     await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
+    await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google")));
   });
 }
 
@@ -252,10 +286,160 @@ async function fetchLatestHeightCm(grant: Tokens): Promise<number | null> {
 
 const own = (userId: string) => and(eq(healthIntegration.userId, userId), eq(healthIntegration.provider, "google"));
 
+type SleepStageType = "AWAKE" | "LIGHT" | "DEEP" | "REM";
+
+export interface ParsedSleepSession {
+  day: string;
+  sessionId: string | null;
+  sleepStart: string | null;
+  sleepEnd: string | null;
+  minutesAsleep: number;
+  minutesAwake: number | null;
+  deepMinutes: number | null;
+  remMinutes: number | null;
+  lightMinutes: number | null;
+  stagesJson: { stage: SleepStageType; minutes: number }[];
+}
+
+function formatCivilDate(d?: { year?: number; month?: number; day?: number } | null): string | null {
+  if (!d || typeof d.year !== "number" || typeof d.month !== "number" || typeof d.day !== "number") return null;
+  const candidate = [d.year, String(d.month).padStart(2, "0"), String(d.day).padStart(2, "0")].join("-");
+  return z.iso.date().safeParse(candidate).success ? candidate : null;
+}
+
+export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE): {
+  sessions: Map<string, ParsedSleepSession>;
+  nextPageToken?: string;
+} {
+  const envelope = z
+    .object({
+      dataPoints: z.array(z.unknown()).default([]),
+      nextPageToken: z.string().optional(),
+    })
+    .parse(payload);
+
+  const sessions = new Map<string, ParsedSleepSession>();
+
+  for (const raw of envelope.dataPoints) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const sleepObj = (item.sleep ?? item) as Record<string, unknown> | undefined;
+    if (!sleepObj || typeof sleepObj !== "object") continue;
+
+    const interval = (sleepObj.interval ?? {}) as Record<string, unknown>;
+    const startTimeRaw = typeof interval.startTime === "string" ? interval.startTime : null;
+    const endTimeRaw = typeof interval.endTime === "string" ? interval.endTime : null;
+    const civilEnd = (interval.civilEndTime as { date?: { year?: number; month?: number; day?: number } } | undefined)?.date;
+    const day =
+      formatCivilDate(civilEnd) ??
+      (endTimeRaw && !Number.isNaN(new Date(endTimeRaw).getTime()) ? localDay(endTimeRaw, timezone) : null);
+    if (!day) continue;
+
+    const summary = (sleepObj.summary ?? sleepObj) as Record<string, unknown>;
+    const rawStages = Array.isArray(summary.stagesSummary)
+      ? summary.stagesSummary
+      : Array.isArray(sleepObj.stagesSummary)
+        ? sleepObj.stagesSummary
+        : [];
+
+    const stageMap = new Map<SleepStageType, number>();
+    for (const stRaw of rawStages) {
+      if (!stRaw || typeof stRaw !== "object") continue;
+      const stObj = stRaw as Record<string, unknown>;
+      const stageName = String(stObj.stage ?? "").toUpperCase();
+      if (stageName !== "AWAKE" && stageName !== "LIGHT" && stageName !== "DEEP" && stageName !== "REM") continue;
+      const mins = Number(stObj.minutes ?? (typeof stObj.durationSeconds === "number" ? Math.round(stObj.durationSeconds / 60) : NaN));
+      if (!Number.isFinite(mins) || mins < 0 || mins > 1440) continue;
+      const rounded = Math.round(mins);
+      // Deduplicate stage summary entries cleanly instead of summing repeated enums.
+      const prev = stageMap.get(stageName);
+      if (prev == null || rounded > prev) stageMap.set(stageName, rounded);
+    }
+
+    const deepMinutes = stageMap.get("DEEP") ?? null;
+    const remMinutes = stageMap.get("REM") ?? null;
+    const lightMinutes = stageMap.get("LIGHT") ?? null;
+    const minutesAwakeRaw = summary.minutesAwake != null ? Number(summary.minutesAwake) : stageMap.get("AWAKE") ?? null;
+    const minutesAwake = minutesAwakeRaw != null && Number.isFinite(minutesAwakeRaw) && minutesAwakeRaw >= 0 ? Math.round(minutesAwakeRaw) : null;
+
+    let minutesAsleep = summary.minutesAsleep != null ? Number(summary.minutesAsleep) : NaN;
+    if (!Number.isFinite(minutesAsleep)) {
+      const stageAsleep = (deepMinutes ?? 0) + (remMinutes ?? 0) + (lightMinutes ?? 0);
+      if (stageAsleep > 0) {
+        minutesAsleep = stageAsleep;
+      } else if (startTimeRaw && endTimeRaw) {
+        const diffMin = Math.round((new Date(endTimeRaw).getTime() - new Date(startTimeRaw).getTime()) / 60000);
+        if (Number.isFinite(diffMin) && diffMin > 0) {
+          minutesAsleep = Math.max(0, diffMin - (minutesAwake ?? 0));
+        }
+      }
+    }
+
+    if (!Number.isFinite(minutesAsleep) || minutesAsleep < 90 || minutesAsleep > 1440) continue;
+
+    const sleepStart = startTimeRaw && !Number.isNaN(new Date(startTimeRaw).getTime()) ? new Date(startTimeRaw).toISOString() : null;
+    const sleepEnd = endTimeRaw && !Number.isNaN(new Date(endTimeRaw).getTime()) ? new Date(endTimeRaw).toISOString() : null;
+    const sessionId = typeof item.name === "string" ? item.name.split("/").at(-1)?.slice(0, 160) ?? null : null;
+    const stagesJson = (["DEEP", "REM", "LIGHT", "AWAKE"] as const)
+      .filter((s) => stageMap.has(s))
+      .map((s) => ({ stage: s, minutes: stageMap.get(s)! }));
+
+    const parsed: ParsedSleepSession = {
+      day,
+      sessionId,
+      sleepStart,
+      sleepEnd,
+      minutesAsleep: Math.round(minutesAsleep),
+      minutesAwake,
+      deepMinutes,
+      remMinutes,
+      lightMinutes,
+      stagesJson,
+    };
+
+    const existing = sessions.get(day);
+    if (!existing || parsed.minutesAsleep > existing.minutesAsleep) {
+      sessions.set(day, parsed);
+    }
+  }
+
+  return { sessions, nextPageToken: envelope.nextPageToken };
+}
+
+export async function fetchSleepSessions(grant: Tokens, from: string, endExclusive: string, timezone = DEFAULT_TIMEZONE) {
+  let pageToken: string | undefined;
+  const merged = new Map<string, ParsedSleepSession>();
+  const filter = `sleep.interval.civil_end_time >= "${from}T00:00:00" AND sleep.interval.civil_end_time < "${endExclusive}T00:00:00"`;
+
+  for (let page = 0; page < 10; page++) {
+    const url = new URL(`${googleAPI}/dataTypes/sleep/dataPoints:reconcile`);
+    url.searchParams.set("filter", filter);
+    url.searchParams.set("pageSize", "25");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${grant.accessToken}` },
+      signal: AbortSignal.timeout(9000),
+      cache: "no-store",
+    });
+    if (!response.ok) throw new NutritionError("Google Health could not retrieve sleep data.", 502);
+    const parsed = parseGoogleSleep(await response.json(), timezone);
+    for (const [day, s] of parsed.sessions) {
+      if (day < from || day >= endExclusive) continue;
+      const prev = merged.get(day);
+      if (!prev || s.minutesAsleep > prev.minutesAsleep) merged.set(day, s);
+    }
+    pageToken = parsed.nextPageToken;
+    if (!pageToken) return merged;
+  }
+  throw new NutritionError("Google returned too many sleep pages for one sync.", 502);
+}
+
 export async function googleStatus(db: AuthDatabase, userId: string) {
   const [row] = await db
     .select({
       status: healthIntegration.status,
+      accountLabel: healthIntegration.accountLabel,
       lastSync: healthIntegration.lastSync,
       lastError: healthIntegration.lastError,
       credential: healthIntegration.credential,
@@ -277,10 +461,12 @@ export async function googleStatus(db: AuthDatabase, userId: string) {
     mealSync: { pending: jobs.filter((job) => job.state === "pending").length, failed: jobs.filter((job) => job.state === "error").length, lastError: jobs.find((job) => job.lastError)?.lastError ?? null },
     available: googleConfigured(),
     connected: Boolean(row),
+    accountLabel: row?.accountLabel ?? null,
     status: row?.status ?? null,
     lastSync: row?.lastSync?.toISOString() ?? null,
     lastError: row?.lastError ?? null,
     canReadWeights: scopes.includes(measurementsScope),
+    canReadSleep: scopes.includes(sleepScope),
     canWriteWeights: scopes.includes(measurementsWriteScope),
     canReadNutrition: scopes.includes(nutritionWriteScope),
     canWriteNutrition: scopes.includes(nutritionWriteScope),
@@ -318,7 +504,8 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
     }
 
     const readings = new Map<string, Partial<Record<Field, number>>>();
-    const today = localDay(new Date(), (await nutritionData(db, userId).settings()).timezone);
+    const tz = (await nutritionData(db, userId).settings()).timezone;
+    const today = localDay(new Date(), tz);
     const through = to < today ? to : today;
     const allowed = (Object.keys(types) as (keyof typeof types)[]).filter(
       (name) => name !== "weight" || grant.scopes.includes(measurementsScope),
@@ -333,7 +520,11 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
       }
     }
 
-    const remoteHeightCm = await fetchLatestHeightCm(grant);
+    const canSleep = grant.scopes.includes(sleepScope);
+    const [remoteHeightCm, sleepSessions] = await Promise.all([
+      fetchLatestHeightCm(grant),
+      canSleep ? fetchSleepSessions(grant, from, addDays(through, 1), tz) : Promise.resolve(new Map<string, ParsedSleepSession>()),
+    ]);
 
     await db.transaction(async (tx) => {
       const [current] = await tx.select().from(healthIntegration).where(own(userId)).for("update");
@@ -367,6 +558,30 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
         }
       }
 
+      if (canSleep) {
+        await tx
+          .delete(dailySleep)
+          .where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google"), gte(dailySleep.day, from), lte(dailySleep.day, through)));
+        for (const s of sleepSessions.values()) {
+          const valid = sleepInput.parse({ ...s, source: "google" });
+          await tx.insert(dailySleep).values({
+            userId,
+            source: "google",
+            day: valid.day,
+            sessionId: valid.sessionId ?? null,
+            sleepStart: valid.sleepStart ? new Date(valid.sleepStart) : null,
+            sleepEnd: valid.sleepEnd ? new Date(valid.sleepEnd) : null,
+            minutesAsleep: valid.minutesAsleep,
+            minutesAwake: valid.minutesAwake ?? null,
+            deepMinutes: valid.deepMinutes ?? null,
+            remMinutes: valid.remMinutes ?? null,
+            lightMinutes: valid.lightMinutes ?? null,
+            stagesJson: valid.stagesJson,
+            syncedAt: new Date(),
+          });
+        }
+      }
+
       if (remoteHeightCm != null) {
         const [prof] = await tx.select({ heightCm: profile.heightCm }).from(profile).where(eq(profile.userId, userId));
         if (!prof) {
@@ -382,7 +597,7 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
         .where(own(userId));
     });
 
-    return { syncedDays: readings.size, syncedHeight: remoteHeightCm != null };
+    return { syncedDays: readings.size, syncedSleepDays: sleepSessions.size, syncedHeight: remoteHeightCm != null };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sync failed.";
     await db
@@ -390,6 +605,23 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
       .set({ status: "sync_failed", lastError: message.slice(0, 240) })
       .where(and(own(userId), eq(healthIntegration.credential, linked.credential)));
     throw error;
+  }
+}
+
+export async function syncGoogleAllUsers(db: AuthDatabase) {
+  const connected = await db
+    .select({ userId: healthIntegration.userId })
+    .from(healthIntegration)
+    .where(eq(healthIntegration.provider, "google"));
+
+  for (const row of connected) {
+    try {
+      const tz = (await nutritionData(db, row.userId).settings()).timezone;
+      const today = localDay(new Date(), tz);
+      await syncGoogle(db, row.userId, addDays(today, -1), today);
+    } catch {
+      // Keep failures isolated per user
+    }
   }
 }
 
@@ -564,6 +796,7 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
     }
   >();
   let heightCm: number | null = null;
+  const sleepMap = new Map<string, ParsedSleepSession>();
   const meals: z.input<typeof energyInput> extends never ? never : {
     day: string;
     time: string;
@@ -615,7 +848,47 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
     }
 
     const ingestPoint = (pt: Record<string, unknown>) => {
-      // 1. Native app / Apple Health array entry
+      // 0. Saved sleep point (FitnessTrackr export or Google Health v4 dataPoint with .sleep)
+      if (pt.sleep && typeof pt.sleep === "object") {
+        const parsedSleep = parseGoogleSleep({ dataPoints: [pt] }, timezone);
+        for (const [day, s] of parsedSleep.sessions) {
+          const prev = sleepMap.get(day);
+          if (!prev || s.minutesAsleep > prev.minutesAsleep) sleepMap.set(day, s);
+        }
+        return;
+      }
+      if (typeof pt.day === "string" && z.iso.date().safeParse(pt.day).success && typeof pt.minutesAsleep === "number") {
+        const validSleep = sleepInput.safeParse({
+          day: pt.day,
+          source: pt.source === "manual" || pt.source === "apple" ? pt.source : "google",
+          sessionId: typeof pt.sessionId === "string" ? pt.sessionId : null,
+          sleepStart: typeof pt.sleepStart === "string" ? pt.sleepStart : null,
+          sleepEnd: typeof pt.sleepEnd === "string" ? pt.sleepEnd : null,
+          minutesAsleep: Math.round(pt.minutesAsleep),
+          minutesAwake: typeof pt.minutesAwake === "number" ? Math.round(pt.minutesAwake) : null,
+          deepMinutes: typeof pt.deepMinutes === "number" ? Math.round(pt.deepMinutes) : null,
+          remMinutes: typeof pt.remMinutes === "number" ? Math.round(pt.remMinutes) : null,
+          lightMinutes: typeof pt.lightMinutes === "number" ? Math.round(pt.lightMinutes) : null,
+          stagesJson: Array.isArray(pt.stages) ? pt.stages : Array.isArray(pt.stagesJson) ? pt.stagesJson : [],
+        });
+        if (validSleep.success && validSleep.data.minutesAsleep >= 90) {
+          sleepMap.set(pt.day, {
+            day: validSleep.data.day,
+            sessionId: validSleep.data.sessionId ?? null,
+            sleepStart: validSleep.data.sleepStart ?? null,
+            sleepEnd: validSleep.data.sleepEnd ?? null,
+            minutesAsleep: validSleep.data.minutesAsleep,
+            minutesAwake: validSleep.data.minutesAwake ?? null,
+            deepMinutes: validSleep.data.deepMinutes ?? null,
+            remMinutes: validSleep.data.remMinutes ?? null,
+            lightMinutes: validSleep.data.lightMinutes ?? null,
+            stagesJson: validSleep.data.stagesJson,
+          });
+        }
+        return;
+      }
+
+      // 1. Native app / export array entry
       if (typeof pt.day === "string" && z.iso.date().safeParse(pt.day).success) {
         const src = pt.source === "apple" || pt.source === "manual" ? pt.source : "google";
         mergeDay(pt.day, {
@@ -712,13 +985,45 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
         }
       }
 
-      // 4. Fitbit Takeout weight/calories/steps format
+      // 4. Fitbit Takeout weight/calories/steps/sleep format
       if (typeof pt.date === "string" && typeof pt.weight === "number") {
         const day = normalizeDateString(pt.date);
         if (day) {
           // Fitbit Takeout sometimes stores lbs by default if > 200 or marked
           const kg = pt.unit === "lb" || pt.weight > 260 ? Math.round((pt.weight * 0.45359237) * 100) / 100 : Math.round(pt.weight * 100) / 100;
           mergeDay(day, { source: "google", weightKg: kg });
+        }
+      } else if (typeof pt.dateOfSleep === "string" && typeof pt.minutesAsleep === "number") {
+        const day = normalizeDateString(pt.dateOfSleep);
+        if (day && pt.minutesAsleep >= 90) {
+          const deep = (pt.levels as { summary?: { deep?: { minutes?: number }; rem?: { minutes?: number }; light?: { minutes?: number } } } | undefined)?.summary?.deep?.minutes;
+          const rem = (pt.levels as { summary?: { rem?: { minutes?: number } } } | undefined)?.summary?.rem?.minutes;
+          const light = (pt.levels as { summary?: { light?: { minutes?: number } } } | undefined)?.summary?.light?.minutes;
+          const valid = sleepInput.safeParse({
+            day,
+            source: "google",
+            sleepStart: typeof pt.startTime === "string" && !Number.isNaN(new Date(pt.startTime).getTime()) ? new Date(pt.startTime).toISOString() : null,
+            sleepEnd: typeof pt.endTime === "string" && !Number.isNaN(new Date(pt.endTime).getTime()) ? new Date(pt.endTime).toISOString() : null,
+            minutesAsleep: Math.round(pt.minutesAsleep),
+            minutesAwake: typeof pt.minutesAwake === "number" ? Math.round(pt.minutesAwake) : null,
+            deepMinutes: typeof deep === "number" ? Math.round(deep) : null,
+            remMinutes: typeof rem === "number" ? Math.round(rem) : null,
+            lightMinutes: typeof light === "number" ? Math.round(light) : null,
+          });
+          if (valid.success) {
+            sleepMap.set(day, {
+              day: valid.data.day,
+              sessionId: valid.data.sessionId ?? null,
+              sleepStart: valid.data.sleepStart ?? null,
+              sleepEnd: valid.data.sleepEnd ?? null,
+              minutesAsleep: valid.data.minutesAsleep,
+              minutesAwake: valid.data.minutesAwake ?? null,
+              deepMinutes: valid.data.deepMinutes ?? null,
+              remMinutes: valid.data.remMinutes ?? null,
+              lightMinutes: valid.data.lightMinutes ?? null,
+              stagesJson: valid.data.stagesJson,
+            });
+          }
         }
       } else if (typeof pt.dateTime === "string" && pt.value != null) {
         const day = normalizeDateString(pt.dateTime);
@@ -739,7 +1044,7 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
       if (typeof obj.heightCm === "number" && obj.heightCm > 50 && obj.heightCm < 300) {
         heightCm = Math.round(obj.heightCm * 10) / 10;
       }
-      for (const keyName of ["dataPoints", "rollupDataPoints", "entries", "dailyEnergy", "weight", "calories", "steps"]) {
+      for (const keyName of ["dataPoints", "rollupDataPoints", "entries", "dailyEnergy", "dailySleep", "sleep", "sleepLogs", "weight", "calories", "steps"]) {
         if (Array.isArray(obj[keyName])) {
           for (const item of obj[keyName] as unknown[]) {
             if (item && typeof item === "object") ingestPoint(item as Record<string, unknown>);
@@ -803,11 +1108,15 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
       }),
     );
 
-  if (energyEntries.length === 0 && meals.length === 0 && heightCm == null) {
-    throw new NutritionError("No valid energy, weight, height, or meal records found in that file.");
+  const sleepEntries = [...sleepMap.values()]
+    .slice(0, 365)
+    .map((s) => sleepInput.parse({ ...s, source: "google" }));
+
+  if (energyEntries.length === 0 && sleepEntries.length === 0 && meals.length === 0 && heightCm == null) {
+    throw new NutritionError("No valid energy, sleep, weight, height, or meal records found in that file.");
   }
 
-  return { energyEntries, heightCm, meals };
+  return { energyEntries, sleepEntries, heightCm, meals };
 }
 
 export async function disconnectGoogle(db: AuthDatabase, userId: string) {
@@ -817,6 +1126,7 @@ export async function disconnectGoogle(db: AuthDatabase, userId: string) {
       .where(own(userId))
       .returning({ credential: healthIntegration.credential });
     await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
+    await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google")));
     await tx.delete(googleMealSync).where(eq(googleMealSync.userId, userId));
     await tx.update(meal).set({ googleDatapointName: null }).where(eq(meal.userId, userId));
     return removed;

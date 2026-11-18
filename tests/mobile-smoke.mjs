@@ -54,6 +54,24 @@ try {
     const page = await context.newPage();
     await page.route(/\/api\/foods\?.*products=1/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ products: [], providerMessage: null }) }));
     await page.goto(origin);
+    const prevDayBtn = page.getByRole("button", { name: "Previous day", exact: true });
+    const nextDayBtn = page.getByRole("button", { name: "Next day", exact: true });
+    await prevDayBtn.waitFor();
+    assert.equal(await nextDayBtn.isDisabled(), true);
+    await page.getByRole("heading", { name: "Nutrition Score", exact: true }).waitFor();
+
+    const homeText = await page.locator("main").innerText();
+    for (const forbidden of ["Sleep", "Steps", "Active burn", "Apple Health", "Waiting for sleep", "Start today"]) {
+      assert.equal(homeText.includes(forbidden), false, `Home must hide "${forbidden}" when Fitbit is not connected`);
+    }
+
+    await prevDayBtn.click();
+    assert.equal((await page.locator("h1").innerText()).trim(), "Yesterday");
+    assert.equal(await nextDayBtn.isDisabled(), false);
+    await nextDayBtn.click();
+    assert.equal((await page.locator("h1").innerText()).trim(), "Today");
+    assert.equal(await nextDayBtn.isDisabled(), true);
+
     const fab = page.getByRole("button", { name: "Log meal", exact: true });
     assert.equal(await fab.evaluate((node) => getComputedStyle(node).position), "fixed");
     const fabBox = await fab.boundingBox(); const navBox = await page.getByRole("navigation").boundingBox();
@@ -132,8 +150,42 @@ try {
     for (const tab of ["Home", "Nutrition", "Measurements", "Settings"]) {
       await page.getByRole("navigation").getByRole("button", { name: tab, exact: true }).click();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+      if (tab === "Settings") {
+        const manualHeading = page.getByRole("heading", { name: "Manual Daily Expenditure (TDEE)", exact: true });
+        const sourceSelect = page.getByLabel("Preferred expenditure source");
+        await manualHeading.waitFor();
+        await sourceSelect.waitFor();
+        const manualBox = await manualHeading.boundingBox();
+        const sourceBox = await sourceSelect.boundingBox();
+        assert.ok(manualBox && sourceBox && manualBox.y < sourceBox.y, "Manual TDEE card must appear above Preferred expenditure source");
+        const optionTexts = await sourceSelect.locator("option").allInnerTexts();
+        assert.deepEqual(optionTexts, ["Manual TDEE entry", "Google Health (Fitbit Air)"]);
+        const settingsText = await page.locator("main").innerText();
+        assert.equal(settingsText.includes("Apple Health"), false, "Settings must not reference Apple Health");
+      }
     }
-    console.log(`${name}: food suggestions, input sizing, modal bounds, portion scaling, failed-save recovery, inline autocomplete, keyboard viewport and tab overflow passed.`);
+
+    await page.getByRole("navigation").getByRole("button", { name: "Nutrition", exact: true }).click();
+    const londonToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date());
+    const bgMealRes = await context.request.post(`${origin}/api/nutrition`, {
+      headers: { Origin: origin },
+      data: {
+        action: "log",
+        data: {
+          day: londonToday,
+          time: "19:45",
+          name: `${name} auto-synced bowl`,
+          category: "dinner",
+          idempotencyKey: `ui-auto-sync-${name}`,
+          items: [{ name: "Greek yoghurt", amount: 150, unit: "g", calories: 140, proteinG: 15, carbsG: 6, fatG: 5, estimationMethod: "weighed" }],
+        },
+      },
+    });
+    assert.equal(bgMealRes.status(), 200);
+    await page.evaluate(() => window.dispatchEvent(new Event("pageshow")));
+    await page.locator(".meal-card").filter({ hasText: `${name} auto-synced bowl` }).waitFor();
+
+    console.log(`${name}: food suggestions, input sizing, modal bounds, portion scaling, failed-save recovery, inline autocomplete, keyboard viewport, Bevel steppers, non-Fitbit hiding, settings ordering, auto-refresh and tab overflow passed.`);
     await browser.close(); browser = undefined;
   }
 } finally {

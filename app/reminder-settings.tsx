@@ -5,7 +5,18 @@ export function ReminderSettings() {
   const [settings, setSettings] = useState<Settings | null>(null); const [times, setTimes] = useState("18:30");
   const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false);
   const supported = typeof window !== "undefined" && "PushManager" in window && "Notification" in window && "serviceWorker" in navigator;
-  useEffect(() => { let active = true; fetch("/api/reminders").then((r) => r.ok ? r.json() : null).then((v) => { if (active && v) { setSettings(v); setTimes(v.times.join(", ")); } }).catch(() => { if (active) setMessage("Could not load reminders. Reopen Settings to retry."); }); return () => { active = false; }; }, []);
+  useEffect(() => {
+    let active = true;
+    const load = () => {
+      fetch("/api/reminders", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((v) => { if (active && v) { setSettings(v); setTimes(v.times.join(", ")); } })
+        .catch(() => { if (active) setMessage("Could not load reminders. Reopen Settings to retry."); });
+    };
+    load();
+    window.addEventListener("fitnesstrackr:sync", load);
+    return () => { active = false; window.removeEventListener("fitnesstrackr:sync", load); };
+  }, []);
   async function post(value: unknown): Promise<Settings> {
     const response = await fetch("/api/reminders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) });
     const result = await response.json(); if (!response.ok) throw new Error(result.message ?? "Could not update reminders."); return result;

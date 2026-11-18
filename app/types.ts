@@ -11,10 +11,12 @@ export type AuditEntry = Awaited<ReturnType<ReturnType<typeof nutritionData>["re
 export interface GoogleIntegrationStatus {
   available: boolean;
   connected: boolean;
+  accountLabel: string | null;
   status: string | null;
   lastSync: string | null;
   lastError: string | null;
   canReadWeights: boolean;
+  canReadSleep: boolean;
   canWriteWeights: boolean;
   canReadNutrition: boolean;
   canWriteNutrition: boolean;
@@ -25,11 +27,16 @@ export interface InitialAppData {
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
   today: string;
+  calendarToday: string;
+  activeDay: string;
+  waitingForSleep: boolean;
+  showSleep: boolean;
   daily: DailyNutritionView;
   history30: NutritionHistory;
   google: GoogleIntegrationStatus;
   audit: AuditEntry[];
   mcpEnabled: boolean;
+  syncToken: string;
 }
 
 export type AppTab = "Home" | "Nutrition" | "Measurements" | "Settings";

@@ -28,7 +28,7 @@ const tooltipStyle = {
 
 export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
   const [span, setSpan] = useState<7 | 30>(30);
-  const [view, setView] = useState<"energy" | "protein" | "body">("energy");
+  const [view, setView] = useState<"energy" | "protein" | "quality" | "body">("energy");
 
   const data = useMemo(() => {
     const days = span === 7 ? history.days.slice(-7) : history.days;
@@ -51,6 +51,8 @@ export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
         protein: d.totals.proteinG,
         fibre: d.totals.fibreG,
         rollingProtein: roll?.rollingProtein7d ?? null,
+        score: d.nutritionScore?.score ?? null,
+        wholeFoodPct: d.nutritionScore?.wholeFoodPct ?? null,
         weight: weightMap.get(d.day) ?? d.energy?.weightKg ?? null,
         waist: waistMap.get(d.day) ?? null,
       };
@@ -65,6 +67,7 @@ export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
             [
               ["energy", "Intake vs Burn"],
               ["protein", "Protein & Fibre"],
+              ["quality", "Quality & Fibre"],
               ["body", "Weight & Waist"],
             ] as const
           ).map(([k, label]) => (
@@ -119,6 +122,27 @@ export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
               <span style={{ color: "var(--macro-protein)" }}>Protein (g)</span>
               <span style={{ color: "var(--macro-fibre)" }}>Fibre (g)</span>
               <span style={{ color: "var(--accent)" }}>7d avg protein</span>
+            </div>
+          </>
+        )}
+
+        {view === "quality" && (
+          <>
+            <ResponsiveContainer width="100%" height={240}>
+              <ComposedChart data={data} margin={{ left: -12, right: 10, top: 10 }}>
+                <CartesianGrid vertical={false} stroke="var(--border)" />
+                <XAxis dataKey="day" stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <YAxis width={46} domain={[0, 100]} stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Bar name="Nutrition Score (/100)" dataKey="score" fill="var(--teal)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                <Line name="Whole foods (%)" type="monotone" dataKey="wholeFoodPct" stroke="var(--accent)" strokeWidth={2} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
+                <Line name="Fibre (g)" type="monotone" dataKey="fibre" stroke="var(--macro-fibre)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+            <div className="chart-legend">
+              <span style={{ color: "var(--teal)" }}>Nutrition Score (/100)</span>
+              <span style={{ color: "var(--accent)" }}>Whole food (%)</span>
+              <span style={{ color: "var(--macro-fibre)" }}>Fibre (g)</span>
             </div>
           </>
         )}

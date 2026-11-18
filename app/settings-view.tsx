@@ -8,7 +8,7 @@ import { MoonThemeIcon, SunThemeIcon, TwoWaySyncIcon } from "../components/icons
 import { Button } from "../components/ui/button";
 import { authClient } from "../lib/auth-client";
 import { displayUnit, displayValue, metrics, type Reading } from "../lib/metrics";
-import { ENERGY_SOURCES, type EnergySource } from "../lib/nutrition-model";
+import { type EnergySource } from "../lib/nutrition-model";
 import {
   fmtRelativeSync,
   type AuditEntry,
@@ -65,8 +65,11 @@ export function SettingsView({
   const [targetCalories, setTargetCalories] = useState(String(settings.targetToday));
   const [effectiveFrom, setEffectiveFrom] = useState(today);
   const [timezone, setTimezone] = useState(settings.timezone);
-  const [preferredSource, setPreferredSource] = useState<EnergySource>(settings.preferredEnergySource);
+  const [preferredSource, setPreferredSource] = useState<EnergySource>(
+    settings.preferredEnergySource === "apple" ? "manual" : settings.preferredEnergySource,
+  );
   const [twoWaySync, setTwoWaySync] = useState(Boolean(settings.googleTwoWaySync));
+  const [sleepRolloverEnabled, setSleepRolloverEnabled] = useState(Boolean(settings.sleepRolloverEnabled));
 
   const [manualDay, setManualDay] = useState(today);
   const [manualTotal, setManualTotal] = useState("");
@@ -97,8 +100,9 @@ export function SettingsView({
         action: "preferences",
         data: {
           timezone: timezone.trim(),
-          preferredEnergySource: preferredSource,
+          preferredEnergySource: preferredSource === "apple" ? "manual" : preferredSource,
           googleTwoWaySync: twoWaySync,
+          ...(google.connected ? { sleepRolloverEnabled } : {}),
         },
       },
       "Preferences updated.",
@@ -113,7 +117,7 @@ export function SettingsView({
     const steps = numOrNull(manualSteps);
     const weightKg = numOrNull(manualWeight);
     if (totalKcal == null && activeKcal == null && steps == null && weightKg == null) {
-      onMessage("Enter at least one expenditure, steps, or weight value.");
+      onMessage("Enter at least a Total TDEE (kcal) or Weight (kg) value.");
       return;
     }
     void onNutritionAction(
@@ -129,7 +133,7 @@ export function SettingsView({
           complete: totalKcal != null,
         },
       },
-      "Expenditure saved.",
+      "Manual expenditure saved.",
     );
   }
 
@@ -198,14 +202,14 @@ export function SettingsView({
     triggerDownload(data, "text/csv", "mcplogger-measurements.csv");
   }
 
-  const missingWriteScopes = google.connected && (!google.canWriteNutrition || !google.canWriteWeights);
+  const missingWriteScopes = google.connected && (!google.canWriteNutrition || !google.canWriteWeights || !google.canReadSleep);
 
   return (
     <>
       <div className="page-header">
         <div className="page-header-title">
           <h1>Settings</h1>
-          <p style={{ fontSize: ".84rem" }}>Theme, targets, two-way Google Health &amp; MCP</p>
+          <p style={{ fontSize: ".84rem" }}>Theme, targets, manual TDEE, Google Health &amp; MCP</p>
         </div>
         <div className="header-actions">
           <button
@@ -237,9 +241,9 @@ export function SettingsView({
         </div>
       </section>
 
-      {/* Nutrition Targets & Timezone */}
+      {/* Nutrition Targets */}
       <section className="card">
-        <h2>Calorie Targets &amp; Timezone</h2>
+        <h2>Calorie &amp; Macro Targets</h2>
         <MacroTargetEditor initial={settings.macroTargets} today={today} busy={busy} onSave={onNutritionAction} />
 
         {settings.targets.length > 0 && (
@@ -253,8 +257,35 @@ export function SettingsView({
             ))}
           </div>
         )}
+      </section>
 
-        <form onSubmit={submitPreferences} style={{ marginTop: "1rem", borderTop: "1px solid var(--border)", paddingTop: ".9rem" }}>
+      {/* Manual Daily Expenditure (TDEE) — promoted clearly ABOVE source selector & Google Health */}
+      <section className="card">
+        <h2>Manual Daily Expenditure (TDEE)</h2>
+        <p style={{ fontSize: ".8rem", marginBottom: ".65rem" }}>
+          Not using Fitbit? Enter your estimated total daily burn (TDEE, including resting metabolism) for any day to compute accurate calorie deficit without connecting Google Health.
+        </p>
+        <form onSubmit={submitManualEnergy}>
+          <div className="input-grid">
+            <label>Date<input type="date" value={manualDay} onChange={(e) => e.target.value && setManualDay(e.target.value)} /></label>
+            <label>Total TDEE (kcal)<input inputMode="decimal" value={manualTotal} onChange={(e) => setManualTotal(e.target.value)} placeholder="e.g. 2350" /></label>
+            <label>Weight (kg, optional)<input inputMode="decimal" value={manualWeight} onChange={(e) => setManualWeight(e.target.value)} placeholder="e.g. 74.2" /></label>
+          </div>
+          <details style={{ margin: ".55rem 0 .75rem" }}>
+            <summary>Optional active burn &amp; steps</summary>
+            <div className="input-grid" style={{ marginTop: ".5rem" }}>
+              <label>Active burn (kcal, optional)<input inputMode="decimal" value={manualActive} onChange={(e) => setManualActive(e.target.value)} placeholder="e.g. 480" /></label>
+              <label>Steps (optional)<input inputMode="numeric" value={manualSteps} onChange={(e) => setManualSteps(e.target.value)} placeholder="e.g. 9200" /></label>
+            </div>
+          </details>
+          <Button variant="secondary" disabled={busy} type="submit">Save manual expenditure</Button>
+        </form>
+      </section>
+
+      {/* Expenditure Source & Timezone Preferences */}
+      <section className="card">
+        <h2>Expenditure Source &amp; Timezone</h2>
+        <form onSubmit={submitPreferences} style={{ marginTop: ".4rem" }}>
           <div className="input-grid">
             <label>
               Timezone <small>(DST-aware)</small>
@@ -263,22 +294,31 @@ export function SettingsView({
             <label>
               Preferred expenditure source
               <select value={preferredSource} onChange={(e) => setPreferredSource(e.target.value as EnergySource)}>
-                {ENERGY_SOURCES.map((src) => (
-                  <option key={src} value={src}>
-                    {src === "google" ? "Google Health (Fitbit Air)" : src === "apple" ? "Apple Health" : "Manual entry"}
-                  </option>
-                ))}
+                <option value="manual">Manual TDEE entry</option>
+                <option value="google">Google Health (Fitbit Air)</option>
               </select>
             </label>
           </div>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={twoWaySync}
-              onChange={(e) => setTwoWaySync(e.target.checked)}
-            />
-            Auto-push logged meals &amp; weights to Google Health (two-way write)
-          </label>
+          {google.connected && (
+            <>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={twoWaySync}
+                  onChange={(e) => setTwoWaySync(e.target.checked)}
+                />
+                Auto-push logged meals &amp; weights to Google Health (two-way write)
+              </label>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={sleepRolloverEnabled}
+                  onChange={(e) => setSleepRolloverEnabled(e.target.checked)}
+                />
+                Wait for Fitbit sleep before starting next day
+              </label>
+            </>
+          )}
           <Button variant="secondary" disabled={busy} type="submit">Save preferences</Button>
         </form>
       </section>
@@ -289,7 +329,7 @@ export function SettingsView({
           <div>
             <h2>Google Health (Fitbit Air)</h2>
             <p style={{ fontSize: ".8rem" }}>
-              Two-way sync: imports TDEE, active burn, steps, weight, and height; writes meals and weights back.
+              Two-way sync: imports TDEE, sleep, active burn, steps, weight, and height; writes meals and weights back. Each FitnessTrackr account links its own Google account.
             </p>
           </div>
           <span className={`pill ${google.connected ? "teal-soft" : ""}`}>
@@ -307,11 +347,19 @@ export function SettingsView({
           {google.connected && (
             <div style={{ display: "grid", gap: ".45rem", fontSize: ".82rem", color: "var(--muted)" }}>
               <div>
+                {google.accountLabel && (
+                  <>
+                    Account: <strong style={{ color: "var(--text)" }}>{google.accountLabel}</strong> ·{" "}
+                  </>
+                )}
                 Status: <strong style={{ color: "var(--text)" }}>{google.status}</strong> · Last sync:{" "}
                 <strong style={{ color: "var(--text)" }}>{fmtRelativeSync(google.lastSync)}</strong>
               </div>
               <div className="button-row">
                 <span className="pill accent-soft">Read TDEE &amp; Steps</span>
+                <span className={`pill ${google.canReadSleep ? "teal-soft" : "amber-soft"}`}>
+                  {google.canReadSleep ? "Read Sleep (Fitbit Air)" : "Sleep read needs reconnect"}
+                </span>
                 <span className={`pill ${google.canReadWeights ? "teal-soft" : ""}`}>
                   {google.canReadWeights ? "Read Weights & Height" : "Weights read off"}
                 </span>
@@ -343,7 +391,7 @@ export function SettingsView({
                   textDecoration: "none",
                 }}
               >
-                {missingWriteScopes ? "Reconnect for 2-way write permissions" : "Connect Google Health"}
+                {missingWriteScopes ? "Reconnect for sleep & 2-way permissions" : "Connect Google Health"}
               </a>
             )}
             {google.connected && (
@@ -372,7 +420,7 @@ export function SettingsView({
           <div>
             <h3>Import Saved Health Data (Google Health / Takeout / Fitbit)</h3>
             <p style={{ fontSize: ".79rem" }}>
-              Upload or paste saved JSON (Google Health v4 <code>dataPoints</code>/<code>rollupDataPoints</code>, Fitbit Takeout <code>weight-*.json</code>/<code>calories-*.json</code>, Apple Health JSON) or CSV exports. Weights sync into Measurements &amp; Trends without overwriting manual scale entries.
+              Upload or paste saved JSON (Google Health v4 <code>dataPoints</code>/<code>rollupDataPoints</code>/<code>sleep</code>, Fitbit Takeout <code>weight-*.json</code>/<code>calories-*.json</code>/<code>sleep-*.json</code>) or CSV exports. Weights sync into Measurements &amp; Trends without overwriting manual scale entries.
             </p>
           </div>
           <label className="drop-zone">
@@ -392,24 +440,6 @@ export function SettingsView({
           </label>
           <Button variant="secondary" disabled={busy} type="submit">Import saved health data</Button>
         </form>
-
-        {/* Manual Expenditure & Apple Health Fallback */}
-        <details style={{ marginTop: ".85rem", borderTop: "1px solid var(--border)", paddingTop: ".5rem" }}>
-          <summary>Manual TDEE entry &amp; Apple Health fallback</summary>
-          <p style={{ fontSize: ".8rem", margin: ".45rem 0 .7rem" }}>
-            Web PWAs cannot read Apple HealthKit directly. Enter daily TDEE manually below. Never add active calories onto total TDEE.
-          </p>
-          <form onSubmit={submitManualEnergy}>
-            <div className="input-grid">
-              <label>Date<input type="date" value={manualDay} onChange={(e) => e.target.value && setManualDay(e.target.value)} /></label>
-              <label>Total TDEE (kcal)<input inputMode="decimal" value={manualTotal} onChange={(e) => setManualTotal(e.target.value)} placeholder="e.g. 2350" /></label>
-              <label>Active burn (kcal, optional)<input inputMode="decimal" value={manualActive} onChange={(e) => setManualActive(e.target.value)} placeholder="e.g. 480" /></label>
-              <label>Steps (optional)<input inputMode="numeric" value={manualSteps} onChange={(e) => setManualSteps(e.target.value)} placeholder="e.g. 9200" /></label>
-              <label>Weight (kg, optional)<input inputMode="decimal" value={manualWeight} onChange={(e) => setManualWeight(e.target.value)} /></label>
-            </div>
-            <Button variant="secondary" disabled={busy} type="submit">Save manual expenditure</Button>
-          </form>
-        </details>
       </section>
 
       <ReminderSettings />

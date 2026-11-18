@@ -213,6 +213,20 @@ export function NutritionView({
           </button>
         </div>
 
+        <div className="button-row" style={{ marginBottom: ".6rem" }}>
+          <span className={`pill score-pill-${dayView.nutritionScore.grade ?? "none"}`}>
+            Nutrition Score:{" "}
+            <strong className="num">
+              {dayView.nutritionScore.score == null ? "—" : `${dayView.nutritionScore.score}/100 (${dayView.nutritionScore.grade})`}
+            </strong>
+          </span>
+          {dayView.nutritionScore.wholeFoodPct != null && (
+            <span className="pill">
+              Whole food {dayView.nutritionScore.wholeFoodPct}%
+            </span>
+          )}
+        </div>
+
         <div className="macro-grid">
           <div className="energy-cell" style={{ borderColor: "var(--accent-border)" }}>
             <span style={{ color: "var(--macro-protein)", fontWeight: 700 }}>Protein</span>
@@ -275,6 +289,9 @@ export function NutritionView({
                       <span className={`pill ${method === "weighed" ? "accent-soft" : method === "photo_estimate" ? "amber-soft" : ""}`}>
                         {method === "weighed" ? <ScaleWeighedIcon size={12} /> : <SparklePhotoIcon size={12} />}
                         {METHOD_LABELS[method]}
+                      </span>
+                      <span className={`pill score-pill-${meal.qualityScore.grade}`}>
+                        Score {meal.qualityScore.score} · {meal.qualityScore.grade}
                       </span>
                       <span className="num">P {fmtGram(meal.totals.proteinG)}</span>
                       <span className="num">Fib {fmtGram(meal.totals.fibreG)}</span>

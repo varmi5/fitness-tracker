@@ -1,9 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { macroEnergy, macroTargetInput, rebalanceMacros, type MacroPlan } from "../lib/macro-targets";
 export function MacroTargetEditor({ initial, today, busy, onSave }: { initial: MacroPlan; today: string; busy: boolean; onSave: (action: object, message: string) => Promise<boolean> }) {
   const [draft, setDraft] = useState(() => Object.fromEntries(Object.entries(initial).map(([key, val]) => [key, String(val)])));
   const [effectiveFrom, setEffectiveFrom] = useState(today); const [error, setError] = useState("");
+  useEffect(() => {
+    setDraft(Object.fromEntries(Object.entries(initial).map(([key, val]) => [key, String(val)])));
+  }, [initial.calories, initial.proteinG, initial.carbsG, initial.fatG, initial.fibreG]);
   const plan = Object.fromEntries(Object.entries(draft).map(([key, val]) => [key, Number(val)])) as MacroPlan;
   const energy = macroEnergy(plan);
   const labels = [["calories", "Daily calories (kcal)"], ["proteinG", "Protein target (g)"], ["carbsG", "Carbohydrate target (g)"], ["fatG", "Fat target (g)"], ["fibreG", "Fibre target (g)"]];

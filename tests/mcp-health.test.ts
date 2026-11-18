@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
+import { eq } from "drizzle-orm";
 import { PGlite } from "@electric-sql/pglite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -9,7 +10,9 @@ import { drizzle } from "drizzle-orm/pglite";
 import {
   buildGoogleNutritionLogDataPoint,
   buildGoogleWeightDataPoint,
+  disconnectGoogle,
   parseGoogleRollup,
+  parseGoogleSleep,
   parseSavedHealthImport,
   seal,
   unseal,
@@ -24,18 +27,8 @@ const pg = new PGlite();
 const db = drizzle(pg, { schema });
 
 before(async () => {
-  for (const migration of [
-    "001-auth.sql",
-    "002-tracker.sql",
-    "003-preserve-owner-access.sql",
-    "004-nutrition-health.sql",
-    "005-mcp-oauth.sql",
-    "006-google-two-way.sql",
-    "007-food-catalogue.sql",
-    "008-google-meal-sync.sql",
-    "009-macro-targets.sql",
-    "010-push-reminders.sql",
-  ]) {
+  const migrations = (await readdir("migrations")).filter((f) => f.endsWith(".sql")).sort();
+  for (const migration of migrations) {
     await pg.exec(await readFile(`migrations/${migration}`, "utf8"));
   }
   await db.insert(schema.user).values({
@@ -323,4 +316,223 @@ test("Saved Google Health JSON & Fitbit CSV imports sync height/weights without 
   assert.equal(nov15Weight?.value, 75.0);
   assert.equal(nov16Weight?.value, 74.39);
 });
+
+test("User-scoped syncToken updates across MCP meal/target/reminder mutations without leaking across users", async () => {
+  const m1Data = nutritionData(db, "M1");
+  const m2Data = nutritionData(db, "M2");
+  const swServer = fitnessMcp("M1", ["fitness:read", "fitness:write", "fitness:settings:write"], db);
+  const [swClientT, swServerT] = InMemoryTransport.createLinkedPair();
+  const swClient = new Client({ name: "test-sync", version: "1.0.0" });
+  await Promise.all([swServer.connect(swServerT), swClient.connect(swClientT)]);
+
+  const m2Start = await m2Data.syncToken();
+  const tok0 = await m1Data.syncToken();
+
+  const logged = await swClient.callTool({
+    name: "log_meal",
+    arguments: {
+      day: "2026-11-19",
+      time: "13:00",
+      name: "Sync test salmon bowl",
+      category: "lunch",
+      idempotencyKey: "mcp-sync-1",
+      items: [{ name: "Salmon", amount: 150, unit: "g", calories: 312, proteinG: 30, carbsG: 0, fatG: 20, estimationMethod: "weighed" }],
+    },
+  });
+  assert.equal(logged.isError, false);
+  const loggedId = JSON.parse((logged.content as { text: string }[])[0].text).meal.id;
+  const tok1 = await m1Data.syncToken();
+  assert.notEqual(tok1, tok0);
+  assert.equal(await m2Data.syncToken(), m2Start);
+
+  const upd = await swClient.callTool({
+    name: "update_meal",
+    arguments: {
+      id: loggedId,
+      idempotencyKey: "mcp-sync-2",
+      appendItems: [{ name: "Rice", amount: 150, unit: "g", calories: 195, proteinG: 4, carbsG: 42, fatG: 0.5, estimationMethod: "weighed" }],
+    },
+  });
+  assert.equal(upd.isError, false);
+  const tok2 = await m1Data.syncToken();
+  assert.notEqual(tok2, tok1);
+  assert.equal(await m2Data.syncToken(), m2Start);
+
+  const tgt = await swClient.callTool({
+    name: "set_nutrition_targets",
+    arguments: {
+      targets: { calories: 2100, proteinG: 170, carbsG: 204.3, fatG: 67, fibreG: 35, effectiveFrom: "2026-11-19" },
+      confirmation: "APPLY",
+    },
+  });
+  assert.equal(tgt.isError, false);
+  const tok3 = await m1Data.syncToken();
+  assert.notEqual(tok3, tok2);
+  assert.equal(await m2Data.syncToken(), m2Start);
+
+  const rem = await swClient.callTool({
+    name: "set_logging_reminders",
+    arguments: { settings: { enabled: false, times: ["12:30", "19:30"] }, confirmation: "APPLY" },
+  });
+  assert.equal(rem.isError, false);
+  const tok4 = await m1Data.syncToken();
+  assert.notEqual(tok4, tok3);
+  assert.equal(await m2Data.syncToken(), m2Start);
+
+  const del = await swClient.callTool({
+    name: "delete_meal",
+    arguments: { id: loggedId, confirmation: "DELETE" },
+  });
+  assert.equal(del.isError, false);
+  const tok5 = await m1Data.syncToken();
+  assert.notEqual(tok5, tok4);
+  assert.equal(await m2Data.syncToken(), m2Start);
+
+  await Promise.all([swClient.close(), swServer.close()]);
+});
+
+test("parseGoogleSleep deduplicates stage enums, skips short naps, and assigns overnight sleep to wake date", () => {
+  const parsed = parseGoogleSleep({
+    dataPoints: [
+      {
+        name: "users/me/dataTypes/sleep/dataPoints/short-nap",
+        sleep: {
+          interval: {
+            startTime: "2026-11-21T14:00:00Z",
+            endTime: "2026-11-21T14:45:00Z",
+            civilEndTime: { date: { year: 2026, month: 11, day: 21 } },
+          },
+          summary: { minutesAsleep: 45, minutesAwake: 0 },
+        },
+      },
+      {
+        name: "users/me/dataTypes/sleep/dataPoints/overnight-1",
+        sleep: {
+          interval: {
+            startTime: "2026-11-21T23:30:00Z",
+            endTime: "2026-11-22T07:10:00Z",
+            civilEndTime: { date: { year: 2026, month: 11, day: 22 } },
+          },
+          summary: {
+            minutesAsleep: 425,
+            minutesAwake: 35,
+            stagesSummary: [
+              { stage: "DEEP", minutes: 70 },
+              { stage: "DEEP", minutes: 88 },
+              { stage: "REM", minutes: 112 },
+              { stage: "LIGHT", minutes: 225 },
+              { stage: "AWAKE", minutes: 35 },
+            ],
+          },
+        },
+      },
+    ],
+    nextPageToken: "page-2",
+  });
+
+  assert.equal(parsed.nextPageToken, "page-2");
+  assert.equal(parsed.sessions.size, 1);
+  const nov22 = parsed.sessions.get("2026-11-22");
+  assert.ok(nov22);
+  assert.equal(nov22.sessionId, "overnight-1");
+  assert.equal(nov22.minutesAsleep, 425);
+  assert.equal(nov22.deepMinutes, 88);
+  assert.equal(nov22.remMinutes, 112);
+  assert.equal(nov22.lightMinutes, 225);
+  assert.equal(nov22.minutesAwake, 35);
+});
+
+test("Saved sleep import, syncToken sensitivity, multi-user disconnect isolation, and MCP get_daily_log score", async () => {
+  const m1Data = nutritionData(db, "M1");
+  const m2Data = nutritionData(db, "M2");
+
+  // Give M1 a fake Google connection plus both google & manual data, and M2 its own google data.
+  await db.insert(schema.healthIntegration).values([
+    {
+      userId: "M1",
+      provider: "google",
+      credential: seal({ accessToken: "a1", refreshToken: "r1", expiresAt: Date.now() + 999999, scopes: [] }, "M1", "0".repeat(64)),
+      accountLabel: "m1-fitbit@gmail.com",
+      status: "connected",
+    },
+    {
+      userId: "M2",
+      provider: "google",
+      credential: seal({ accessToken: "a2", refreshToken: "r2", expiresAt: Date.now() + 999999, scopes: [] }, "M2", "0".repeat(64)),
+      accountLabel: "m2-fitbit@gmail.com",
+      status: "connected",
+    },
+  ]);
+
+  const tokM1BeforeSleep = await m1Data.syncToken();
+  const tokM2BeforeSleep = await m2Data.syncToken();
+
+  const fitbitSleepJson = JSON.stringify({
+    sleep: [
+      {
+        dateOfSleep: "2026-11-22",
+        startTime: "2026-11-21T23:50:00.000",
+        endTime: "2026-11-22T07:20:00.000",
+        minutesAsleep: 418,
+        minutesAwake: 32,
+        levels: { summary: { deep: { minutes: 90 }, rem: { minutes: 108 }, light: { minutes: 220 } } },
+      },
+    ],
+  });
+  const parsedSleepImport = parseSavedHealthImport(fitbitSleepJson, "Europe/London");
+  assert.equal(parsedSleepImport.sleepEntries.length, 1);
+  const resSleep = await m1Data.importHealthRecords(parsedSleepImport);
+  assert.equal(resSleep.sleepImported, 1);
+
+  const tokM1AfterSleep = await m1Data.syncToken();
+  assert.notEqual(tokM1AfterSleep, tokM1BeforeSleep);
+  assert.equal(await m2Data.syncToken(), tokM2BeforeSleep);
+
+  // Save manual energy for M1 on 2026-11-22 and google data for both M1 and M2
+  await m1Data.saveEnergy({ day: "2026-11-22", source: "manual", totalKcal: 2350, complete: true });
+  await m1Data.saveEnergy({ day: "2026-11-22", source: "google", totalKcal: 2420, steps: 9800, complete: true });
+  await m2Data.saveEnergy({ day: "2026-11-22", source: "google", totalKcal: 2150, steps: 7100, complete: true });
+  await m2Data.importHealthRecords({
+    sleepEntries: [{ day: "2026-11-22", source: "google", minutesAsleep: 390 }],
+  });
+
+  // Verify MCP get_daily_log exposes nutritionScore and sleep cleanly
+  await m1Data.log({
+    day: "2026-11-22",
+    time: "09:00",
+    name: "Porridge & berries",
+    category: "breakfast",
+    items: [
+      { name: "Porridge oats", amount: 60, unit: "g", calories: 222, proteinG: 6.6, carbsG: 36, fatG: 4.8, fibreG: 5.4, estimationMethod: "weighed" },
+      { name: "Blueberries", amount: 80, unit: "g", calories: 46, proteinG: 0.6, carbsG: 11.2, fatG: 0.2, fibreG: 2.0, estimationMethod: "weighed" },
+    ],
+  });
+
+  const readServer = fitnessMcp("M1", ["fitness:read"], db);
+  const [rcT, rsT] = InMemoryTransport.createLinkedPair();
+  const readClient = new Client({ name: "test-score-mcp", version: "1.0.0" });
+  await Promise.all([readServer.connect(rsT), readClient.connect(rcT)]);
+  const logRes = await readClient.callTool({ name: "get_daily_log", arguments: { day: "2026-11-22" } });
+  const logJson = JSON.parse((logRes.content as { text: string }[])[0].text);
+  assert.ok(logJson.nutritionScore);
+  assert.ok(typeof logJson.nutritionScore.score === "number");
+  assert.equal(logJson.sleep?.minutesAsleep, 418);
+  await Promise.all([readClient.close(), readServer.close()]);
+
+  // Disconnecting M1 cleans up M1's Google energy & sleep rows ONLY, leaving M1 manual and all M2 data intact
+  await disconnectGoogle(db, "M1");
+  const m1DayAfterDisconnect = await m1Data.daily("2026-11-22");
+  assert.equal(m1DayAfterDisconnect.sleep, null);
+  assert.equal(m1DayAfterDisconnect.energySources.google, undefined);
+  assert.equal(m1DayAfterDisconnect.energySources.manual?.totalKcal, 2350);
+
+  const m2DayAfterM1Disconnect = await m2Data.daily("2026-11-22");
+  assert.equal(m2DayAfterM1Disconnect.sleep?.minutesAsleep, 390);
+  assert.equal(m2DayAfterM1Disconnect.energySources.google?.totalKcal, 2150);
+
+  const m2HealthRow = await db.select().from(schema.healthIntegration).where(eq(schema.healthIntegration.userId, "M2"));
+  assert.equal(m2HealthRow.length, 1);
+});
+
+
 

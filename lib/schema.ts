@@ -84,6 +84,7 @@ export const nutritionPreference = pgTable("nutrition_preference", {
   timezone: text().notNull().default("Europe/London"),
   preferredEnergySource: text("preferred_energy_source").notNull().default("google"),
   googleTwoWaySync: boolean("google_two_way_sync").notNull().default(false),
+  sleepRolloverEnabled: boolean("sleep_rollover_enabled").notNull().default(true),
 });
 
 export const calorieTarget = pgTable("calorie_target", {
@@ -191,11 +192,31 @@ export const dailyEnergy = pgTable("daily_energy", {
   index("daily_energy_user_day_idx").on(t.userId, t.day),
 ]);
 
+export const dailySleep = pgTable("daily_sleep", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  day: date().notNull(),
+  source: text().notNull(),
+  sessionId: text("session_id"),
+  sleepStart: timestamp("sleep_start", { withTimezone: true }),
+  sleepEnd: timestamp("sleep_end", { withTimezone: true }),
+  minutesAsleep: integer("minutes_asleep").notNull(),
+  minutesAwake: integer("minutes_awake"),
+  deepMinutes: integer("deep_minutes"),
+  remMinutes: integer("rem_minutes"),
+  lightMinutes: integer("light_minutes"),
+  stagesJson: jsonb("stages_json").notNull().default([]),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.source, t.day] }),
+  index("daily_sleep_user_day_idx").on(t.userId, t.day),
+]);
+
 export const healthIntegration = pgTable("health_integration", {
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   provider: text().notNull(),
   connectionId: text("connection_id").notNull().default(sql`gen_random_uuid()::text`),
   credential: text().notNull(),
+  accountLabel: text("account_label"),
   status: text().notNull().default("connected"),
   lastSync: timestamp("last_sync", { withTimezone: true }),
   lastError: text("last_error"),

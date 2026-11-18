@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { nutritionData } from "../lib/nutrition-data";
-import { localDay, localTime, resolveLocalDateTime } from "../lib/nutrition-model";
+import { addDays, localDay, localTime, resolveActiveHomeDay, resolveLocalDateTime } from "../lib/nutrition-model";
+import { classifyFoodQuality, scoreDayNutrition, scoreMealNutrition } from "../lib/nutrition-score";
 import { parseOpenFoodFactsProduct, searchUkStaples } from "../lib/uk-foods";
 import * as schema from "../lib/schema";
 
@@ -12,18 +13,8 @@ const pg = new PGlite();
 const db = drizzle(pg, { schema });
 
 before(async () => {
-  for (const migration of [
-    "001-auth.sql",
-    "002-tracker.sql",
-    "003-preserve-owner-access.sql",
-    "004-nutrition-health.sql",
-    "005-mcp-oauth.sql",
-    "006-google-two-way.sql",
-    "007-food-catalogue.sql",
-    "008-google-meal-sync.sql",
-    "009-macro-targets.sql",
-    "010-push-reminders.sql",
-  ]) {
+  const migrations = (await readdir("migrations")).filter((f) => f.endsWith(".sql")).sort();
+  for (const migration of migrations) {
     await pg.exec(await readFile(`migrations/${migration}`, "utf8"));
   }
   await db.insert(schema.user).values(
@@ -254,3 +245,209 @@ test("strict user isolation across meals, templates, energy, and UK library help
   assert.equal(parsedOff?.calories, 370);
   assert.equal(parsedOff?.fibreG, null);
 });
+
+test("Nutrition quality score classifies whole foods vs NOVA-4 UPFs and keeps missing fibre honest", () => {
+  const whole = classifyFoodQuality({
+    name: "Wild salmon fillet with steamed broccoli & brown rice",
+    calories: 520,
+    proteinG: 42,
+    carbsG: 46,
+    fatG: 18,
+    fibreG: 7.2,
+    gramWeight: 380,
+    estimationMethod: "weighed",
+  });
+  assert.equal(whole.nova, 1);
+  assert.ok(whole.itemScore >= 75);
+
+  const upf = classifyFoodQuality({
+    name: "Cola & glazed doughnut",
+    calories: 540,
+    proteinG: 4,
+    carbsG: 76,
+    fatG: 22,
+    fibreG: 1.1,
+    foodSnapshot: {
+      brand: "SweetCo",
+      foodType: "food",
+      source: "Open Food Facts",
+      qualityMeta: {
+        nutriScoreGrade: "e",
+        novaGroup: 4,
+        sugarsG: 34,
+        saturatedFatG: 11,
+      },
+    },
+  });
+  assert.equal(upf.nova, 4);
+  assert.ok(upf.itemScore < 45);
+  assert.ok(upf.signals.upfCalories > 0);
+
+  const mealScore = scoreMealNutrition(
+    {
+      name: "Omelette",
+      items: [
+        { name: "Eggs", calories: 260, proteinG: 22, carbsG: 2, fatG: 18, fibreG: null, gramWeight: 180 },
+        { name: "Spinach", calories: 25, proteinG: 3, carbsG: 2, fatG: 0.4, fibreG: 2.6, gramWeight: 100 },
+      ],
+      totals: { calories: 285, proteinG: 25, carbsG: 4, fatG: 18.4, fibreG: 2.6, calMin: null, calMax: null, hasUnknownValues: true },
+    },
+    { calories: 2000, proteinG: 150, carbsG: 190, fatG: 65, fibreG: 30 },
+  );
+  assert.ok(mealScore.score != null && mealScore.score >= 70);
+  assert.equal(mealScore.unknownFibreCount, 1);
+  assert.equal(mealScore.fibreG, 2.6);
+
+  const emptyDay = scoreDayNutrition(
+    [],
+    { calories: null, proteinG: null, carbsG: null, fatG: null, fibreG: null, calMin: null, calMax: null, hasUnknownValues: false },
+    2000,
+    { calories: 2000, proteinG: 150, carbsG: 190, fatG: 65, fibreG: 30 },
+  );
+  assert.equal(emptyDay.coverage, "empty");
+  assert.equal(emptyDay.score, null);
+  assert.equal(emptyDay.fibreG, null);
+
+  // Missing fibre across all items stays null (never 0) and is omitted from composite instead of penalized
+  const noFibreDay = scoreDayNutrition(
+    [
+      {
+        name: "Plain omelette",
+        items: [{ name: "Eggs", calories: 320, proteinG: 26, carbsG: 2, fatG: 22, fibreG: null, gramWeight: 220 }],
+      },
+    ],
+    { calories: 320, proteinG: 26, carbsG: 2, fatG: 22, fibreG: null, calMin: null, calMax: null, hasUnknownValues: true },
+    2000,
+    { calories: 2000, proteinG: 150, carbsG: 190, fatG: 65, fibreG: 30 },
+  );
+  assert.equal(noFibreDay.fibreG, null);
+  assert.equal(noFibreDay.fibreSubscore, null);
+  assert.equal(noFibreDay.unknownFibreCount, 1);
+  assert.ok(noFibreDay.score != null && noFibreDay.score >= 60);
+});
+
+test("resolveActiveHomeDay and homeSnapshot gate rollover strictly on Fitbit sleep when enabled", async () => {
+  // Pure model logic
+  assert.deepEqual(
+    resolveActiveHomeDay({
+      calendarToday: "2026-11-25",
+      hasFitbitSleep: false,
+      sleepRolloverEnabled: true,
+      sleepDates: new Set(),
+    }),
+    { activeDay: "2026-11-25", waitingForSleep: false },
+  );
+  assert.deepEqual(
+    resolveActiveHomeDay({
+      calendarToday: "2026-11-25",
+      hasFitbitSleep: true,
+      sleepRolloverEnabled: true,
+      sleepDates: new Set(["2026-11-24"]),
+    }),
+    { activeDay: "2026-11-24", waitingForSleep: true },
+  );
+  assert.deepEqual(
+    resolveActiveHomeDay({
+      calendarToday: "2026-11-25",
+      hasFitbitSleep: true,
+      sleepRolloverEnabled: true,
+      sleepDates: new Set(["2026-11-24", "2026-11-25"]),
+    }),
+    { activeDay: "2026-11-25", waitingForSleep: false },
+  );
+  assert.deepEqual(
+    resolveActiveHomeDay({
+      calendarToday: "2026-11-25",
+      hasFitbitSleep: true,
+      sleepRolloverEnabled: false,
+      sleepDates: new Set(["2026-11-24"]),
+    }),
+    { activeDay: "2026-11-25", waitingForSleep: false },
+  );
+
+  // DB-backed homeSnapshot integration
+  await db.insert(schema.user).values({
+    id: "U3",
+    name: "U3",
+    email: "u3@example.test",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  const u3 = nutritionData(db, "U3");
+  const today = "2026-11-25";
+  const yesterday = addDays(today, -1);
+
+  await u3.log({
+    day: yesterday,
+    time: "23:45",
+    name: "Late yoghurt",
+    category: "snacks",
+    items: [{ name: "Greek yoghurt", amount: 150, unit: "g", calories: 140, proteinG: 15, carbsG: 6, fatG: 5, estimationMethod: "weighed" }],
+  });
+
+  // Without Fitbit sleep capability -> lands directly on calendarToday and hides sleep
+  const nonFitbit = await u3.homeSnapshot(today, { canReadSleep: false });
+  assert.equal(nonFitbit.activeDay, today);
+  assert.equal(nonFitbit.waitingForSleep, false);
+  assert.equal(nonFitbit.showSleep, false);
+
+  // With Fitbit sleep capability before sleep is recorded -> holds on yesterday
+  const waiting = await u3.homeSnapshot(today, { canReadSleep: true });
+  assert.equal(waiting.activeDay, yesterday);
+  assert.equal(waiting.waitingForSleep, true);
+  assert.equal(waiting.showSleep, true);
+  assert.equal(waiting.daily.meals.length, 1);
+
+  // Once wake-day sleep arrives -> advances to calendarToday and attaches sleepStages
+  await u3.importHealthRecords({
+    sleepEntries: [
+      {
+        day: today,
+        source: "google",
+        sleepStart: "2026-11-25T00:15:00.000Z",
+        sleepEnd: "2026-11-25T07:35:00.000Z",
+        minutesAsleep: 410,
+        minutesAwake: 30,
+        deepMinutes: 85,
+        remMinutes: 105,
+        lightMinutes: 220,
+        stagesJson: [
+          { stage: "DEEP", minutes: 85 },
+          { stage: "REM", minutes: 105 },
+          { stage: "LIGHT", minutes: 220 },
+          { stage: "AWAKE", minutes: 30 },
+        ],
+      },
+    ],
+  });
+  const woken = await u3.homeSnapshot(today, { canReadSleep: true });
+  assert.equal(woken.activeDay, today);
+  assert.equal(woken.waitingForSleep, false);
+  assert.equal(woken.daily.sleep?.minutesAsleep, 410);
+  assert.equal(woken.daily.sleep?.deepMinutes, 85);
+});
+
+test("log() defaults omitted day/time to exact current local clock while honoring explicit overrides", async () => {
+  const u2 = nutritionData(db, "U2");
+  const nowBefore = new Date();
+  const autoMeal = await u2.log({
+    name: "Midnight tea & toast",
+    category: "snacks",
+    items: [{ name: "Toast", amount: 60, unit: "g", calories: 160, proteinG: 5, carbsG: 30, fatG: 2, fibreG: 2 }],
+  });
+  const nowAfter = new Date();
+  const expectedDayBefore = localDay(nowBefore, "Europe/London");
+  const expectedDayAfter = localDay(nowAfter, "Europe/London");
+  assert.ok(autoMeal.meal.localDay === expectedDayBefore || autoMeal.meal.localDay === expectedDayAfter);
+
+  const overrideMeal = await u2.log({
+    day: "2026-11-24",
+    time: "00:35",
+    name: "Explicit post-midnight snack",
+    category: "snacks",
+    items: [{ name: "Banana", amount: 110, unit: "g", calories: 98, proteinG: 1.2, carbsG: 25, fatG: 0.3, fibreG: 2.8 }],
+  });
+  assert.equal(overrideMeal.meal.localDay, "2026-11-24");
+  assert.equal(overrideMeal.meal.localTime, "00:35");
+});
+

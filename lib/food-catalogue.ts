@@ -27,7 +27,8 @@ export function cofidFood(row: typeof cofid[number]): FoodDefinition {
   else if (/^bananas?,/.test(name)) { portions.unshift(named("banana", "Medium banana (~120 g peeled)", "item", 120)); defaultPortionId = "banana"; }
   else if (/^apples?, eating/.test(name)) { portions.unshift(named("apple", "Medium apple (~150 g edible)", "item", 150)); defaultPortionId = "apple"; }
   return { id: `cofid:${row.code}`, name: row.name.slice(0, 160), brand: "", foodType: drink ? "drink" : "food", source: "UK CoFID", sourceUrl,
-    basisAmount: 100, basisUnit, calories: row.calories, proteinG: row.proteinG, carbsG: row.carbsG, fatG: row.fatG, fibreG: row.fibreG, portions, defaultPortionId };
+    basisAmount: 100, basisUnit, calories: row.calories, proteinG: row.proteinG, carbsG: row.carbsG, fatG: row.fatG, fibreG: row.fibreG, portions, defaultPortionId,
+    qualityMeta: { cofidGroup: row.group } };
 }
 const index = cofid.map((row) => ({ row, search: row.name.toLowerCase() }));
 export function searchCatalogue(query: string, limit = 16, type?: "food" | "drink") {
