@@ -486,21 +486,6 @@ label small { color: var(--muted); font-weight: 400; }
 .pill.teal-soft { background: rgba(13, 148, 136, 0.12); border-color: rgba(13, 148, 136, 0.34); color: var(--teal); }
 .pill.protein-soft { background: rgba(142, 36, 170, 0.11); border-color: rgba(142, 36, 170, 0.32); color: var(--macro-protein); }
 
-.pill-btn {
-  min-height: 44px;
-  padding: .28rem .75rem;
-  border-radius: 999px;
-  font-size: .78rem;
-  background: var(--surface-soft);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-}
-.pill-btn.active {
-  background: var(--accent-dim);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 .meal-list { display: grid; gap: .6rem; }
 .meal-card {
   border: 1px solid var(--border);

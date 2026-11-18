@@ -61,8 +61,20 @@ try {
     await page.getByRole("heading", { name: "Nutrition Score", exact: true }).waitFor();
 
     const homeText = await page.locator("main").innerText();
-    for (const forbidden of ["Sleep", "Steps", "Active burn", "Apple Health", "Waiting for sleep", "Start today"]) {
-      assert.equal(homeText.includes(forbidden), false, `Home must hide "${forbidden}" when Fitbit is not connected`);
+    for (const forbidden of [
+      "Sleep",
+      "Steps",
+      "Active burn",
+      "Apple Health",
+      "Waiting for sleep",
+      "Start today",
+      "Holding yesterday",
+      "Finish day",
+      "Day complete",
+      "7-Day Net Balance",
+      "30-Day Net Balance",
+    ]) {
+      assert.equal(homeText.includes(forbidden), false, `Home must hide "${forbidden}" in manual mode`);
     }
 
     await prevDayBtn.click();
@@ -114,6 +126,10 @@ try {
     assert.equal(await page.evaluate(() => document.body.style.position), "");
     await page.getByRole("navigation").getByRole("button", { name: "Nutrition", exact: true }).click();
     await page.locator(".meal-card").filter({ hasText: `${name} review meal` }).waitFor();
+    const nutritionText = await page.locator("main").innerText();
+    assert.equal(nutritionText.includes("7-Day Net Balance"), true, "Nutrition must show 7-Day Net Balance");
+    assert.equal(nutritionText.includes("30-Day Net Balance"), true, "Nutrition must show 30-Day Net Balance");
+    assert.equal(nutritionText.includes("Finish logging"), false, "Nutrition must not show Finish logging button");
     await page.getByRole("button", { name: "Edit", exact: true }).last().click();
     await modal.getByLabel("Food name", { exact: true }).fill("oats");
     await modal.getByRole("option").filter({ hasText: "Porridge oats, unfortified" }).first().click();

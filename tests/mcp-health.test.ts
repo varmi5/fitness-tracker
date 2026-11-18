@@ -11,10 +11,16 @@ import {
   buildGoogleNutritionLogDataPoint,
   buildGoogleWeightDataPoint,
   disconnectGoogle,
+  parseGoogleRecovery,
   parseGoogleRollup,
   parseGoogleSleep,
+  parseGoogleWorkouts,
   parseSavedHealthImport,
+  pushMealToGoogle,
+  pushWeightToGoogle,
   seal,
+  syncGoogle,
+  syncGoogleAllUsers,
   unseal,
 } from "../lib/google-health";
 import { allowedMcpCallback } from "../lib/mcp-config";
@@ -42,7 +48,7 @@ before(async () => {
 
 after(async () => pg.close());
 
-test("Google Health dailyRollUp parser handles total-calories, active-energy-burned, steps, and weight", () => {
+test("Google Health dailyRollUp parser handles total-calories, active-energy-burned, steps, weight, active-zone-minutes, distance, and floors", () => {
   const total = parseGoogleRollup("total-calories", {
     rollupDataPoints: [
       { civilStartTime: { date: { year: 2026, month: 11, day: 17 } }, totalCalories: { kcalSum: 2345.6 } },
@@ -70,6 +76,36 @@ test("Google Health dailyRollUp parser handles total-calories, active-energy-bur
     ],
   });
   assert.equal(weight.rows.get("2026-11-17"), 74.25);
+
+  const azm = parseGoogleRollup("active-zone-minutes", {
+    rollupDataPoints: [
+      { civilStartTime: { date: { year: 2026, month: 11, day: 17 } }, activeZoneMinutes: { minutesSum: 41.6 } },
+      { civilStartTime: { date: { year: 2026, month: 11, day: 18 } }, activeZoneMinutes: { activeZoneMinutesSum: 28 } },
+    ],
+  });
+  assert.equal(azm.field, "activeZoneMinutes");
+  assert.equal(azm.rows.get("2026-11-17"), 42);
+  assert.equal(azm.rows.get("2026-11-18"), 28);
+
+  const dist = parseGoogleRollup("distance", {
+    rollupDataPoints: [
+      { civilStartTime: { date: { year: 2026, month: 11, day: 17 } }, distance: { metersSum: 6432.84 } },
+      { civilStartTime: { date: { year: 2026, month: 11, day: 18 } }, distance: { millimetersSum: 5120400 } },
+    ],
+  });
+  assert.equal(dist.field, "distanceMeters");
+  assert.equal(dist.rows.get("2026-11-17"), 6432.8);
+  assert.equal(dist.rows.get("2026-11-18"), 5120.4);
+
+  const floors = parseGoogleRollup("floors", {
+    rollupDataPoints: [
+      { civilStartTime: { date: { year: 2026, month: 11, day: 17 } }, floors: { countSum: 14.2 } },
+      { civilStartTime: { date: { year: 2026, month: 11, day: 18 } }, floors: { floorsSum: 9 } },
+    ],
+  });
+  assert.equal(floors.field, "floors");
+  assert.equal(floors.rows.get("2026-11-17"), 14);
+  assert.equal(floors.rows.get("2026-11-18"), 9);
 });
 
 test("AES-256-GCM seal/unseal enforces user AAD binding", () => {
@@ -463,6 +499,8 @@ test("Saved sleep import, syncToken sensitivity, multi-user disconnect isolation
       status: "connected",
     },
   ]);
+  await m1Data.setPreferences({ timezone: "Europe/London", trackingMode: "fitbit" });
+  await m2Data.setPreferences({ timezone: "Europe/London", trackingMode: "fitbit" });
 
   const tokM1BeforeSleep = await m1Data.syncToken();
   const tokM2BeforeSleep = await m2Data.syncToken();
@@ -488,12 +526,18 @@ test("Saved sleep import, syncToken sensitivity, multi-user disconnect isolation
   assert.notEqual(tokM1AfterSleep, tokM1BeforeSleep);
   assert.equal(await m2Data.syncToken(), tokM2BeforeSleep);
 
-  // Save manual energy for M1 on 2026-11-22 and google data for both M1 and M2
+  // Save manual energy for M1 on 2026-11-22 and google data (including recovery & workouts) for both M1 and M2
   await m1Data.saveEnergy({ day: "2026-11-22", source: "manual", totalKcal: 2350, complete: true });
   await m1Data.saveEnergy({ day: "2026-11-22", source: "google", totalKcal: 2420, steps: 9800, complete: true });
+  await m1Data.importHealthRecords({
+    recoveryEntries: [{ day: "2026-11-22", source: "google", restingHrBpm: 56, hrvRmssdMs: 52 }],
+    workoutEntries: [{ day: "2026-11-22", source: "google", sessionId: "m1-run", title: "Morning Run", durationSeconds: 2400, caloriesKcal: 360 }],
+  });
   await m2Data.saveEnergy({ day: "2026-11-22", source: "google", totalKcal: 2150, steps: 7100, complete: true });
   await m2Data.importHealthRecords({
     sleepEntries: [{ day: "2026-11-22", source: "google", minutesAsleep: 390 }],
+    recoveryEntries: [{ day: "2026-11-22", source: "google", restingHrBpm: 60, hrvRmssdMs: 41 }],
+    workoutEntries: [{ day: "2026-11-22", source: "google", sessionId: "m2-walk", title: "Brisk Walk", durationSeconds: 1500 }],
   });
 
   // Verify MCP get_daily_log exposes nutritionScore and sleep cleanly
@@ -519,19 +563,403 @@ test("Saved sleep import, syncToken sensitivity, multi-user disconnect isolation
   assert.equal(logJson.sleep?.minutesAsleep, 418);
   await Promise.all([readClient.close(), readServer.close()]);
 
-  // Disconnecting M1 cleans up M1's Google energy & sleep rows ONLY, leaving M1 manual and all M2 data intact
+  // Disconnecting M1 cleans up M1's Google energy, sleep, recovery & workout rows ONLY and resets M1 trackingMode to manual
   await disconnectGoogle(db, "M1");
+  const m1PrefAfterDisconnect = await m1Data.settings();
+  assert.equal(m1PrefAfterDisconnect.trackingMode, "manual");
+  assert.equal(m1PrefAfterDisconnect.preferredEnergySource, "manual");
+
   const m1DayAfterDisconnect = await m1Data.daily("2026-11-22");
   assert.equal(m1DayAfterDisconnect.sleep, null);
+  assert.equal(m1DayAfterDisconnect.recovery, null);
+  assert.deepEqual(m1DayAfterDisconnect.workouts, []);
   assert.equal(m1DayAfterDisconnect.energySources.google, undefined);
   assert.equal(m1DayAfterDisconnect.energySources.manual?.totalKcal, 2350);
 
+  const m1RecRows = await db.select().from(schema.dailyRecovery).where(eq(schema.dailyRecovery.userId, "M1"));
+  const m1WktRows = await db.select().from(schema.dailyWorkout).where(eq(schema.dailyWorkout.userId, "M1"));
+  assert.equal(m1RecRows.length, 0);
+  assert.equal(m1WktRows.length, 0);
+
+  const m2PrefAfterM1Disconnect = await m2Data.settings();
+  assert.equal(m2PrefAfterM1Disconnect.trackingMode, "fitbit");
   const m2DayAfterM1Disconnect = await m2Data.daily("2026-11-22");
   assert.equal(m2DayAfterM1Disconnect.sleep?.minutesAsleep, 390);
+  assert.equal(m2DayAfterM1Disconnect.recovery?.restingHrBpm, 60);
+  assert.equal(m2DayAfterM1Disconnect.workouts.length, 1);
   assert.equal(m2DayAfterM1Disconnect.energySources.google?.totalKcal, 2150);
 
   const m2HealthRow = await db.select().from(schema.healthIntegration).where(eq(schema.healthIntegration.userId, "M2"));
   assert.equal(m2HealthRow.length, 1);
+});
+
+test("MCP tools gate Fitbit metrics strictly on trackingMode and drop manual diary-complete copy", async () => {
+  const m2Data = nutritionData(db, "M2");
+  await m2Data.importHealthRecords({
+    energyEntries: [
+      {
+        day: "2026-11-22",
+        source: "google",
+        totalKcal: 2240,
+        activeKcal: 480,
+        steps: 8500,
+        activeZoneMinutes: 34,
+        distanceMeters: 6200,
+        floors: 11,
+        complete: true,
+      },
+    ],
+    recoveryEntries: [
+      { day: "2026-11-22", source: "google", restingHrBpm: 58, hrvRmssdMs: 44, skinTempDeltaC: -0.2 },
+    ],
+    workoutEntries: [
+      { day: "2026-11-22", source: "google", sessionId: "m2-swim", title: "Pool Swim", durationSeconds: 1800, activeZoneMinutes: 22 },
+    ],
+  });
+
+  const server = fitnessMcp("M2", ["fitness:read"], db);
+  const [cT, sT] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-mode-mcp", version: "1.0.0" });
+  await Promise.all([server.connect(sT), client.connect(cT)]);
+
+  // In fitbit mode, M2 sees Fitbit sleep, recovery, workouts, and activeZoneMinutes
+  const fitbitBal = await client.callTool({ name: "get_energy_balance", arguments: { from: "2026-11-22", to: "2026-11-22" } });
+  const fitbitBalJson = JSON.parse((fitbitBal.content as { text: string }[])[0].text);
+  assert.equal(fitbitBalJson.trackingMode, "fitbit");
+  assert.equal(fitbitBalJson.days[0].activeZoneMinutes, 34);
+  assert.equal(fitbitBalJson.days[0].floors, 11);
+  assert.equal(fitbitBalJson.days[0].recovery?.restingHrBpm, 58);
+  assert.equal(fitbitBalJson.days[0].workouts.length, 2); // m2-walk + m2-swim
+  assert.equal(fitbitBalJson.days[0].sleep?.minutesAsleep, 390);
+  assert.equal(fitbitBalJson.days[0].sleep?.sleepEfficiencyPct, null); // minutesAwake was null
+
+  const remRes = await client.callTool({ name: "get_logging_reminders", arguments: {} });
+  const remJson = JSON.parse((remRes.content as { text: string }[])[0].text);
+  assert.ok(Array.isArray(remJson.suggestions));
+  assert.equal(JSON.stringify(remJson.suggestions).toLowerCase().includes("mark the diary complete"), false);
+
+  // Switch M2 to manual mode (even while healthIntegration row remains connected!)
+  await m2Data.setPreferences({ timezone: "Europe/London", trackingMode: "manual" });
+  const settingsRes = await client.callTool({ name: "get_nutrition_settings", arguments: {} });
+  assert.equal(JSON.parse((settingsRes.content as { text: string }[])[0].text).trackingMode, "manual");
+
+  const manualLog = await client.callTool({ name: "get_daily_log", arguments: { day: "2026-11-22" } });
+  const manualLogJson = JSON.parse((manualLog.content as { text: string }[])[0].text);
+  assert.equal(manualLogJson.trackingMode, "manual");
+  assert.equal(manualLogJson.energy, null);
+  assert.equal(manualLogJson.sleep, null);
+  assert.equal(manualLogJson.recovery, null);
+  assert.deepEqual(manualLogJson.workouts, []);
+
+  const manualSum = await client.callTool({ name: "get_fitness_summary", arguments: { from: "2026-11-22", to: "2026-11-22" } });
+  const manualSumJson = JSON.parse((manualSum.content as { text: string }[])[0].text);
+  assert.equal(manualSumJson.trackingMode, "manual");
+  assert.equal(manualSumJson.days[0].activeZoneMinutes, null);
+  assert.equal(manualSumJson.days[0].sleep, null);
+  assert.equal(manualSumJson.days[0].recovery, null);
+  assert.deepEqual(manualSumJson.days[0].workouts, []);
+
+  const manualHist = await client.callTool({ name: "get_nutrition_history", arguments: { from: "2026-11-22", to: "2026-11-22" } });
+  assert.equal(JSON.parse((manualHist.content as { text: string }[])[0].text).trackingMode, "manual");
+
+  await Promise.all([client.close(), server.close()]);
+});
+
+test("parseGoogleRecovery and parseGoogleWorkouts support dailyRollUp and dataPoints envelopes across Fitbit Air metrics", () => {
+  const rhr = parseGoogleRecovery("daily-resting-heart-rate", {
+    dataPoints: [
+      { dailyRestingHeartRate: { date: { year: 2026, month: 11, day: 17 }, beatsPerMinute: 57.6 } },
+    ],
+  }, "Europe/London");
+  assert.equal(rhr.field, "restingHrBpm");
+  assert.equal(rhr.rows.get("2026-11-17"), 57.6);
+
+  const hrv = parseGoogleRecovery("daily-heart-rate-variability", {
+    rollupDataPoints: [
+      { civilStartTime: { date: { year: 2026, month: 11, day: 17 } }, dailyHeartRateVariability: { rmssdMilliseconds: 48.34 } },
+      { civilStartTime: { date: { year: 2026, month: 11, day: 18 } }, heartRateVariability: { rmssdMsAvg: 51.2 } },
+    ],
+  }, "Europe/London");
+  assert.equal(hrv.field, "hrvRmssdMs");
+  assert.equal(hrv.rows.get("2026-11-17"), 48.3);
+  assert.equal(hrv.rows.get("2026-11-18"), 51.2);
+
+  const spo2 = parseGoogleRecovery("daily-oxygen-saturation", {
+    dataPoints: [
+      { dailyOxygenSaturation: { date: { year: 2026, month: 11, day: 17 }, percentageAvg: 97.44 } },
+      { civilStartTime: { date: { year: 2026, month: 11, day: 18 } }, oxygenSaturation: { percentage: 98.1 } },
+    ],
+  }, "Europe/London");
+  assert.equal(spo2.field, "spo2Pct");
+  assert.equal(spo2.rows.get("2026-11-17"), 97.4);
+  assert.equal(spo2.rows.get("2026-11-18"), 98.1);
+
+  const br = parseGoogleRecovery("daily-respiratory-rate", {
+    dataPoints: [
+      { dailyRespiratoryRate: { date: { year: 2026, month: 11, day: 17 }, breathsPerMinute: 14.84 } },
+    ],
+  }, "Europe/London");
+  assert.equal(br.field, "respiratoryRate");
+  assert.equal(br.rows.get("2026-11-17"), 14.8);
+
+  const temp = parseGoogleRecovery("daily-sleep-temperature-derivations", {
+    dataPoints: [
+      { dailySleepTemperatureDerivations: { date: { year: 2026, month: 11, day: 17 }, nightlyTemperatureCelsiusDelta: -0.34 } },
+      { civilStartTime: { date: { year: 2026, month: 11, day: 18 } }, dailySleepTemperatureDerivations: { deltaCelsius: 0 } },
+    ],
+  }, "Europe/London");
+  assert.equal(temp.field, "skinTempDeltaC");
+  assert.equal(temp.rows.get("2026-11-17"), -0.3);
+  assert.equal(temp.rows.get("2026-11-18"), 0);
+
+  const vo2 = parseGoogleRecovery("daily-vo2-max", {
+    dataPoints: [
+      { dailyVo2Max: { date: { year: 2026, month: 11, day: 17 }, vo2Max: 46.28 } },
+      { civilStartTime: { date: { year: 2026, month: 11, day: 18 } }, vo2Max: { mlPerKgPerMin: 47.1 } },
+    ],
+  }, "Europe/London");
+  assert.equal(vo2.field, "vo2Max");
+  assert.equal(vo2.rows.get("2026-11-17"), 46.3);
+  assert.equal(vo2.rows.get("2026-11-18"), 47.1);
+
+  const bf = parseGoogleRecovery("body-fat", {
+    dataPoints: [
+      { bodyFat: { sampleTime: { physicalTime: "2026-11-17T08:00:00Z" }, percentage: 16.44 } },
+    ],
+  }, "Europe/London");
+  assert.equal(bf.field, "bodyFatPct");
+  assert.equal(bf.rows.get("2026-11-17"), 16.4);
+
+  const workouts = parseGoogleWorkouts({
+    dataPoints: [
+      {
+        name: "users/me/dataTypes/exercise/dataPoints/ex-run-1",
+        exercise: {
+          interval: {
+            startTime: "2026-11-17T07:15:00Z",
+            endTime: "2026-11-17T08:00:00Z",
+            civilStartTime: { date: { year: 2026, month: 11, day: 17 }, time: { hours: 7, minutes: 15 } },
+          },
+          exerciseType: "RUNNING",
+          displayName: "Tempo Run",
+          activeDuration: "2700s",
+          metricsSummary: {
+            caloriesKcal: 485.4,
+            distanceMeters: 7520.6,
+            averageHeartRateBpm: 158.2,
+            activeZoneMinutes: 39.4,
+          },
+        },
+      },
+    ],
+    nextPageToken: "next-wkt",
+  }, "Europe/London");
+  assert.equal(workouts.nextPageToken, "next-wkt");
+  assert.equal(workouts.workouts.length, 1);
+  assert.deepEqual(workouts.workouts[0], {
+    day: "2026-11-17",
+    sessionId: "ex-run-1",
+    startTime: "2026-11-17T07:15:00.000Z",
+    endTime: "2026-11-17T08:00:00.000Z",
+    exerciseType: "RUNNING",
+    title: "Tempo Run",
+    durationSeconds: 2700,
+    caloriesKcal: 485.4,
+    distanceMeters: 7520.6,
+    avgHrBpm: 158.2,
+    activeZoneMinutes: 39,
+  });
+});
+
+test("parseSavedHealthImport and importHealthRecords persist extended Fitbit CSV and JSON recovery & workout records", async () => {
+  const m1Data = nutritionData(db, "M1");
+  await m1Data.setPreferences({ timezone: "Europe/London", trackingMode: "fitbit", preferredEnergySource: "google" });
+
+  const csvFitbit = [
+    "Date,Calories Burned,Activity Calories,Steps,Active Zone Minutes,Distance,Floors,Resting Heart Rate,HRV,SpO2,Body Fat",
+    "2026-11-23,2480,610,11200,46,8400,15,55,54.2,97.8,15.6",
+  ].join("\n");
+  const parsedCsv = parseSavedHealthImport(csvFitbit, "Europe/London");
+  assert.equal(parsedCsv.energyEntries.length, 1);
+  assert.equal(parsedCsv.energyEntries[0].activeZoneMinutes, 46);
+  assert.equal(parsedCsv.energyEntries[0].distanceMeters, 8400);
+  assert.equal(parsedCsv.energyEntries[0].floors, 15);
+  assert.equal(parsedCsv.recoveryEntries.length, 1);
+  assert.equal(parsedCsv.recoveryEntries[0].restingHrBpm, 55);
+  assert.equal(parsedCsv.recoveryEntries[0].hrvRmssdMs, 54.2);
+  assert.equal(parsedCsv.recoveryEntries[0].spo2Pct, 97.8);
+  assert.equal(parsedCsv.recoveryEntries[0].bodyFatPct, 15.6);
+
+  const jsonFitbit = JSON.stringify({
+    dailyRecovery: [
+      {
+        day: "2026-11-24",
+        restingHrBpm: 54,
+        hrvRmssdMs: 58.5,
+        spo2Pct: 98.2,
+        respiratoryRate: 14.4,
+        skinTempDeltaC: -0.1,
+        vo2Max: 47.5,
+        bodyFatPct: 15.4,
+      },
+    ],
+    workouts: [
+      {
+        day: "2026-11-24",
+        sessionId: "json-cycle-1",
+        title: "Indoor Cycling",
+        exerciseType: "BIKING",
+        startTime: "2026-11-24T18:00:00Z",
+        endTime: "2026-11-24T18:45:00Z",
+        durationSeconds: 2700,
+        caloriesKcal: 410,
+        distanceMeters: 18500,
+        avgHrBpm: 146,
+        activeZoneMinutes: 35,
+      },
+    ],
+  });
+  const parsedJson = parseSavedHealthImport(jsonFitbit, "Europe/London");
+  assert.equal(parsedJson.recoveryEntries.length, 1);
+  assert.equal(parsedJson.workoutEntries.length, 1);
+
+  const resCsv = await m1Data.importHealthRecords(parsedCsv);
+  assert.equal(resCsv.energyImported, 1);
+  assert.equal(resCsv.recoveryImported, 1);
+
+  const resJson = await m1Data.importHealthRecords(parsedJson);
+  assert.equal(resJson.recoveryImported, 1);
+  assert.equal(resJson.workoutsImported, 1);
+
+  const nov23 = await m1Data.daily("2026-11-23");
+  assert.equal(nov23.energy?.activeZoneMinutes, 46);
+  assert.equal(nov23.energy?.distanceMeters, 8400);
+  assert.equal(nov23.energy?.floors, 15);
+  assert.equal(nov23.recovery?.restingHrBpm, 55);
+  assert.equal(nov23.recovery?.hrvRmssdMs, 54.2);
+
+  const nov24 = await m1Data.daily("2026-11-24");
+  assert.equal(nov24.recovery?.vo2Max, 47.5);
+  assert.equal(nov24.recovery?.skinTempDeltaC, -0.1);
+  assert.equal(nov24.workouts.length, 1);
+  assert.equal(nov24.workouts[0].title, "Indoor Cycling");
+  assert.equal(nov24.workouts[0].activeZoneMinutes, 35);
+});
+
+test("syncGoogle ingests Fitbit Air metrics best-effort and syncGoogleAllUsers/push skip manual trackingMode users", async () => {
+  process.env.FITNESS_INTEGRATION_KEY = "0".repeat(64);
+  const m1Data = nutritionData(db, "M1");
+  const m2Data = nutritionData(db, "M2");
+
+  const fullScopes = [
+    "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly",
+    "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
+    "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
+    "https://www.googleapis.com/auth/googlehealth.nutrition.writeonly",
+    "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.writeonly",
+  ];
+
+  await db
+    .insert(schema.healthIntegration)
+    .values({
+      userId: "M1",
+      provider: "google",
+      credential: seal({ accessToken: "tok-m1", refreshToken: "ref-m1", expiresAt: Date.now() + 3600000, scopes: fullScopes }, "M1"),
+      accountLabel: "m1@example.test",
+      status: "connected",
+    })
+    .onConflictDoUpdate({
+      target: [schema.healthIntegration.userId, schema.healthIntegration.provider],
+      set: {
+        credential: seal({ accessToken: "tok-m1", refreshToken: "ref-m1", expiresAt: Date.now() + 3600000, scopes: fullScopes }, "M1"),
+        status: "connected",
+      },
+    });
+
+  await m1Data.setPreferences({ timezone: "Europe/London", trackingMode: "fitbit", preferredEnergySource: "google", googleTwoWaySync: true });
+  await m2Data.setPreferences({ timezone: "Europe/London", trackingMode: "manual", preferredEnergySource: "manual", googleTwoWaySync: true });
+
+  const originalFetch = globalThis.fetch;
+  const fetchedUrls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    fetchedUrls.push(url);
+    if (url.includes("/total-calories/dataPoints:dailyRollUp")) {
+      return Response.json({ rollupDataPoints: [{ civilStartTime: { date: { year: 2026, month: 11, day: 17 } }, totalCalories: { kcalSum: 2510 } }] });
+    }
+    if (url.includes("/active-energy-burned/dataPoints:dailyRollUp")) {
+      return Response.json({ rollupDataPoints: [{ civilStartTime: { date: { year: 2026, month: 11, day: 17 } }, activeEnergyBurned: { kcalSum: 640 } }] });
+    }
+    if (url.includes("/steps/dataPoints:dailyRollUp")) {
+      return Response.json({ rollupDataPoints: [{ civilStartTime: { date: { year: 2026, month: 11, day: 17 } }, steps: { countSum: 10450 } }] });
+    }
+    if (url.includes("/active-zone-minutes/dataPoints:dailyRollUp")) {
+      return Response.json({ rollupDataPoints: [{ civilStartTime: { date: { year: 2026, month: 11, day: 17 } }, activeZoneMinutes: { minutesSum: 49 } }] });
+    }
+    if (url.includes("/distance/dataPoints:dailyRollUp")) {
+      return Response.json({ rollupDataPoints: [{ civilStartTime: { date: { year: 2026, month: 11, day: 17 } }, distance: { metersSum: 7890.2 } }] });
+    }
+    if (url.includes("/floors/dataPoints:dailyRollUp")) {
+      return new Response("Forbidden optional metric", { status: 403 }); // Verify optional endpoint failure never fails sync!
+    }
+    if (url.includes("/daily-resting-heart-rate/")) {
+      return Response.json({ dataPoints: [{ dailyRestingHeartRate: { date: { year: 2026, month: 11, day: 17 }, beatsPerMinute: 56 } }] });
+    }
+    if (url.includes("/daily-heart-rate-variability/")) {
+      return Response.json({ dataPoints: [{ dailyHeartRateVariability: { date: { year: 2026, month: 11, day: 17 }, rmssdMilliseconds: 53.4 } }] });
+    }
+    if (url.includes("/exercise/dataPoints")) {
+      return Response.json({
+        dataPoints: [
+          {
+            name: "users/me/dataTypes/exercise/dataPoints/sync-wkt-1",
+            exercise: {
+              interval: { startTime: "2026-11-17T17:00:00Z", endTime: "2026-11-17T17:40:00Z" },
+              exerciseType: "STRENGTH_TRAINING",
+              displayName: "Kettlebell Session",
+              activeDuration: "2400s",
+              metricsSummary: { caloriesKcal: 310, averageHeartRateBpm: 134, activeZoneMinutes: 28 },
+            },
+          },
+        ],
+      });
+    }
+    return Response.json({ rollupDataPoints: [], dataPoints: [] });
+  }) as typeof fetch;
+
+  try {
+    const syncRes = await syncGoogle(db, "M1", "2026-11-16", "2026-11-17");
+    assert.equal(syncRes.syncedDays, 1);
+    assert.equal(syncRes.syncedRecoveryDays, 1);
+    assert.equal(syncRes.syncedWorkouts, 1);
+
+    const nov17 = await m1Data.daily("2026-11-17");
+    assert.equal(nov17.energy?.totalKcal, 2510);
+    assert.equal(nov17.energy?.activeZoneMinutes, 49);
+    assert.equal(nov17.energy?.distanceMeters, 7890.2);
+    assert.equal(nov17.recovery?.restingHrBpm, 56);
+    assert.equal(nov17.recovery?.hrvRmssdMs, 53.4);
+    assert.equal(nov17.workouts.length, 1);
+    assert.equal(nov17.workouts[0].title, "Kettlebell Session");
+
+    // syncGoogleAllUsers must sync M1 (fitbit mode) and skip M2 (manual mode)
+    await syncGoogleAllUsers(db);
+    const m2Rec = await db.select().from(schema.dailyRecovery).where(eq(schema.dailyRecovery.userId, "M2"));
+    assert.equal(m2Rec.some((r) => r.day === "2026-11-17"), false);
+
+    // Switching M1 to manual mode must cause pushWeightToGoogle and pushMealToGoogle to skip network calls and queueing
+    await m1Data.setPreferences({ timezone: "Europe/London", trackingMode: "manual", preferredEnergySource: "manual", googleTwoWaySync: true });
+    const existingMeal = (await m1Data.daily("2026-11-22")).meals[0];
+    fetchedUrls.length = 0;
+    const wtPush = await pushWeightToGoogle(db, "M1", { day: "2026-11-17", weightKg: 74.0 });
+    const mealPush = await pushMealToGoogle(db, "M1", existingMeal);
+    assert.equal(wtPush.pushed, false);
+    assert.equal(mealPush.queued, false);
+    assert.equal(fetchedUrls.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.FITNESS_INTEGRATION_KEY;
+  }
 });
 
 

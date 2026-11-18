@@ -2,13 +2,13 @@
 
 import { ReminderSettings } from "./reminder-settings";
 import { MacroTargetEditor } from "./macro-target-editor";
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { ArrowDownToLine, Copy, Fingerprint, RefreshCw, Upload } from "lucide-react";
 import { MoonThemeIcon, SunThemeIcon, TwoWaySyncIcon } from "../components/icons";
 import { Button } from "../components/ui/button";
 import { authClient } from "../lib/auth-client";
 import { displayUnit, displayValue, metrics, type Reading } from "../lib/metrics";
-import { type EnergySource } from "../lib/nutrition-model";
+import { type EnergySource, type TrackingMode } from "../lib/nutrition-model";
 import {
   fmtRelativeSync,
   type AuditEntry,
@@ -62,14 +62,32 @@ export function SettingsView({
   onDisconnectGoogle,
   onMessage,
 }: SettingsViewProps) {
+  const resolvedInitialMode: TrackingMode =
+    settings.trackingMode ?? (settings.preferredEnergySource === "google" ? "fitbit" : "manual");
   const [targetCalories, setTargetCalories] = useState(String(settings.targetToday));
   const [effectiveFrom, setEffectiveFrom] = useState(today);
   const [timezone, setTimezone] = useState(settings.timezone);
+  const [trackingMode, setTrackingMode] = useState<TrackingMode>(resolvedInitialMode);
   const [preferredSource, setPreferredSource] = useState<EnergySource>(
-    settings.preferredEnergySource === "apple" ? "manual" : settings.preferredEnergySource,
+    resolvedInitialMode === "fitbit" ? "google" : "manual",
   );
   const [twoWaySync, setTwoWaySync] = useState(Boolean(settings.googleTwoWaySync));
-  const [sleepRolloverEnabled, setSleepRolloverEnabled] = useState(Boolean(settings.sleepRolloverEnabled));
+
+  useEffect(() => {
+    const nextMode: TrackingMode =
+      settings.trackingMode ?? (settings.preferredEnergySource === "google" ? "fitbit" : "manual");
+    setTimezone(settings.timezone);
+    setTrackingMode(nextMode);
+    setPreferredSource(nextMode === "fitbit" ? "google" : "manual");
+    setTwoWaySync(Boolean(settings.googleTwoWaySync));
+    setTargetCalories(String(settings.targetToday));
+  }, [
+    settings.timezone,
+    settings.trackingMode,
+    settings.preferredEnergySource,
+    settings.googleTwoWaySync,
+    settings.targetToday,
+  ]);
 
   const [manualDay, setManualDay] = useState(today);
   const [manualTotal, setManualTotal] = useState("");
@@ -83,6 +101,11 @@ export function SettingsView({
   const waistMetric = metrics[0];
   const mcpUrl = typeof window !== "undefined" ? `${window.location.origin}/mcp` : "/mcp";
 
+  function selectMode(mode: TrackingMode) {
+    setTrackingMode(mode);
+    setPreferredSource(mode === "fitbit" ? "google" : "manual");
+  }
+
   function submitTarget(e: FormEvent) {
     e.preventDefault();
     const cal = Number(targetCalories);
@@ -95,14 +118,16 @@ export function SettingsView({
 
   function submitPreferences(e: FormEvent) {
     e.preventDefault();
+    const resolvedMode: TrackingMode = trackingMode === "fitbit" || preferredSource === "google" ? "fitbit" : "manual";
+    const resolvedSource: EnergySource = resolvedMode === "fitbit" ? "google" : "manual";
     void onNutritionAction(
       {
         action: "preferences",
         data: {
           timezone: timezone.trim(),
-          preferredEnergySource: preferredSource === "apple" ? "manual" : preferredSource,
+          trackingMode: resolvedMode,
+          preferredEnergySource: resolvedSource,
           googleTwoWaySync: twoWaySync,
-          ...(google.connected ? { sleepRolloverEnabled } : {}),
         },
       },
       "Preferences updated.",
@@ -284,8 +309,34 @@ export function SettingsView({
 
       {/* Expenditure Source & Timezone Preferences */}
       <section className="card">
-        <h2>Expenditure Source &amp; Timezone</h2>
-        <form onSubmit={submitPreferences} style={{ marginTop: ".4rem" }}>
+        <div className="split-row">
+          <div>
+            <h2>Expenditure Source &amp; Timezone</h2>
+            <p style={{ fontSize: ".8rem" }}>
+              Choose whether FitnessTrackr runs in Manual TDEE mode or Fitbit Air (Google Health) mode across Home, Nutrition &amp; Measurements.
+            </p>
+          </div>
+          <span className={`pill ${trackingMode === "fitbit" ? "teal-soft" : "accent-soft"}`}>
+            {trackingMode === "fitbit" ? "Fitbit Air mode" : "Manual mode"}
+          </span>
+        </div>
+        <form onSubmit={submitPreferences} style={{ marginTop: ".6rem" }}>
+          <div className="segments" role="group" aria-label="Tracking mode">
+            <button
+              type="button"
+              aria-pressed={trackingMode === "manual"}
+              onClick={() => selectMode("manual")}
+            >
+              Manual TDEE entry
+            </button>
+            <button
+              type="button"
+              aria-pressed={trackingMode === "fitbit"}
+              onClick={() => selectMode("fitbit")}
+            >
+              Google Health (Fitbit Air)
+            </button>
+          </div>
           <div className="input-grid">
             <label>
               Timezone <small>(DST-aware)</small>
@@ -293,31 +344,24 @@ export function SettingsView({
             </label>
             <label>
               Preferred expenditure source
-              <select value={preferredSource} onChange={(e) => setPreferredSource(e.target.value as EnergySource)}>
+              <select
+                value={preferredSource}
+                onChange={(e) => selectMode(e.target.value === "google" ? "fitbit" : "manual")}
+              >
                 <option value="manual">Manual TDEE entry</option>
                 <option value="google">Google Health (Fitbit Air)</option>
               </select>
             </label>
           </div>
-          {google.connected && (
-            <>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={twoWaySync}
-                  onChange={(e) => setTwoWaySync(e.target.checked)}
-                />
-                Auto-push logged meals &amp; weights to Google Health (two-way write)
-              </label>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={sleepRolloverEnabled}
-                  onChange={(e) => setSleepRolloverEnabled(e.target.checked)}
-                />
-                Wait for Fitbit sleep before starting next day
-              </label>
-            </>
+          {google.connected && trackingMode === "fitbit" && (
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={twoWaySync}
+                onChange={(e) => setTwoWaySync(e.target.checked)}
+              />
+              Auto-push logged meals &amp; weights to Google Health (two-way write)
+            </label>
           )}
           <Button variant="secondary" disabled={busy} type="submit">Save preferences</Button>
         </form>
@@ -329,11 +373,17 @@ export function SettingsView({
           <div>
             <h2>Google Health (Fitbit Air)</h2>
             <p style={{ fontSize: ".8rem" }}>
-              Two-way sync: imports TDEE, sleep, active burn, steps, weight, and height; writes meals and weights back. Each FitnessTrackr account links its own Google account.
+              Two-way sync: imports TDEE, sleep, recovery/vitals, workouts, active burn, steps, weight, and height; writes meals and weights back. Each FitnessTrackr account links its own Google account.
             </p>
           </div>
-          <span className={`pill ${google.connected ? "teal-soft" : ""}`}>
-            {google.connected ? "Connected" : google.available ? "Ready to link" : "Env vars not set"}
+          <span className={`pill ${google.connected ? (trackingMode === "fitbit" ? "teal-soft" : "amber-soft") : ""}`}>
+            {google.connected
+              ? trackingMode === "fitbit"
+                ? "Connected · Active"
+                : "Connected · Manual mode"
+              : google.available
+                ? "Ready to link"
+                : "Env vars not set"}
           </span>
         </div>
 

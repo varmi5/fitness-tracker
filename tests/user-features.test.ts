@@ -9,6 +9,7 @@ import { macroEnergy, rebalanceMacros } from "../lib/macro-targets";
 import { nutritionData } from "../lib/nutrition-data";
 import { dueTimes, processReminders, registerPush, saveReminderSettings, reminderSettings, unregisterPush } from "../lib/reminders";
 import { processGoogleMeals } from "../lib/google-meal-worker";
+import { processBackgroundGoogleMeals } from "../lib/background-work";
 import { seal } from "../lib/google-health";
 import * as schema from "../lib/schema";
 const pg = new PGlite(); const db = drizzle(pg, { schema });
@@ -45,7 +46,7 @@ test("Google meal retries reuse IDs, replacement confirms before cleanup and del
  process.env.FITNESS_INTEGRATION_KEY=randomBytes(32).toString("hex");
  const a=nutritionData(db,"USER-A"); const b=nutritionData(db,"USER-B");
  await db.insert(schema.healthIntegration).values({userId:"USER-A",provider:"google",credential:seal({accessToken:"synthetic",refreshToken:"synthetic",expiresAt:Date.now()+3600000,scopes:["https://www.googleapis.com/auth/googlehealth.nutrition.writeonly"]},"USER-A")});
- await a.setPreferences({timezone:"Europe/London",preferredEnergySource:"google",googleTwoWaySync:true});
+ await a.setPreferences({timezone:"Europe/London",trackingMode:"fitbit",preferredEnergySource:"google",googleTwoWaySync:true});
  const logged=await a.log({day:"2026-11-17",time:"08:00",name:"Eggs",category:"breakfast",items:[{name:"Egg",amount:1,unit:"item",calories:80}]});
  await b.log({day:"2026-11-17",time:"08:00",name:"Private",category:"breakfast",items:[{name:"Egg",amount:1,unit:"item",calories:80}]});
  assert.equal((await db.select().from(schema.googleMealSync)).length,1);
@@ -57,6 +58,13 @@ test("Google meal retries reuse IDs, replacement confirms before cleanup and del
   return remote.has(name)?Response.json({name}):Response.json({}, {status:404});
  }) as typeof fetch;
  try {
+  await a.setPreferences({timezone:"Europe/London",trackingMode:"manual",preferredEnergySource:"manual",googleTwoWaySync:true});
+  const skippedBg = await processBackgroundGoogleMeals(db, 1);
+  assert.equal(skippedBg.synced, 0);
+  assert.equal(skippedBg.skippedUsers, 1);
+  assert.equal(remote.size, 0);
+
+  await a.setPreferences({timezone:"Europe/London",trackingMode:"fitbit",preferredEnergySource:"google",googleTwoWaySync:true});
   await processGoogleMeals(db,"USER-A",1); assert.equal(remote.size,1);
   await db.update(schema.googleMealSync).set({nextAttemptAt:new Date(0)}); await processGoogleMeals(db,"USER-A",1); assert.equal(posts,1);
   await a.update({id:logged.meal.id,appendItems:[{name:"Tea",amount:1,unit:"cup",calories:5}],idempotencyKey:"tea"});
@@ -65,3 +73,4 @@ test("Google meal retries reuse IDs, replacement confirms before cleanup and del
   await processGoogleMeals(db,"USER-A",1);assert.equal(remote.size,0);assert.equal((await db.select().from(schema.googleMealSync)).length,0);
  } finally {globalThis.fetch=original;delete process.env.FITNESS_INTEGRATION_KEY;}
 });
+

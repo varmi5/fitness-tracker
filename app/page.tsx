@@ -44,7 +44,6 @@ export default async function Home() {
         today: home.calendarToday,
         calendarToday: home.calendarToday,
         activeDay: home.activeDay,
-        waitingForSleep: home.waitingForSleep,
         showSleep: home.showSleep,
         daily: home.daily,
         history30: home.history30,
