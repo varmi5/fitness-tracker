@@ -83,10 +83,12 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
 
   const balance = async ({ from, to }: z.output<typeof historyInput>) => {
     const result = await data.history(from, to);
+    const fitbit = result.trackingMode === "fitbit";
     return {
       from: result.from,
       to: result.to,
       timezone: result.timezone,
+      trackingMode: result.trackingMode,
       preferredEnergySource: result.preferredEnergySource,
       totalDays: result.totalDays,
       completeNutritionDays: result.completeNutritionDays,
@@ -94,7 +96,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
       missingDataDays: result.missingDataDays,
       cumulativeDeficit: result.cumulativeDeficit,
       averages: result.averages,
-      days: result.days.map(({ day, mealCount, totals, target, remaining, diaryComplete, energy, deficit, provisional }) => ({
+      days: result.days.map(({ day, mealCount, totals, target, remaining, diaryComplete, energy, sleep, recovery, workouts, deficit, provisional }) => ({
         day,
         mealCount,
         diaryComplete,
@@ -105,7 +107,13 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
         totalExpenditureKcal: energy?.totalKcal ?? null,
         activeExpenditureKcal: energy?.activeKcal ?? null,
         steps: energy?.steps ?? null,
+        activeZoneMinutes: fitbit ? (energy?.activeZoneMinutes ?? null) : null,
+        distanceMeters: fitbit ? (energy?.distanceMeters ?? null) : null,
+        floors: fitbit ? (energy?.floors ?? null) : null,
         energySource: energy?.source ?? null,
+        sleep: fitbit ? sleep : null,
+        recovery: fitbit ? recovery : null,
+        workouts: fitbit ? workouts : [],
         deficit,
         provisional,
       })),
@@ -122,7 +130,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
 
   register(
     "get_daily_log",
-    "Retrieve all meals, items, nutritional totals (including fibre), Nutrition Quality Score, target, remaining allowance, sleep (when synced), and energy balance for a local calendar date (YYYY-MM-DD).",
+    "Retrieve all meals, items, nutritional totals (including fibre), Nutrition Quality Score, target, remaining allowance, sleep/recovery/workouts (when Fitbit tracking mode is active), and energy balance for a local calendar date (YYYY-MM-DD).",
     z.object({ day: z.iso.date() }),
     ({ day }) => data.daily(day),
     { summarize: ({ day }) => day },
@@ -138,6 +146,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
         from: result.from,
         to: result.to,
         timezone: result.timezone,
+        trackingMode: result.trackingMode,
         totalDays: result.totalDays,
         completeNutritionDays: result.completeNutritionDays,
         missingDataDays: result.missingDataDays,
@@ -173,7 +182,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
 
   register(
     "get_nutrition_settings",
-    "Retrieve current and historical calorie targets, user timezone (default Europe/London), and preferred energy expenditure source.",
+    "Retrieve current and historical calorie targets, user timezone (default Europe/London), tracking mode (manual or fitbit), and preferred energy expenditure source.",
     z.object({}),
     () => data.settings(),
   );
@@ -220,7 +229,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
     { write: true, permission: settingsScope, summarize: ({ targets }) => `nutrition targets from ${targets.effectiveFrom}` });
   register("get_logging_reminders", "Retrieve this user's opt-in reminder schedule and today's diary status. Reports only recorded meals, not assumptions about meals eaten. Does not create a ChatGPT scheduled task.",
     z.object({}), async () => { const settings = await data.settings(); const day = new Intl.DateTimeFormat("en-CA", { timeZone: settings.timezone }).format(new Date()); const log = await data.daily(day); return { reminders: await reminderSettings(db, userId), day, diaryComplete: log.diaryComplete,
-      loggedMeals: log.meals.map((meal) => ({ id: meal.id, name: meal.name, category: meal.category })), suggestions: log.diaryComplete ? [] : ["Log any meals or drinks you have not recorded, then mark the diary complete when finished."] }; });
+      loggedMeals: log.meals.map((meal) => ({ id: meal.id, name: meal.name, category: meal.category })), suggestions: log.diaryComplete ? [] : ["Log any meals or drinks you have not recorded."] }; });
   register("set_logging_reminders", "Change only this user's opt-in reminder schedule after their explicit request, with confirmation='APPLY'. Phone notification permission must be granted separately in the installed FitnessTrackr app.",
     z.object({ settings: reminderInput, confirmation: z.literal("APPLY") }), ({ settings }) => saveReminderSettings(db, userId, settings),
     { write: true, permission: settingsScope, summarize: () => "reminder schedule" });

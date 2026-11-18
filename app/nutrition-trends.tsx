@@ -12,12 +12,15 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { NutritionHistory, TrackerSnapshot } from "./types";
+import type { NutritionHistory, TrackingMode, TrackerSnapshot } from "./types";
 
 interface NutritionTrendsProps {
   history: NutritionHistory;
   tracker: TrackerSnapshot;
+  trackingMode?: TrackingMode;
 }
+
+type TrendView = "energy" | "protein" | "quality" | "body" | "recovery" | "activity";
 
 const tooltipStyle = {
   background: "var(--surface)",
@@ -26,9 +29,26 @@ const tooltipStyle = {
   color: "var(--text)",
 };
 
-export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
+export function NutritionTrends({ history, tracker, trackingMode }: NutritionTrendsProps) {
   const [span, setSpan] = useState<7 | 30>(30);
-  const [view, setView] = useState<"energy" | "protein" | "quality" | "body">("energy");
+  const [view, setView] = useState<TrendView>("energy");
+
+  const isFitbitMode = (trackingMode ?? history.trackingMode) === "fitbit";
+  const activeView: TrendView =
+    !isFitbitMode && (view === "recovery" || view === "activity") ? "energy" : view;
+
+  const metricTabs = useMemo(() => {
+    const base: [TrendView, string][] = [
+      ["energy", "Intake vs Burn"],
+      ["protein", "Protein & Fibre"],
+      ["quality", "Quality & Fibre"],
+      ["body", "Weight & Waist"],
+    ];
+    if (isFitbitMode) {
+      base.push(["recovery", "Recovery & Sleep"], ["activity", "Activity & Burn"]);
+    }
+    return base;
+  }, [isFitbitMode]);
 
   const data = useMemo(() => {
     const days = span === 7 ? history.days.slice(-7) : history.days;
@@ -55,6 +75,11 @@ export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
         wholeFoodPct: d.nutritionScore?.wholeFoodPct ?? null,
         weight: weightMap.get(d.day) ?? d.energy?.weightKg ?? null,
         waist: waistMap.get(d.day) ?? null,
+        rhr: d.recovery?.restingHrBpm ?? null,
+        hrv: d.recovery?.hrvRmssdMs ?? null,
+        sleepHours: d.sleep ? Number((d.sleep.minutesAsleep / 60).toFixed(1)) : null,
+        steps: d.energy?.steps ?? null,
+        azm: d.energy?.activeZoneMinutes ?? null,
       };
     });
   }, [history, span, tracker.readings]);
@@ -63,15 +88,8 @@ export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
     <section className="card chart-card">
       <div className="chart-controls">
         <div className="segments" aria-label="Trend metric">
-          {(
-            [
-              ["energy", "Intake vs Burn"],
-              ["protein", "Protein & Fibre"],
-              ["quality", "Quality & Fibre"],
-              ["body", "Weight & Waist"],
-            ] as const
-          ).map(([k, label]) => (
-            <button key={k} type="button" aria-pressed={view === k} onClick={() => setView(k)}>
+          {metricTabs.map(([k, label]) => (
+            <button key={k} type="button" aria-pressed={activeView === k} onClick={() => setView(k)}>
               {label}
             </button>
           ))}
@@ -86,7 +104,7 @@ export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
       </div>
 
       <div className="chart" style={{ marginTop: ".75rem" }}>
-        {view === "energy" && (
+        {activeView === "energy" && (
           <>
             <ResponsiveContainer width="100%" height={240}>
               <ComposedChart data={data} margin={{ left: -12, right: 10, top: 10 }}>
@@ -105,7 +123,7 @@ export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
           </>
         )}
 
-        {view === "protein" && (
+        {activeView === "protein" && (
           <>
             <ResponsiveContainer width="100%" height={240}>
               <ComposedChart data={data} margin={{ left: -12, right: 10, top: 10 }}>
@@ -126,7 +144,7 @@ export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
           </>
         )}
 
-        {view === "quality" && (
+        {activeView === "quality" && (
           <>
             <ResponsiveContainer width="100%" height={240}>
               <ComposedChart data={data} margin={{ left: -12, right: 10, top: 10 }}>
@@ -147,7 +165,7 @@ export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
           </>
         )}
 
-        {view === "body" && (
+        {activeView === "body" && (
           <>
             <ResponsiveContainer width="100%" height={240}>
               <LineChart data={data} margin={{ left: -12, right: 10, top: 10 }}>
@@ -162,6 +180,48 @@ export function NutritionTrends({ history, tracker }: NutritionTrendsProps) {
             <div className="chart-legend">
               <span style={{ color: "var(--teal)" }}>Weight (kg)</span>
               <span style={{ color: "var(--amber)" }}>Waist (cm)</span>
+            </div>
+          </>
+        )}
+
+        {activeView === "recovery" && (
+          <>
+            <ResponsiveContainer width="100%" height={240}>
+              <ComposedChart data={data} margin={{ left: -12, right: 10, top: 10 }}>
+                <CartesianGrid vertical={false} stroke="var(--border)" />
+                <XAxis dataKey="day" stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="left" width={46} stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="right" orientation="right" width={36} domain={[0, 14]} stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Bar yAxisId="right" name="Sleep (hrs)" dataKey="sleepHours" fill="var(--teal)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                <Line yAxisId="left" name="Resting HR (bpm)" type="monotone" dataKey="rhr" stroke="var(--amber)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
+                <Line yAxisId="left" name="HRV RMSSD (ms)" type="monotone" dataKey="hrv" stroke="var(--accent)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+            <div className="chart-legend">
+              <span style={{ color: "var(--teal)" }}>Sleep (hrs)</span>
+              <span style={{ color: "var(--amber)" }}>Resting HR (bpm)</span>
+              <span style={{ color: "var(--accent)" }}>HRV (ms)</span>
+            </div>
+          </>
+        )}
+
+        {activeView === "activity" && (
+          <>
+            <ResponsiveContainer width="100%" height={240}>
+              <ComposedChart data={data} margin={{ left: -12, right: 10, top: 10 }}>
+                <CartesianGrid vertical={false} stroke="var(--border)" />
+                <XAxis dataKey="day" stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="steps" width={52} stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="azm" orientation="right" width={40} stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <Tooltip contentStyle={tooltipStyle} />
+                <Bar yAxisId="steps" name="Steps" dataKey="steps" fill="var(--accent)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                <Line yAxisId="azm" name="Active Zone Minutes" type="monotone" dataKey="azm" stroke="var(--amber)" strokeWidth={2.3} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+            <div className="chart-legend">
+              <span style={{ color: "var(--accent)" }}>Steps</span>
+              <span style={{ color: "var(--amber)" }}>Active Zone Minutes (AZM)</span>
             </div>
           </>
         )}

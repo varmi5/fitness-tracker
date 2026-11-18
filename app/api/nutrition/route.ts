@@ -25,7 +25,6 @@ const mutation = z.discriminatedUnion("action", [
   z.object({ action: z.literal("target"), data: targetInput }),
   z.object({ action: z.literal("macro-targets"), data: macroTargetInput }),
   z.object({ action: z.literal("preferences"), data: preferencesInput }),
-  z.object({ action: z.literal("complete"), day: z.iso.date(), complete: z.boolean() }),
   z.object({ action: z.literal("energy"), data: energyInput }),
   z.object({ action: z.literal("energy-import"), entries: z.array(energyInput).min(1).max(365) }),
   z.object({ action: z.literal("import-health-file"), rawText: z.string().min(1).max(2_000_000) }),
@@ -115,8 +114,6 @@ export async function POST(request: Request) {
         return json(await data.setTarget(input.data));
       case "preferences":
         return json(await data.setPreferences(input.data));
-      case "complete":
-        return json(await data.markDay(input.day, input.complete));
       case "energy": {
         const saved = await data.saveEnergy(input.data);
         const prefs = await data.settings();

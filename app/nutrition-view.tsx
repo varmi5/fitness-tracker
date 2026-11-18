@@ -6,7 +6,6 @@ import dynamic from "next/dynamic";
 import { useState } from "react";
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, Plus, Trash2, TrendingUp } from "lucide-react";
 import {
-  CheckRingIcon,
   MealCategoryIcon,
   MoonThemeIcon,
   ScaleWeighedIcon,
@@ -22,6 +21,7 @@ import {
   mealMethodSummary,
   METHOD_LABELS,
   type NutritionHistory,
+  type NutritionSettings,
   type ThemeMode,
   type TrackerSnapshot,
 } from "./types";
@@ -37,6 +37,7 @@ interface NutritionViewProps {
   dayView: DailyNutritionView;
   history30: NutritionHistory;
   tracker: TrackerSnapshot;
+  settings: NutritionSettings;
   theme: ThemeMode;
   busy: boolean;
   loading: boolean;
@@ -47,7 +48,40 @@ interface NutritionViewProps {
   onDuplicateMeal: (id: string, targetDay?: string) => void;
   onMoveMeal: (id: string, targetDay: string) => void;
   onDeleteMeal: (id: string, name: string) => void;
-  onToggleComplete: (day: string, complete: boolean) => void;
+}
+
+function summarizeWindow(history: NutritionHistory, fromDay: string) {
+  const slice = history.days.filter((d) => d.day >= fromDay);
+  const foodComplete = slice.filter((d) => d.diaryComplete && d.totals.calories != null);
+  const foodLogged = slice.filter((d) => d.mealCount > 0 && d.totals.calories != null);
+  const burnDays = slice.filter((d) => d.energy?.totalKcal != null);
+  const comparable = slice.filter((d) => !d.provisional && d.deficit != null);
+
+  const avg = (nums: (number | null)[]) => {
+    const valid = nums.filter((n): n is number => n != null);
+    return valid.length ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : null;
+  };
+  const netDeficit = comparable.length
+    ? Math.round(comparable.reduce((sum, d) => sum + (d.deficit ?? 0), 0))
+    : null;
+
+  const intakeSource = foodComplete.length > 0 ? foodComplete : foodLogged;
+  const usingTodayFallback = foodComplete.length === 0 && foodLogged.length > 0;
+
+  return {
+    totalDays: slice.length,
+    comparableDays: comparable.length,
+    completeNutritionDays: foodComplete.length,
+    loggedDays: foodLogged.length,
+    burnDays: burnDays.length,
+    usingTodayFallback,
+    netDeficit,
+    avgDeficit: avg(comparable.map((d) => d.deficit)),
+    avgIntake: avg(intakeSource.map((d) => d.totals.calories)),
+    avgBurn: avg(burnDays.map((d) => d.energy?.totalKcal ?? null)),
+    avgProtein: avg(intakeSource.map((d) => d.totals.proteinG)),
+    avgFibre: avg(intakeSource.map((d) => d.totals.fibreG)),
+  };
 }
 
 export function NutritionView({
@@ -56,6 +90,7 @@ export function NutritionView({
   dayView,
   history30,
   tracker,
+  settings,
   theme,
   busy,
   loading,
@@ -66,12 +101,11 @@ export function NutritionView({
   onDuplicateMeal,
   onMoveMeal,
   onDeleteMeal,
-  onToggleComplete,
 }: NutritionViewProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveTargetDay, setMoveTargetDay] = useState(selectedDay);
-  const [showTrends, setShowTrends] = useState(false);
+  const [subView, setSubView] = useState<"diary" | "trends">("diary");
 
   const formattedDate = new Date(`${selectedDay}T12:00:00Z`).toLocaleDateString("en-GB", {
     timeZone: "UTC",
@@ -86,106 +120,16 @@ export function NutritionView({
   const anchorEnd = selectedDay <= today ? today : selectedDay;
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(anchorEnd, i - 6));
 
-  return (
+  const weekSummary = summarizeWindow(history30, addDays(today, -6));
+  const monthSummary = summarizeWindow(history30, addDays(today, -29));
+
+  const last7 = history30.days.slice(-7);
+  const target = dayView.target;
+  const barCeiling = Math.max(target * 1.15, ...last7.map((d) => d.totals.calories ?? 0), 1000);
+  const targetLinePct = Math.min(92, Math.max(8, Math.round((target / barCeiling) * 100)));
+
+  const diaryContent = (
     <>
-      <div className="page-header">
-        <div className="page-header-title">
-          <h1>Nutrition</h1>
-          <div className="page-sub">
-            <span>{formattedDate}</span>
-            <span className="pill">{dayView.timezone}</span>
-          </div>
-        </div>
-        <div className="header-actions">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-            onClick={onToggleTheme}
-          >
-            {theme === "light" ? <MoonThemeIcon size={17} /> : <SunThemeIcon size={17} />}
-          </button>
-          <button
-            type="button"
-            className="secondary compact"
-            aria-pressed={showTrends}
-            onClick={() => setShowTrends(!showTrends)}
-          >
-            <TrendingUp size={15} /> Trends
-          </button>
-          <button type="button" className="compact" onClick={onLogMeal}>
-            <Plus size={16} /> Add
-          </button>
-        </div>
-      </div>
-
-      {/* NutriTrace 7-Day Interactive Week Strip + Date Picker */}
-      <section className="card" aria-label="Calendar navigation" style={{ display: "grid", gap: ".65rem" }}>
-        <div className="week-strip">
-          {weekDays.map((dayStr) => {
-            const dObj = new Date(`${dayStr}T12:00:00Z`);
-            const dow = dObj.toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "narrow" });
-            const dom = dObj.getUTCDate();
-            const entry = historyByDay.get(dayStr);
-            const cal = entry?.totals.calories;
-            const tgt = entry?.target ?? dayView.target;
-            const fillPct = cal != null && tgt > 0 ? Math.min(100, Math.round((cal / tgt) * 100)) : 0;
-            return (
-              <button
-                type="button"
-                key={dayStr}
-                className={`week-cell ${dayStr === selectedDay ? "selected" : ""}`}
-                onClick={() => onSelectDay(dayStr)}
-              >
-                <span className="week-cell-dow">{dow}</span>
-                <span className="week-cell-day num">{dom}</span>
-                <span className="week-mini-bar">
-                  <i style={{ width: `${fillPct}%`, background: cal != null && cal > tgt ? "var(--amber)" : "var(--accent)" }} />
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="date-nav">
-          <button
-            type="button"
-            className="secondary compact"
-            aria-label="Previous day"
-            onClick={() => onSelectDay(addDays(selectedDay, -1))}
-          >
-            <ChevronLeft size={18} />
-          </button>
-          <label style={{ flex: 1, minWidth: 0 }}>
-            <span className="sr-only">Select date</span>
-            <input
-              type="date"
-              aria-label="Select diary date"
-              value={selectedDay}
-              onChange={(e) => {
-                if (e.target.value) onSelectDay(e.target.value);
-              }}
-            />
-          </label>
-          <button
-            type="button"
-            className="secondary compact"
-            aria-label="Next day"
-            onClick={() => onSelectDay(addDays(selectedDay, 1))}
-          >
-            <ChevronRight size={18} />
-          </button>
-          {selectedDay !== today && (
-            <button type="button" className="secondary compact" onClick={() => onSelectDay(today)}>
-              <CalendarDays size={15} /> Today
-            </button>
-          )}
-        </div>
-      </section>
-
-      {loading ? <p className="card" role="status">Loading diary…</p> : <>
-      {showTrends && <NutritionTrends history={history30} tracker={tracker} />}
-
       {/* Daily Summary Card: Protein & Fibre above Carbs & Fat */}
       <section className="card">
         <div className="split-row" style={{ marginBottom: ".65rem" }}>
@@ -202,15 +146,9 @@ export function NutritionView({
                   : `${fmtKcal(Math.abs(dayView.remaining))} over`}
             </span>
           </div>
-          <button
-            type="button"
-            className={`pill-btn ${dayView.diaryComplete ? "active" : ""}`}
-            disabled={busy}
-            onClick={() => onToggleComplete(selectedDay, !dayView.diaryComplete)}
-          >
-            <CheckRingIcon size={15} />
-            {dayView.diaryComplete ? "Complete" : "Finish logging"}
-          </button>
+          <span className={`pill ${dayView.diaryComplete ? "teal-soft" : ""}`}>
+            {dayView.diaryComplete ? "Past day" : "Active day"}
+          </span>
         </div>
 
         <div className="button-row" style={{ marginBottom: ".6rem" }}>
@@ -225,6 +163,15 @@ export function NutritionView({
               Whole food {dayView.nutritionScore.wholeFoodPct}%
             </span>
           )}
+          {dayView.nutritionScore.contributors.slice(0, 3).map((c) => (
+            <span
+              key={`${c.impact}-${c.key}`}
+              className={`pill ${c.impact === "positive" ? "teal-soft" : "amber-soft"}`}
+              title={c.detail}
+            >
+              {c.impact === "positive" ? "+" : "−"} {c.label}
+            </span>
+          ))}
         </div>
 
         <div className="macro-grid">
@@ -421,7 +368,247 @@ export function NutritionView({
           })
         )}
       </section>
-      </>}
+    </>
+  );
+
+  const trendsAndSummaryContent = (
+    <>
+      {/* 7-Day Calorie Intake Mini Bars */}
+      <section className="card week-bars-card" aria-label="7-day calorie intake">
+        <div className="split-row" style={{ flexWrap: "nowrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <h2>Last 7 Days Intake</h2>
+            <p style={{ fontSize: ".76rem" }}>Daily intake vs {fmtKcal(target)} kcal target</p>
+          </div>
+          <span className="pill num">{last7.filter((d) => d.totals.calories != null).length} of 7 logged</span>
+        </div>
+        <div className="week-bars-wrap">
+          <div className="week-target-line" style={{ bottom: `calc(${targetLinePct}% * 0.72 + 18px)` }} />
+          {last7.map((d) => {
+            const cal = d.totals.calories;
+            const barH = cal == null ? 0 : Math.max(8, Math.min(100, Math.round((cal / barCeiling) * 100)));
+            const dow = new Date(`${d.day}T12:00:00Z`).toLocaleDateString("en-GB", {
+              timeZone: "UTC",
+              weekday: "narrow",
+            });
+            return (
+              <div
+                className="week-bar-col"
+                key={d.day}
+                title={`${d.day}: ${cal == null ? "no data" : `${cal} kcal`}`}
+                onClick={() => onSelectDay(d.day)}
+                style={{ cursor: "pointer" }}
+              >
+                <div className="week-bar-track">
+                  {cal != null && (
+                    <div
+                      className={`week-bar-fill ${cal > d.target ? "over" : ""}`}
+                      style={{ height: `${barH}%` }}
+                    />
+                  )}
+                </div>
+                <span className="week-bar-label num">{dow}</span>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Weekly & Monthly Net Calorie Balance & Macro Summary Widgets */}
+      <section className="two-col" aria-label="Weekly and monthly net calorie balance">
+        {[
+          { title: "7-Day Net Balance", stats: weekSummary },
+          { title: "30-Day Net Balance", stats: monthSummary },
+        ].map(({ title, stats }) => {
+          const kgEquiv = stats.netDeficit != null ? (stats.netDeficit / 7700).toFixed(2) : null;
+          const statusBadge =
+            stats.comparableDays > 0
+              ? `${stats.comparableDays} of ${stats.totalDays} paired`
+              : stats.completeNutritionDays > 0
+                ? `${stats.completeNutritionDays} food · add TDEE`
+                : stats.loggedDays > 0
+                  ? `${stats.loggedDays} logged today`
+                  : `0 of ${stats.totalDays} logged`;
+          return (
+            <article className="card" key={title}>
+              <div className="split-row">
+                <h2>{title}</h2>
+                <span className={`pill ${stats.comparableDays > 0 ? "teal-soft" : stats.completeNutritionDays > 0 ? "accent-soft" : ""}`}>
+                  {statusBadge}
+                </span>
+              </div>
+              <div className="reading num" style={{ fontSize: "clamp(1.35rem, 4.2vw, 1.95rem)", margin: ".5rem 0 .25rem" }}>
+                {stats.netDeficit != null ? (
+                  <>
+                    {stats.netDeficit >= 0
+                      ? `${stats.netDeficit.toLocaleString("en-GB")} kcal`
+                      : `${Math.abs(stats.netDeficit).toLocaleString("en-GB")} kcal`}
+                    <small style={{ marginLeft: ".35rem" }}>
+                      {stats.netDeficit >= 0 ? "net deficit" : "net surplus"}
+                    </small>
+                  </>
+                ) : stats.completeNutritionDays > 0 ? (
+                  <small style={{ fontSize: ".9rem" }}>Add TDEE for deficit</small>
+                ) : stats.loggedDays > 0 ? (
+                  <small style={{ fontSize: ".9rem" }}>Completes at midnight</small>
+                ) : (
+                  "—"
+                )}
+              </div>
+              <div className="metric-meta">
+                <span>Daily avg balance</span>
+                <span className="num">
+                  {stats.avgDeficit == null
+                    ? "—"
+                    : `${stats.avgDeficit >= 0 ? "+" : ""}${stats.avgDeficit.toLocaleString("en-GB")} kcal/d`}
+                </span>
+              </div>
+              <div className="metric-meta">
+                <span>Avg intake{stats.usingTodayFallback ? " (today)" : ""} · Avg burn</span>
+                <span className="num">
+                  {fmtKcal(stats.avgIntake)} · {fmtKcal(stats.avgBurn)} kcal
+                </span>
+              </div>
+              <div className="metric-meta">
+                <span>Avg Protein · Fibre</span>
+                <span className="num">
+                  {stats.avgProtein == null ? "—" : `${stats.avgProtein} g`} · {stats.avgFibre == null ? "—" : `${stats.avgFibre} g`}
+                </span>
+              </div>
+              <div className="metric-meta">
+                <span>Est. weight equiv.</span>
+                <span className="num">{kgEquiv == null ? "—" : `~${kgEquiv} kg`}</span>
+              </div>
+            </article>
+          );
+        })}
+      </section>
+
+      <NutritionTrends history={history30} tracker={tracker} trackingMode={settings.trackingMode} />
+    </>
+  );
+
+  return (
+    <>
+      <div className="page-header">
+        <div className="page-header-title">
+          <h1>Nutrition</h1>
+          <div className="page-sub">
+            <span>{formattedDate}</span>
+            <span className="pill">{dayView.timezone}</span>
+          </div>
+        </div>
+        <div className="header-actions">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+            onClick={onToggleTheme}
+          >
+            {theme === "light" ? <MoonThemeIcon size={17} /> : <SunThemeIcon size={17} />}
+          </button>
+          <button
+            type="button"
+            className="secondary compact"
+            aria-pressed={subView === "trends"}
+            onClick={() => setSubView(subView === "trends" ? "diary" : "trends")}
+          >
+            <TrendingUp size={15} /> Trends
+          </button>
+          <button type="button" className="compact" onClick={onLogMeal}>
+            <Plus size={16} /> Add
+          </button>
+        </div>
+      </div>
+
+      <div className="segments" role="tablist" aria-label="Nutrition views">
+        <button type="button" aria-pressed={subView === "diary"} onClick={() => setSubView("diary")}>
+          Diary
+        </button>
+        <button type="button" aria-pressed={subView === "trends"} onClick={() => setSubView("trends")}>
+          Trends &amp; Summary
+        </button>
+      </div>
+
+      {/* NutriTrace 7-Day Interactive Week Strip + Date Picker */}
+      <section className="card" aria-label="Calendar navigation" style={{ display: "grid", gap: ".65rem" }}>
+        <div className="week-strip">
+          {weekDays.map((dayStr) => {
+            const dObj = new Date(`${dayStr}T12:00:00Z`);
+            const dow = dObj.toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "narrow" });
+            const dom = dObj.getUTCDate();
+            const entry = historyByDay.get(dayStr);
+            const cal = entry?.totals.calories;
+            const tgt = entry?.target ?? dayView.target;
+            const fillPct = cal != null && tgt > 0 ? Math.min(100, Math.round((cal / tgt) * 100)) : 0;
+            return (
+              <button
+                type="button"
+                key={dayStr}
+                className={`week-cell ${dayStr === selectedDay ? "selected" : ""}`}
+                onClick={() => onSelectDay(dayStr)}
+              >
+                <span className="week-cell-dow">{dow}</span>
+                <span className="week-cell-day num">{dom}</span>
+                <span className="week-mini-bar">
+                  <i style={{ width: `${fillPct}%`, background: cal != null && cal > tgt ? "var(--amber)" : "var(--accent)" }} />
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="date-nav">
+          <button
+            type="button"
+            className="secondary compact"
+            aria-label="Previous day"
+            onClick={() => onSelectDay(addDays(selectedDay, -1))}
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <label style={{ flex: 1, minWidth: 0 }}>
+            <span className="sr-only">Select date</span>
+            <input
+              type="date"
+              aria-label="Select diary date"
+              value={selectedDay}
+              onChange={(e) => {
+                if (e.target.value) onSelectDay(e.target.value);
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            className="secondary compact"
+            aria-label="Next day"
+            onClick={() => onSelectDay(addDays(selectedDay, 1))}
+          >
+            <ChevronRight size={18} />
+          </button>
+          {selectedDay !== today && (
+            <button type="button" className="secondary compact" onClick={() => onSelectDay(today)}>
+              <CalendarDays size={15} /> Today
+            </button>
+          )}
+        </div>
+      </section>
+
+      {loading ? (
+        <p className="card" role="status">
+          Loading diary…
+        </p>
+      ) : subView === "trends" ? (
+        <>
+          {trendsAndSummaryContent}
+          {diaryContent}
+        </>
+      ) : (
+        <>
+          {diaryContent}
+          {trendsAndSummaryContent}
+        </>
+      )}
     </>
   );
 }

@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { AuthDatabase } from "./auth";
 import { seal, unseal } from "./google-health";
 import { localDay, localTime } from "./nutrition-model";
-import { nutritionDayStatus, nutritionPreference, pushSubscription, reminderDelivery, reminderPreference } from "./schema";
+import { nutritionPreference, pushSubscription, reminderDelivery, reminderPreference } from "./schema";
 
 export const reminderInput = z.object({ enabled: z.boolean(), times: z.array(z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/)).min(1).max(4).refine((times) => new Set(times).size === times.length, "Choose distinct reminder times.") });
 export const subscriptionInput = z.object({ endpoint: z.url().max(2000).refine((raw) => {
@@ -52,8 +52,6 @@ export async function processReminders(db: AuthDatabase, now = new Date(), send 
   let sent = 0;
   for (const pref of preferences) {
     const timezone = pref.timezone ?? "Europe/London"; const day = localDay(now, timezone);
-    const [complete] = await db.select().from(nutritionDayStatus).where(and(eq(nutritionDayStatus.userId, pref.userId), eq(nutritionDayStatus.day, day)));
-    if (complete?.complete) continue;
     const devices = await db.select().from(pushSubscription).where(eq(pushSubscription.userId, pref.userId));
     for (const time of dueTimes(pref.times as string[], now, timezone)) for (const device of devices) {
       await db.insert(reminderDelivery).values({ userId: pref.userId, day, time, subscriptionId: device.id, nextAttemptAt: now }).onConflictDoNothing();

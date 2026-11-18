@@ -4,11 +4,13 @@ export const CATEGORIES = ["breakfast", "lunch", "dinner", "snacks", "drinks"] a
 export const UNITS = ["g", "kg", "oz", "ml", "l", "tsp", "tbsp", "cup", "fl_oz", "item", "slice", "piece", "scoop", "serving", "bottle", "can", "pack"] as const;
 export const ESTIMATION_METHODS = ["weighed", "measured", "pack_label", "recipe", "photo_estimate", "standard_portion"] as const;
 export const ENERGY_SOURCES = ["google", "manual", "apple"] as const;
+export const TRACKING_MODES = ["manual", "fitbit"] as const;
 
 export type MealCategory = (typeof CATEGORIES)[number];
 export type FoodUnit = (typeof UNITS)[number];
 export type EstimationMethod = (typeof ESTIMATION_METHODS)[number];
 export type EnergySource = (typeof ENERGY_SOURCES)[number];
+export type TrackingMode = (typeof TRACKING_MODES)[number];
 
 export const DEFAULT_CALORIE_TARGET = 1900;
 export const DEFAULT_TIMEZONE = "Europe/London";
@@ -97,17 +99,35 @@ export function dayRange(from: string, to: string): string[] {
 
 export function resolveActiveHomeDay(input: {
   calendarToday: string;
-  hasFitbitSleep: boolean;
-  sleepRolloverEnabled: boolean;
-  sleepDates: ReadonlySet<string>;
 }): { activeDay: string; waitingForSleep: boolean } {
-  if (!input.hasFitbitSleep || !input.sleepRolloverEnabled) {
-    return { activeDay: input.calendarToday, waitingForSleep: false };
+  return { activeDay: input.calendarToday, waitingForSleep: false };
+}
+
+export function isDayComplete(day: string, activeDay: string): boolean {
+  return day < activeDay;
+}
+
+export function resolveTrackingPreferences(
+  input: { trackingMode?: TrackingMode; preferredEnergySource?: EnergySource },
+  existing?: { trackingMode?: TrackingMode; preferredEnergySource?: EnergySource },
+): { trackingMode: TrackingMode; preferredEnergySource: EnergySource } {
+  if (input.trackingMode !== undefined) {
+    return {
+      trackingMode: input.trackingMode,
+      preferredEnergySource: input.trackingMode === "fitbit" ? "google" : "manual",
+    };
   }
-  if (input.sleepDates.has(input.calendarToday)) {
-    return { activeDay: input.calendarToday, waitingForSleep: false };
+  if (input.preferredEnergySource !== undefined) {
+    if (input.preferredEnergySource === "google") {
+      return { trackingMode: "fitbit", preferredEnergySource: "google" };
+    }
+    return { trackingMode: "manual", preferredEnergySource: input.preferredEnergySource };
   }
-  return { activeDay: addDays(input.calendarToday, -1), waitingForSleep: true };
+  const mode = existing?.trackingMode ?? (existing?.preferredEnergySource === "google" ? "fitbit" : "manual");
+  return {
+    trackingMode: mode,
+    preferredEnergySource: mode === "fitbit" ? "google" : (existing?.preferredEnergySource === "apple" ? "apple" : "manual"),
+  };
 }
 
 const optionalNonNegative = z.number().finite().min(0).max(50000).nullable().optional();
@@ -210,6 +230,9 @@ export const energyInput = z.object({
   totalKcal: z.number().finite().min(0).max(20000).nullable().optional(),
   activeKcal: z.number().finite().min(0).max(15000).nullable().optional(),
   steps: z.number().int().min(0).max(250000).nullable().optional(),
+  activeZoneMinutes: z.number().int().min(0).max(5000).nullable().optional(),
+  distanceMeters: z.number().finite().min(0).max(500000).nullable().optional(),
+  floors: z.number().int().min(0).max(50000).nullable().optional(),
   weightKg: z.number().finite().positive().max(500).nullable().optional(),
   complete: z.boolean().default(true),
 });
@@ -233,6 +256,25 @@ export const sleepInput = z.object({
   stagesJson: z.array(sleepStageInput).max(12).optional().default([]),
 });
 
+export function computeSleepEfficiencyPct(
+  minutesAsleep: number | null | undefined,
+  minutesAwake: number | null | undefined,
+): number | null {
+  if (
+    minutesAsleep == null ||
+    minutesAwake == null ||
+    !Number.isFinite(minutesAsleep) ||
+    !Number.isFinite(minutesAwake) ||
+    minutesAsleep < 0 ||
+    minutesAwake < 0
+  ) {
+    return null;
+  }
+  const total = minutesAsleep + minutesAwake;
+  if (total <= 0) return null;
+  return Math.round((minutesAsleep / total) * 100);
+}
+
 export interface SleepRecord {
   day: string;
   source: EnergySource;
@@ -244,7 +286,64 @@ export interface SleepRecord {
   deepMinutes: number | null;
   remMinutes: number | null;
   lightMinutes: number | null;
+  sleepEfficiencyPct: number | null;
   stages: { stage: "AWAKE" | "LIGHT" | "DEEP" | "REM"; minutes: number }[];
+  syncedAt: string;
+}
+
+export const recoveryInput = z.object({
+  day: z.iso.date(),
+  source: z.enum(ENERGY_SOURCES).default("google"),
+  restingHrBpm: z.number().finite().positive().max(300).nullable().optional(),
+  hrvRmssdMs: z.number().finite().min(0).max(1000).nullable().optional(),
+  spo2Pct: z.number().finite().min(0).max(100).nullable().optional(),
+  respiratoryRate: z.number().finite().positive().max(120).nullable().optional(),
+  skinTempDeltaC: z.number().finite().min(-20).max(20).nullable().optional(),
+  vo2Max: z.number().finite().positive().max(150).nullable().optional(),
+  bodyFatPct: z.number().finite().positive().max(100).nullable().optional(),
+});
+
+export interface RecoveryRecord {
+  day: string;
+  source: EnergySource;
+  restingHrBpm: number | null;
+  hrvRmssdMs: number | null;
+  spo2Pct: number | null;
+  respiratoryRate: number | null;
+  skinTempDeltaC: number | null;
+  vo2Max: number | null;
+  bodyFatPct: number | null;
+  syncedAt: string;
+}
+
+export const workoutInput = z.object({
+  day: z.iso.date(),
+  source: z.enum(ENERGY_SOURCES).default("google"),
+  sessionId: z.string().trim().min(1).max(200),
+  title: z.string().trim().min(1).max(200),
+  exerciseType: z.string().trim().max(120).optional().default(""),
+  startTime: z.iso.datetime({ offset: true }).nullable().optional(),
+  endTime: z.iso.datetime({ offset: true }).nullable().optional(),
+  durationSeconds: z.number().int().min(0).max(604800).nullable().optional(),
+  caloriesKcal: z.number().finite().min(0).max(25000).nullable().optional(),
+  distanceMeters: z.number().finite().min(0).max(500000).nullable().optional(),
+  avgHrBpm: z.number().finite().positive().max(300).nullable().optional(),
+  activeZoneMinutes: z.number().int().min(0).max(5000).nullable().optional(),
+});
+
+export interface WorkoutRecord {
+  day: string;
+  source: EnergySource;
+  sessionId: string;
+  title: string;
+  exerciseType: string;
+  startTime: string | null;
+  endTime: string | null;
+  durationSeconds: number | null;
+  caloriesKcal: number | null;
+  distanceMeters: number | null;
+  avgHrBpm: number | null;
+  activeZoneMinutes: number | null;
   syncedAt: string;
 }
 
@@ -255,7 +354,8 @@ export const targetInput = z.object({
 
 export const preferencesInput = z.object({
   timezone: z.string().trim().min(1).max(80).refine(isValidTimezone, { message: "Invalid timezone." }),
-  preferredEnergySource: z.enum(ENERGY_SOURCES),
+  trackingMode: z.enum(TRACKING_MODES).optional(),
+  preferredEnergySource: z.enum(ENERGY_SOURCES).optional(),
   googleTwoWaySync: z.boolean().optional().default(false),
   sleepRolloverEnabled: z.boolean().optional(),
 });

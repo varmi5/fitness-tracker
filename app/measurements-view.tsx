@@ -14,7 +14,8 @@ import {
   summary,
   type Metric,
 } from "../lib/metrics";
-import type { ThemeMode, TrackerSnapshot } from "./types";
+import type { DailyNutritionView } from "../lib/nutrition-data";
+import type { NutritionHistory, NutritionSettings, ThemeMode, TrackerSnapshot } from "./types";
 
 const TrendChart = dynamic(() => import("./trends").then((m) => m.TrendChart), {
   ssr: false,
@@ -27,6 +28,9 @@ const readout = (value: number | null | undefined, metric: Metric, units: "metri
 
 interface MeasurementsViewProps {
   snapshot: TrackerSnapshot;
+  nutritionSettings?: NutritionSettings;
+  history30?: NutritionHistory;
+  daily?: DailyNutritionView;
   today: string;
   theme: ThemeMode;
   busy: boolean;
@@ -36,6 +40,9 @@ interface MeasurementsViewProps {
 
 export function MeasurementsView({
   snapshot,
+  nutritionSettings,
+  history30,
+  daily,
   today,
   theme,
   busy,
@@ -46,6 +53,22 @@ export function MeasurementsView({
   const [date, setDate] = useState(today);
   const [localMsg, setLocalMsg] = useState("");
   const { readings, settings } = snapshot;
+
+  const isFitbitMode =
+    (nutritionSettings?.trackingMode ?? history30?.trackingMode ?? daily?.trackingMode) === "fitbit";
+  const recoveryRecords = [
+    ...(daily?.recovery ? [daily.recovery] : []),
+    ...[...(history30?.days ?? [])]
+      .reverse()
+      .map((d) => d.recovery)
+      .filter((r): r is NonNullable<typeof r> => r != null),
+  ];
+  const latestBodyFat = isFitbitMode
+    ? (recoveryRecords.find((r) => r.bodyFatPct != null)?.bodyFatPct ?? null)
+    : null;
+  const latestVo2Max = isFitbitMode
+    ? (recoveryRecords.find((r) => r.vo2Max != null)?.vo2Max ?? null)
+    : null;
 
   const selected = readings.filter((r) => r.date === date);
   const [waistMetric, leftMetric, rightMetric] = metrics;
@@ -148,6 +171,29 @@ export function MeasurementsView({
                 );
               })}
           </div>
+
+          {isFitbitMode && (latestBodyFat != null || latestVo2Max != null) && (
+            <section className="card" aria-label="Fitbit body and cardio">
+              <div className="split-row" style={{ marginBottom: ".6rem" }}>
+                <h2>Fitbit Body &amp; Cardio</h2>
+                <span className="pill teal-soft">Fitbit Air</span>
+              </div>
+              <div className="macro-grid">
+                <div className="energy-cell">
+                  <span>Body fat %</span>
+                  <strong className="num">
+                    {latestBodyFat != null ? `${Number(latestBodyFat.toFixed(1))}%` : "—"}
+                  </strong>
+                </div>
+                <div className="energy-cell">
+                  <span>Cardio Fitness VO2 max</span>
+                  <strong className="num">
+                    {latestVo2Max != null ? `${Number(latestVo2Max.toFixed(1))} ml/kg/min` : "—"}
+                  </strong>
+                </div>
+              </div>
+            </section>
+          )}
 
           <h2 className="section-title">Insights</h2>
           <div className="insight-grid">

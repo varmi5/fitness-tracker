@@ -101,7 +101,6 @@ export async function seedExampleDay(userId: string) {
     complete: true,
   });
 
-  await data.markDay("2026-11-17", true);
   return data.daily("2026-11-17");
 }
 

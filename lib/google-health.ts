@@ -9,11 +9,23 @@ import {
   energyInput,
   historyInput,
   localDay,
+  recoveryInput,
   resolveLocalDateTime,
   sleepInput,
+  workoutInput,
   type MealCategory,
 } from "./nutrition-model";
-import { dailyEnergy, dailySleep, googleMealSync, healthIntegration, meal, measurement, profile } from "./schema";
+import {
+  dailyEnergy,
+  dailyRecovery,
+  dailySleep,
+  dailyWorkout,
+  googleMealSync,
+  healthIntegration,
+  meal,
+  nutritionPreference,
+  profile,
+} from "./schema";
 
 const googleAPI = "https://health.googleapis.com/v4/users/me";
 const activityScope = "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly";
@@ -182,29 +194,63 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
           lastError: null,
         },
       });
+    await tx
+      .insert(nutritionPreference)
+      .values({
+        userId,
+        timezone: DEFAULT_TIMEZONE,
+        trackingMode: "fitbit",
+        preferredEnergySource: "google",
+        googleTwoWaySync: false,
+        sleepRolloverEnabled: true,
+      })
+      .onConflictDoUpdate({
+        target: nutritionPreference.userId,
+        set: {
+          trackingMode: "fitbit",
+          preferredEnergySource: "google",
+        },
+      });
     await tx.delete(googleMealSync).where(eq(googleMealSync.userId, userId));
     await tx.update(meal).set({ googleDatapointName: null }).where(eq(meal.userId, userId));
-    // Replacing a connection clears prior Google energy & sleep rows so two accounts never mix.
+    // Replacing a connection clears prior Google energy, sleep, recovery & workout rows so two accounts never mix.
     await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
     await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google")));
+    await tx.delete(dailyRecovery).where(and(eq(dailyRecovery.userId, userId), eq(dailyRecovery.source, "google")));
+    await tx.delete(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google")));
   });
 }
 
-type Field = "totalKcal" | "activeKcal" | "steps" | "weightKg";
+type Field =
+  | "totalKcal"
+  | "activeKcal"
+  | "steps"
+  | "weightKg"
+  | "activeZoneMinutes"
+  | "distanceMeters"
+  | "floors";
 
 const types = {
   "total-calories": ["totalKcal", "totalCalories", "kcalSum"],
   "active-energy-burned": ["activeKcal", "activeEnergyBurned", "kcalSum"],
   steps: ["steps", "steps", "countSum"],
   weight: ["weightKg", "weight", "weightGramsAvg"],
+  "active-zone-minutes": ["activeZoneMinutes", "activeZoneMinutes", "minutesSum"],
+  distance: ["distanceMeters", "distance", "metersSum"],
+  floors: ["floors", "floors", "countSum"],
 } as const;
+
+export type RollupType = keyof typeof types;
+
+const coreRollupTypes = ["total-calories", "active-energy-burned", "steps", "weight"] as const;
+const optionalRollupTypes = ["active-zone-minutes", "distance", "floors"] as const;
 
 function civil(day: string) {
   const [year, month, date] = day.split("-").map(Number);
   return { date: { year, month, day: date } };
 }
 
-export function parseGoogleRollup(type: keyof typeof types, payload: unknown) {
+export function parseGoogleRollup(type: RollupType, payload: unknown) {
   const [field, section, name] = types[type];
   const envelope = z
     .object({ rollupDataPoints: z.array(z.unknown()).default([]), nextPageToken: z.string().optional() })
@@ -226,7 +272,22 @@ export function parseGoogleRollup(type: keyof typeof types, payload: unknown) {
       .date()
       .parse([year, String(month).padStart(2, "0"), String(day).padStart(2, "0")].join("-"));
     const sectionObj = item[section] as Record<string, unknown> | undefined;
-    const rawVal = sectionObj?.[name];
+    let rawVal: unknown = sectionObj?.[name];
+    let fromMillimeters = false;
+
+    if (type === "active-zone-minutes" && rawVal == null) {
+      rawVal =
+        sectionObj?.activeZoneMinutesSum ??
+        sectionObj?.countSum ??
+        sectionObj?.totalMinutes ??
+        sectionObj?.activeZoneMinutes;
+    } else if (type === "distance" && rawVal == null && sectionObj?.millimetersSum != null) {
+      rawVal = sectionObj.millimetersSum;
+      fromMillimeters = true;
+    } else if (type === "floors" && rawVal == null) {
+      rawVal = sectionObj?.floorsSum ?? sectionObj?.count;
+    }
+
     const fallbackKg = type === "weight" && rawVal == null ? sectionObj?.kilogramsAvg : undefined;
     const value = rawVal ?? fallbackKg;
     if (value == null || value === "") continue;
@@ -234,15 +295,20 @@ export function parseGoogleRollup(type: keyof typeof types, payload: unknown) {
     if (field === "weightKg") {
       const kg = fallbackKg != null ? parsed : parsed / 1000;
       if (kg > 0 && kg < 500) rows.set(date, Math.round(kg * 100) / 100);
+    } else if (field === "distanceMeters") {
+      const meters = fromMillimeters ? parsed / 1000 : parsed;
+      rows.set(date, Math.round(meters * 10) / 10);
+    } else if (field === "steps" || field === "activeZoneMinutes" || field === "floors") {
+      rows.set(date, Math.round(parsed));
     } else {
-      rows.set(date, field === "steps" ? Math.round(parsed) : Math.round(parsed * 10) / 10);
+      rows.set(date, Math.round(parsed * 10) / 10);
     }
   }
 
   return { field, rows, nextPageToken: envelope.nextPageToken };
 }
 
-async function fetchRollup(type: keyof typeof types, grant: Tokens, from: string, end: string) {
+async function fetchRollup(type: RollupType, grant: Tokens, from: string, end: string) {
   let pageToken: string | undefined;
   const rows = new Map<string, number>();
   for (let page = 0; page < 10; page++) {
@@ -259,6 +325,473 @@ async function fetchRollup(type: keyof typeof types, grant: Tokens, from: string
     if (!pageToken) return { field: result.field, rows };
   }
   throw new NutritionError("Google returned too many pages for one sync.", 502);
+}
+
+export type RecoveryField =
+  | "restingHrBpm"
+  | "hrvRmssdMs"
+  | "spo2Pct"
+  | "respiratoryRate"
+  | "skinTempDeltaC"
+  | "vo2Max"
+  | "bodyFatPct";
+
+const recoveryTypes = {
+  "daily-resting-heart-rate": {
+    field: "restingHrBpm" as const,
+    sections: ["dailyRestingHeartRate", "restingHeartRate"],
+    keys: ["beatsPerMinute", "beatsPerMinuteAvg", "bpmAvg", "bpm", "restingHrBpm", "value"],
+    min: 0.1,
+    max: 300,
+  },
+  "daily-heart-rate-variability": {
+    field: "hrvRmssdMs" as const,
+    sections: ["dailyHeartRateVariability", "heartRateVariability"],
+    keys: [
+      "rmssdMilliseconds",
+      "rootMeanSquareOfSuccessiveDifferencesMilliseconds",
+      "rmssdMsAvg",
+      "rmssdMs",
+      "hrvRmssdMs",
+      "value",
+    ],
+    min: 0,
+    max: 1000,
+  },
+  "daily-oxygen-saturation": {
+    field: "spo2Pct" as const,
+    sections: ["dailyOxygenSaturation", "oxygenSaturation"],
+    keys: ["percentageAvg", "averagePercentage", "percentage", "spo2Pct", "value"],
+    min: 0,
+    max: 100,
+  },
+  "daily-respiratory-rate": {
+    field: "respiratoryRate" as const,
+    sections: ["dailyRespiratoryRate", "respiratoryRate"],
+    keys: ["breathsPerMinute", "breathsPerMinuteAvg", "respiratoryRate", "value"],
+    min: 0.1,
+    max: 120,
+  },
+  "daily-sleep-temperature-derivations": {
+    field: "skinTempDeltaC" as const,
+    sections: ["dailySleepTemperatureDerivations", "sleepTemperatureDerivations", "skinTemperatureDerivation"],
+    keys: [
+      "nightlyTemperatureCelsiusDelta",
+      "relativeNighttimeTemperatureCelsius",
+      "skinTemperatureDeltaCelsius",
+      "deltaCelsius",
+      "skinTempDeltaC",
+      "value",
+    ],
+    min: -20,
+    max: 20,
+  },
+  "daily-vo2-max": {
+    field: "vo2Max" as const,
+    sections: ["dailyVo2Max", "vo2Max"],
+    keys: ["vo2Max", "mlPerKgPerMin", "vo2MaxAvg", "value"],
+    min: 0.1,
+    max: 150,
+  },
+  "body-fat": {
+    field: "bodyFatPct" as const,
+    sections: ["bodyFat"],
+    keys: ["percentage", "percentageAvg", "bodyFatPct", "value"],
+    min: 0.1,
+    max: 100,
+  },
+} as const;
+
+export type RecoveryType = keyof typeof recoveryTypes;
+
+function formatCivilDate(d?: { year?: number; month?: number; day?: number } | null): string | null {
+  if (!d || typeof d.year !== "number" || typeof d.month !== "number" || typeof d.day !== "number") return null;
+  const candidate = [d.year, String(d.month).padStart(2, "0"), String(d.day).padStart(2, "0")].join("-");
+  return z.iso.date().safeParse(candidate).success ? candidate : null;
+}
+
+function extractPointDay(
+  item: Record<string, unknown>,
+  sectionObj: Record<string, unknown> | undefined,
+  timezone = DEFAULT_TIMEZONE,
+): string | null {
+  const civilCandidates = [
+    (item.civilStartTime as { date?: { year?: number; month?: number; day?: number } } | undefined)?.date,
+    (item.civilEndTime as { date?: { year?: number; month?: number; day?: number } } | undefined)?.date,
+    sectionObj?.date as { year?: number; month?: number; day?: number } | undefined,
+    (sectionObj?.civilStartTime as { date?: { year?: number; month?: number; day?: number } } | undefined)?.date,
+    (sectionObj?.civilEndTime as { date?: { year?: number; month?: number; day?: number } } | undefined)?.date,
+    ((sectionObj?.interval as Record<string, unknown> | undefined)?.civilStartTime as { date?: { year?: number; month?: number; day?: number } } | undefined)?.date,
+    ((sectionObj?.interval as Record<string, unknown> | undefined)?.civilEndTime as { date?: { year?: number; month?: number; day?: number } } | undefined)?.date,
+    ((sectionObj?.sampleTime as Record<string, unknown> | undefined)?.civilTime as { date?: { year?: number; month?: number; day?: number } } | undefined)?.date,
+    ((item.sampleTime as Record<string, unknown> | undefined)?.civilTime as { date?: { year?: number; month?: number; day?: number } } | undefined)?.date,
+    item.date as { year?: number; month?: number; day?: number } | undefined,
+  ];
+  for (const c of civilCandidates) {
+    const formatted = formatCivilDate(c);
+    if (formatted) return formatted;
+  }
+  for (const strCandidate of [sectionObj?.day, item.day, sectionObj?.date, item.date]) {
+    if (typeof strCandidate === "string" && z.iso.date().safeParse(strCandidate).success) {
+      return strCandidate;
+    }
+  }
+  const tsCandidates = [
+    (sectionObj?.sampleTime as { physicalTime?: string } | undefined)?.physicalTime,
+    (item.sampleTime as { physicalTime?: string } | undefined)?.physicalTime,
+    (sectionObj?.interval as { endTime?: string; startTime?: string } | undefined)?.endTime,
+    (sectionObj?.interval as { startTime?: string } | undefined)?.startTime,
+    (item.interval as { endTime?: string; startTime?: string } | undefined)?.endTime,
+    (item.interval as { startTime?: string } | undefined)?.startTime,
+  ];
+  for (const ts of tsCandidates) {
+    if (typeof ts === "string" && !Number.isNaN(new Date(ts).getTime())) {
+      return localDay(ts, timezone);
+    }
+  }
+  return null;
+}
+
+export function parseGoogleRecovery(type: RecoveryType, payload: unknown, timezone = DEFAULT_TIMEZONE) {
+  const spec = recoveryTypes[type];
+  const envelope = z
+    .object({
+      dataPoints: z.array(z.unknown()).default([]),
+      rollupDataPoints: z.array(z.unknown()).default([]),
+      nextPageToken: z.string().optional(),
+    })
+    .parse(payload);
+
+  const rows = new Map<string, number>();
+  const points = [...envelope.rollupDataPoints, ...envelope.dataPoints];
+
+  for (const raw of points) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    let sectionObj: Record<string, unknown> | undefined;
+    for (const sec of spec.sections) {
+      if (item[sec] && typeof item[sec] === "object") {
+        sectionObj = item[sec] as Record<string, unknown>;
+        break;
+      }
+    }
+    const day = extractPointDay(item, sectionObj, timezone);
+    if (!day) continue;
+
+    let rawVal: unknown;
+    for (const k of spec.keys) {
+      if (sectionObj && sectionObj[k] != null && sectionObj[k] !== "") {
+        rawVal = sectionObj[k];
+        break;
+      }
+      if (item[k] != null && item[k] !== "" && typeof item[k] !== "object") {
+        rawVal = item[k];
+        break;
+      }
+    }
+    if (rawVal == null || rawVal === "") continue;
+    const num = typeof rawVal === "string" ? Number(rawVal) : typeof rawVal === "number" ? rawVal : NaN;
+    if (!Number.isFinite(num) || num < spec.min || num > spec.max) continue;
+    rows.set(day, Math.round(num * 10) / 10);
+  }
+
+  return { field: spec.field, rows, nextPageToken: envelope.nextPageToken };
+}
+
+async function fetchRecoveryMetric(
+  type: RecoveryType,
+  grant: Tokens,
+  from: string,
+  endExclusive: string,
+  timezone = DEFAULT_TIMEZONE,
+) {
+  let pageToken: string | undefined;
+  const rows = new Map<string, number>();
+  const filter = `date >= "${from}" AND date < "${endExclusive}"`;
+
+  for (let page = 0; page < 10; page++) {
+    const url = new URL(`${googleAPI}/dataTypes/${type}/dataPoints:reconcile`);
+    url.searchParams.set("filter", filter);
+    url.searchParams.set("pageSize", "100");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${grant.accessToken}` },
+      signal: AbortSignal.timeout(8000),
+      cache: "no-store",
+    });
+    if (!response.ok) throw new NutritionError(`Google Health could not retrieve ${type}.`, 502);
+    const parsed = parseGoogleRecovery(type, await response.json(), timezone);
+    for (const [day, value] of parsed.rows) {
+      if (day >= from && day < endExclusive) rows.set(day, value);
+    }
+    pageToken = parsed.nextPageToken;
+    if (!pageToken) return { field: parsed.field, rows };
+  }
+  return { field: recoveryTypes[type].field, rows };
+}
+
+export interface ParsedWorkout {
+  day: string;
+  sessionId: string;
+  title: string;
+  exerciseType: string;
+  startTime: string | null;
+  endTime: string | null;
+  durationSeconds: number | null;
+  caloriesKcal: number | null;
+  distanceMeters: number | null;
+  avgHrBpm: number | null;
+  activeZoneMinutes: number | null;
+}
+
+function humanizeExerciseType(rawType: string): string {
+  const cleaned = rawType
+    .replace(/^EXERCISE_TYPE_/i, "")
+    .replace(/_/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!cleaned) return "Workout";
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+export function parseGoogleWorkouts(payload: unknown, timezone = DEFAULT_TIMEZONE): {
+  workouts: ParsedWorkout[];
+  nextPageToken?: string;
+} {
+  const rawList: unknown[] = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === "object"
+      ? [
+          ...(Array.isArray((payload as Record<string, unknown>).dataPoints)
+            ? ((payload as Record<string, unknown>).dataPoints as unknown[])
+            : []),
+          ...(Array.isArray((payload as Record<string, unknown>).workouts)
+            ? ((payload as Record<string, unknown>).workouts as unknown[])
+            : []),
+          ...(Array.isArray((payload as Record<string, unknown>).exercises)
+            ? ((payload as Record<string, unknown>).exercises as unknown[])
+            : []),
+        ]
+      : [];
+  const nextPageToken =
+    payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).nextPageToken === "string"
+      ? ((payload as Record<string, unknown>).nextPageToken as string)
+      : undefined;
+
+  const bySession = new Map<string, ParsedWorkout>();
+
+  for (const raw of rawList) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const ex = (item.exercise && typeof item.exercise === "object" ? item.exercise : item) as Record<string, unknown>;
+    const interval = (ex.interval && typeof ex.interval === "object" ? ex.interval : item.interval && typeof item.interval === "object" ? item.interval : {}) as Record<string, unknown>;
+
+    const startTimeRaw =
+      typeof interval.startTime === "string"
+        ? interval.startTime
+        : typeof ex.startTime === "string"
+          ? ex.startTime
+          : typeof ex.originalStartTime === "string"
+            ? ex.originalStartTime
+            : null;
+    const endTimeRaw =
+      typeof interval.endTime === "string"
+        ? interval.endTime
+        : typeof ex.endTime === "string"
+          ? ex.endTime
+          : null;
+
+    const startTime =
+      startTimeRaw && !Number.isNaN(new Date(startTimeRaw).getTime()) ? new Date(startTimeRaw).toISOString() : null;
+    const endTime =
+      endTimeRaw && !Number.isNaN(new Date(endTimeRaw).getTime()) ? new Date(endTimeRaw).toISOString() : null;
+
+    const day =
+      extractPointDay(item, ex, timezone) ??
+      (startTime ? localDay(startTime, timezone) : endTime ? localDay(endTime, timezone) : null);
+    if (!day) continue;
+
+    const exerciseType =
+      typeof ex.exerciseType === "string"
+        ? ex.exerciseType.trim().slice(0, 120)
+        : typeof ex.activityType === "string"
+          ? ex.activityType.trim().slice(0, 120)
+          : "";
+    const rawTitle =
+      typeof ex.displayName === "string" && ex.displayName.trim()
+        ? ex.displayName.trim()
+        : typeof ex.title === "string" && ex.title.trim()
+          ? ex.title.trim()
+          : typeof ex.activityName === "string" && ex.activityName.trim()
+            ? ex.activityName.trim()
+            : exerciseType
+              ? humanizeExerciseType(exerciseType)
+              : "Workout";
+    const title = rawTitle.slice(0, 200);
+
+    const sessionIdRaw =
+      typeof ex.sessionId === "string" && ex.sessionId.trim()
+        ? ex.sessionId.trim()
+        : typeof item.sessionId === "string" && item.sessionId.trim()
+          ? item.sessionId.trim()
+          : typeof item.name === "string" && item.name.trim()
+            ? item.name.split("/").at(-1)?.trim() ?? ""
+            : typeof ex.logId === "number" || typeof ex.logId === "string"
+              ? String(ex.logId)
+              : "";
+    const sessionId = (
+      sessionIdRaw ||
+      createHash("sha256")
+        .update(`${day}|${startTime ?? ""}|${title}|${exerciseType}`)
+        .digest("hex")
+        .slice(0, 24)
+    ).slice(0, 200);
+
+    const metrics = (
+      ex.metricsSummary && typeof ex.metricsSummary === "object"
+        ? ex.metricsSummary
+        : ex.summary && typeof ex.summary === "object"
+          ? ex.summary
+          : ex
+    ) as Record<string, unknown>;
+
+    let durationSeconds: number | null = null;
+    const rawDurSec =
+      metrics.durationSeconds ??
+      ex.durationSeconds ??
+      (typeof ex.activeDuration === "string" && ex.activeDuration.endsWith("s")
+        ? Number.parseFloat(ex.activeDuration)
+        : undefined) ??
+      (typeof metrics.activeDuration === "string" && metrics.activeDuration.endsWith("s")
+        ? Number.parseFloat(metrics.activeDuration)
+        : undefined) ??
+      (typeof ex.activeDuration === "number" ? Math.round(ex.activeDuration / 1000) : undefined) ??
+      (typeof ex.duration === "number" ? Math.round(ex.duration / 1000) : undefined) ??
+      (typeof ex.durationMinutes === "number" ? Math.round(ex.durationMinutes * 60) : undefined);
+    if (rawDurSec != null && Number.isFinite(Number(rawDurSec)) && Number(rawDurSec) >= 0) {
+      durationSeconds = Math.round(Number(rawDurSec));
+    } else if (startTime && endTime) {
+      const diffSec = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 1000);
+      if (Number.isFinite(diffSec) && diffSec >= 0) durationSeconds = diffSec;
+    }
+
+    const rawCal =
+      (metrics.caloriesExpended as { kcal?: number } | undefined)?.kcal ??
+      (metrics.calories as { kcal?: number } | undefined)?.kcal ??
+      metrics.caloriesKcal ??
+      ex.caloriesKcal ??
+      ex.calories;
+    const caloriesKcal =
+      rawCal != null && Number.isFinite(Number(rawCal)) && Number(rawCal) >= 0
+        ? Math.round(Number(rawCal) * 10) / 10
+        : null;
+
+    const distObj = metrics.distance as { meters?: number; millimeters?: number } | undefined;
+    const rawDist =
+      distObj?.meters ??
+      (distObj?.millimeters != null ? Number(distObj.millimeters) / 1000 : undefined) ??
+      metrics.distanceMeters ??
+      ex.distanceMeters ??
+      (typeof ex.distance === "number" ? ex.distance : undefined);
+    const distanceMeters =
+      rawDist != null && Number.isFinite(Number(rawDist)) && Number(rawDist) >= 0
+        ? Math.round(Number(rawDist) * 10) / 10
+        : null;
+
+    const rawHr =
+      (metrics.averageHeartRate as { beatsPerMinute?: number } | undefined)?.beatsPerMinute ??
+      (metrics.heartRate as { beatsPerMinuteAvg?: number; beatsPerMinute?: number } | undefined)?.beatsPerMinuteAvg ??
+      (metrics.heartRate as { beatsPerMinute?: number } | undefined)?.beatsPerMinute ??
+      metrics.averageHeartRateBpm ??
+      metrics.avgHrBpm ??
+      ex.averageHeartRateBpm ??
+      ex.avgHrBpm ??
+      ex.averageHeartRate;
+    const avgHrBpm =
+      rawHr != null && Number.isFinite(Number(rawHr)) && Number(rawHr) > 0
+        ? Math.round(Number(rawHr) * 10) / 10
+        : null;
+
+    const azmObj = metrics.activeZoneMinutes as
+      | number
+      | { minutesSum?: number; activeZoneMinutes?: number; totalMinutes?: number }
+      | undefined;
+    const rawAzm =
+      typeof azmObj === "number"
+        ? azmObj
+        : azmObj?.minutesSum ??
+          azmObj?.activeZoneMinutes ??
+          azmObj?.totalMinutes ??
+          (typeof ex.activeZoneMinutes === "number" ? ex.activeZoneMinutes : undefined);
+    const activeZoneMinutes =
+      rawAzm != null && Number.isFinite(Number(rawAzm)) && Number(rawAzm) >= 0 ? Math.round(Number(rawAzm)) : null;
+
+    const valid = workoutInput.safeParse({
+      day,
+      source: "google",
+      sessionId,
+      title,
+      exerciseType,
+      startTime,
+      endTime,
+      durationSeconds,
+      caloriesKcal,
+      distanceMeters,
+      avgHrBpm,
+      activeZoneMinutes,
+    });
+    if (valid.success) {
+      bySession.set(sessionId, {
+        day: valid.data.day,
+        sessionId: valid.data.sessionId,
+        title: valid.data.title,
+        exerciseType: valid.data.exerciseType,
+        startTime: valid.data.startTime ?? null,
+        endTime: valid.data.endTime ?? null,
+        durationSeconds: valid.data.durationSeconds ?? null,
+        caloriesKcal: valid.data.caloriesKcal ?? null,
+        distanceMeters: valid.data.distanceMeters ?? null,
+        avgHrBpm: valid.data.avgHrBpm ?? null,
+        activeZoneMinutes: valid.data.activeZoneMinutes ?? null,
+      });
+    }
+  }
+
+  return { workouts: [...bySession.values()], nextPageToken };
+}
+
+export async function fetchExerciseSessions(
+  grant: Tokens,
+  from: string,
+  endExclusive: string,
+  timezone = DEFAULT_TIMEZONE,
+) {
+  let pageToken: string | undefined;
+  const bySession = new Map<string, ParsedWorkout>();
+  const filter = `exercise.interval.civil_start_time >= "${from}T00:00:00" AND exercise.interval.civil_start_time < "${endExclusive}T00:00:00"`;
+
+  for (let page = 0; page < 10; page++) {
+    const url = new URL(`${googleAPI}/dataTypes/exercise/dataPoints:reconcile`);
+    url.searchParams.set("filter", filter);
+    url.searchParams.set("pageSize", "50");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${grant.accessToken}` },
+      signal: AbortSignal.timeout(9000),
+      cache: "no-store",
+    });
+    if (!response.ok) throw new NutritionError("Google Health could not retrieve exercise data.", 502);
+    const parsed = parseGoogleWorkouts(await response.json(), timezone);
+    for (const w of parsed.workouts) {
+      if (w.day < from || w.day >= endExclusive) continue;
+      bySession.set(w.sessionId, w);
+    }
+    pageToken = parsed.nextPageToken;
+    if (!pageToken) return [...bySession.values()];
+  }
+  return [...bySession.values()];
 }
 
 async function fetchLatestHeightCm(grant: Tokens): Promise<number | null> {
@@ -299,12 +832,6 @@ export interface ParsedSleepSession {
   remMinutes: number | null;
   lightMinutes: number | null;
   stagesJson: { stage: SleepStageType; minutes: number }[];
-}
-
-function formatCivilDate(d?: { year?: number; month?: number; day?: number } | null): string | null {
-  if (!d || typeof d.year !== "number" || typeof d.month !== "number" || typeof d.day !== "number") return null;
-  const candidate = [d.year, String(d.month).padStart(2, "0"), String(d.day).padStart(2, "0")].join("-");
-  return z.iso.date().safeParse(candidate).success ? candidate : null;
 }
 
 export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE): {
@@ -507,24 +1034,55 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
     const tz = (await nutritionData(db, userId).settings()).timezone;
     const today = localDay(new Date(), tz);
     const through = to < today ? to : today;
-    const allowed = (Object.keys(types) as (keyof typeof types)[]).filter(
-      (name) => name !== "weight" || grant.scopes.includes(measurementsScope),
+    const canMeasurements = grant.scopes.includes(measurementsScope);
+    const canActivity = grant.scopes.includes(activityScope);
+    const allowedCore = coreRollupTypes.filter(
+      (name) => name !== "weight" || canMeasurements,
     );
 
     // Chunk into 14-day windows to respect Google Health API total-calories max window.
     for (let start = from; start <= through; start = addDays(start, 14)) {
       const limit = addDays(start, 14);
       const end = limit <= through ? limit : addDays(through, 1);
-      for (const { field, rows } of await Promise.all(allowed.map((type) => fetchRollup(type, grant, start, end)))) {
+      const [coreResults, optionalResults] = await Promise.all([
+        Promise.all(allowedCore.map((type) => fetchRollup(type, grant, start, end))),
+        canActivity
+          ? Promise.all(optionalRollupTypes.map((type) => fetchRollup(type, grant, start, end).catch(() => null)))
+          : Promise.resolve([]),
+      ]);
+      for (const { field, rows } of coreResults) {
         for (const [day, value] of rows) readings.set(day, { ...readings.get(day), [field]: value });
+      }
+      for (const opt of optionalResults) {
+        if (!opt) continue;
+        for (const [day, value] of opt.rows) readings.set(day, { ...readings.get(day), [opt.field]: value });
       }
     }
 
     const canSleep = grant.scopes.includes(sleepScope);
-    const [remoteHeightCm, sleepSessions] = await Promise.all([
+    const endExclusive = addDays(through, 1);
+    const recoveryMetricNames = Object.keys(recoveryTypes) as RecoveryType[];
+
+    const [remoteHeightCm, sleepSessions, recoveryResults, workoutSessions] = await Promise.all([
       fetchLatestHeightCm(grant),
-      canSleep ? fetchSleepSessions(grant, from, addDays(through, 1), tz) : Promise.resolve(new Map<string, ParsedSleepSession>()),
+      canSleep ? fetchSleepSessions(grant, from, endExclusive, tz) : Promise.resolve(new Map<string, ParsedSleepSession>()),
+      canMeasurements
+        ? Promise.all(
+            recoveryMetricNames.map((type) =>
+              fetchRecoveryMetric(type, grant, from, endExclusive, tz).catch(() => null),
+            ),
+          )
+        : Promise.resolve([]),
+      canActivity ? fetchExerciseSessions(grant, from, endExclusive, tz).catch(() => null) : Promise.resolve(null),
     ]);
+
+    const recoveryReadings = new Map<string, Partial<Record<RecoveryField, number>>>();
+    for (const res of recoveryResults) {
+      if (!res) continue;
+      for (const [day, value] of res.rows) {
+        recoveryReadings.set(day, { ...recoveryReadings.get(day), [res.field]: value });
+      }
+    }
 
     await db.transaction(async (tx) => {
       const [current] = await tx.select().from(healthIntegration).where(own(userId)).for("update");
@@ -582,6 +1140,71 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
         }
       }
 
+      if (canMeasurements) {
+        await tx
+          .delete(dailyRecovery)
+          .where(and(eq(dailyRecovery.userId, userId), eq(dailyRecovery.source, "google"), gte(dailyRecovery.day, from), lte(dailyRecovery.day, through)));
+        for (const [day, rec] of recoveryReadings) {
+          const valid = recoveryInput.parse({ day, source: "google", ...rec });
+          await tx.insert(dailyRecovery).values({
+            userId,
+            source: "google",
+            day: valid.day,
+            restingHrBpm: valid.restingHrBpm ?? null,
+            hrvRmssdMs: valid.hrvRmssdMs ?? null,
+            spo2Pct: valid.spo2Pct ?? null,
+            respiratoryRate: valid.respiratoryRate ?? null,
+            skinTempDeltaC: valid.skinTempDeltaC ?? null,
+            vo2Max: valid.vo2Max ?? null,
+            bodyFatPct: valid.bodyFatPct ?? null,
+            syncedAt: new Date(),
+          });
+        }
+      }
+
+      if (workoutSessions !== null) {
+        await tx
+          .delete(dailyWorkout)
+          .where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google"), gte(dailyWorkout.day, from), lte(dailyWorkout.day, through)));
+        for (const w of workoutSessions) {
+          const valid = workoutInput.parse({ ...w, source: "google" });
+          await tx
+            .insert(dailyWorkout)
+            .values({
+              userId,
+              source: "google",
+              sessionId: valid.sessionId,
+              day: valid.day,
+              title: valid.title,
+              exerciseType: valid.exerciseType,
+              startTime: valid.startTime ? new Date(valid.startTime) : null,
+              endTime: valid.endTime ? new Date(valid.endTime) : null,
+              durationSeconds: valid.durationSeconds ?? null,
+              caloriesKcal: valid.caloriesKcal ?? null,
+              distanceMeters: valid.distanceMeters ?? null,
+              avgHrBpm: valid.avgHrBpm ?? null,
+              activeZoneMinutes: valid.activeZoneMinutes ?? null,
+              syncedAt: new Date(),
+            })
+            .onConflictDoUpdate({
+              target: [dailyWorkout.userId, dailyWorkout.source, dailyWorkout.sessionId],
+              set: {
+                day: valid.day,
+                title: valid.title,
+                exerciseType: valid.exerciseType,
+                startTime: valid.startTime ? new Date(valid.startTime) : null,
+                endTime: valid.endTime ? new Date(valid.endTime) : null,
+                durationSeconds: valid.durationSeconds ?? null,
+                caloriesKcal: valid.caloriesKcal ?? null,
+                distanceMeters: valid.distanceMeters ?? null,
+                avgHrBpm: valid.avgHrBpm ?? null,
+                activeZoneMinutes: valid.activeZoneMinutes ?? null,
+                syncedAt: new Date(),
+              },
+            });
+        }
+      }
+
       if (remoteHeightCm != null) {
         const [prof] = await tx.select({ heightCm: profile.heightCm }).from(profile).where(eq(profile.userId, userId));
         if (!prof) {
@@ -597,7 +1220,13 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
         .where(own(userId));
     });
 
-    return { syncedDays: readings.size, syncedSleepDays: sleepSessions.size, syncedHeight: remoteHeightCm != null };
+    return {
+      syncedDays: readings.size,
+      syncedSleepDays: sleepSessions.size,
+      syncedRecoveryDays: recoveryReadings.size,
+      syncedWorkouts: (workoutSessions ?? []).length,
+      syncedHeight: remoteHeightCm != null,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sync failed.";
     await db
@@ -616,8 +1245,9 @@ export async function syncGoogleAllUsers(db: AuthDatabase) {
 
   for (const row of connected) {
     try {
-      const tz = (await nutritionData(db, row.userId).settings()).timezone;
-      const today = localDay(new Date(), tz);
+      const settings = await nutritionData(db, row.userId).settings();
+      if (settings.trackingMode === "manual" || settings.preferredEnergySource !== "google") continue;
+      const today = localDay(new Date(), settings.timezone);
       await syncGoogle(db, row.userId, addDays(today, -1), today);
     } catch {
       // Keep failures isolated per user
@@ -696,6 +1326,10 @@ export async function pushWeightToGoogle(
 ) {
   if (!googleConfigured()) return { pushed: false, reason: "not-configured" };
   try {
+    const settings = await nutritionData(db, userId).settings();
+    if (settings.trackingMode === "manual" || settings.preferredEnergySource !== "google") {
+      return { pushed: false, reason: "manual-mode" };
+    }
     const { grant } = await getFreshGrant(db, userId);
     if (!grant.scopes.includes(measurementsWriteScope)) {
       return { pushed: false, reason: "missing-write-scope" };
@@ -716,16 +1350,20 @@ export async function pushWeightToGoogle(
     if (operation.error) return { pushed: false, reason: "operation-failed" };
     if (!operation.done) return { pushed: false, reason: "operation-pending" };
     return { pushed: operation.response?.name?.split("/").at(-1) === name.split("/").at(-1) };
-
   } catch {
     return { pushed: false, reason: "request-failed" };
   }
 }
 
 export async function pushMealToGoogle(db: AuthDatabase, userId: string, record: MealRecord) {
+  const settings = await nutritionData(db, userId).settings();
+  if (settings.trackingMode === "manual" || settings.preferredEnergySource !== "google") {
+    return { queued: false, reason: "manual-mode" };
+  }
   const { queueGoogleMeal } = await import("./google-sync-queue");
   return { queued: await queueGoogleMeal(db, userId, record.id, "upsert", true) };
 }
+
 export async function pushPendingToGoogle(db: AuthDatabase, userId: string, from: string, to: string) {
   historyInput.parse({ from, to });
   const { grant } = await getFreshGrant(db, userId);
@@ -791,13 +1429,31 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
       totalKcal?: number | null;
       activeKcal?: number | null;
       steps?: number | null;
+      activeZoneMinutes?: number | null;
+      distanceMeters?: number | null;
+      floors?: number | null;
       weightKg?: number | null;
       complete?: boolean;
     }
   >();
+  const recoveryByDay = new Map<
+    string,
+    {
+      day: string;
+      source: "google" | "apple" | "manual";
+      restingHrBpm?: number | null;
+      hrvRmssdMs?: number | null;
+      spo2Pct?: number | null;
+      respiratoryRate?: number | null;
+      skinTempDeltaC?: number | null;
+      vo2Max?: number | null;
+      bodyFatPct?: number | null;
+    }
+  >();
+  const workoutMap = new Map<string, ParsedWorkout & { source?: "google" | "apple" | "manual" }>();
   let heightCm: number | null = null;
   const sleepMap = new Map<string, ParsedSleepSession>();
-  const meals: z.input<typeof energyInput> extends never ? never : {
+  const meals: {
     day: string;
     time: string;
     name: string;
@@ -822,6 +1478,9 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
       totalKcal?: number | null;
       activeKcal?: number | null;
       steps?: number | null;
+      activeZoneMinutes?: number | null;
+      distanceMeters?: number | null;
+      floors?: number | null;
       weightKg?: number | null;
       complete?: boolean;
     },
@@ -834,8 +1493,39 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
       totalKcal: patch.totalKcal ?? prev.totalKcal,
       activeKcal: patch.activeKcal ?? prev.activeKcal,
       steps: patch.steps ?? prev.steps,
+      activeZoneMinutes: patch.activeZoneMinutes ?? prev.activeZoneMinutes,
+      distanceMeters: patch.distanceMeters ?? prev.distanceMeters,
+      floors: patch.floors ?? prev.floors,
       weightKg: patch.weightKg ?? prev.weightKg,
       complete: patch.complete ?? prev.complete,
+    });
+  };
+
+  const mergeRecovery = (
+    day: string,
+    patch: {
+      source?: "google" | "apple" | "manual";
+      restingHrBpm?: number | null;
+      hrvRmssdMs?: number | null;
+      spo2Pct?: number | null;
+      respiratoryRate?: number | null;
+      skinTempDeltaC?: number | null;
+      vo2Max?: number | null;
+      bodyFatPct?: number | null;
+    },
+  ) => {
+    const prev = recoveryByDay.get(day) ?? { day, source: patch.source ?? "google" };
+    recoveryByDay.set(day, {
+      ...prev,
+      ...patch,
+      source: patch.source ?? prev.source,
+      restingHrBpm: patch.restingHrBpm ?? prev.restingHrBpm,
+      hrvRmssdMs: patch.hrvRmssdMs ?? prev.hrvRmssdMs,
+      spo2Pct: patch.spo2Pct ?? prev.spo2Pct,
+      respiratoryRate: patch.respiratoryRate ?? prev.respiratoryRate,
+      skinTempDeltaC: patch.skinTempDeltaC ?? prev.skinTempDeltaC,
+      vo2Max: patch.vo2Max ?? prev.vo2Max,
+      bodyFatPct: patch.bodyFatPct ?? prev.bodyFatPct,
     });
   };
 
@@ -848,7 +1538,21 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
     }
 
     const ingestPoint = (pt: Record<string, unknown>) => {
-      // 0. Saved sleep point (FitnessTrackr export or Google Health v4 dataPoint with .sleep)
+      // 0a. Saved exercise / workout point
+      if (
+        (pt.exercise && typeof pt.exercise === "object") ||
+        (typeof pt.sessionId === "string" && typeof pt.title === "string" && typeof pt.day === "string") ||
+        (typeof pt.activityName === "string" && (typeof pt.startTime === "string" || typeof pt.originalStartTime === "string"))
+      ) {
+        const parsedWorkouts = parseGoogleWorkouts({ dataPoints: [pt] }, timezone);
+        const src = pt.source === "manual" || pt.source === "apple" ? pt.source : "google";
+        for (const w of parsedWorkouts.workouts) {
+          workoutMap.set(w.sessionId, { ...w, source: src });
+        }
+        return;
+      }
+
+      // 0b. Saved sleep point (FitnessTrackr export or Google Health v4 dataPoint with .sleep)
       if (pt.sleep && typeof pt.sleep === "object") {
         const parsedSleep = parseGoogleSleep({ dataPoints: [pt] }, timezone);
         for (const [day, s] of parsedSleep.sessions) {
@@ -888,17 +1592,75 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
         return;
       }
 
-      // 1. Native app / export array entry
+      // 0c. Google Health v4 recovery dataPoint / rollupPoint
+      if (
+        pt.dailyRestingHeartRate ||
+        pt.restingHeartRate ||
+        pt.dailyHeartRateVariability ||
+        pt.heartRateVariability ||
+        pt.dailyOxygenSaturation ||
+        pt.oxygenSaturation ||
+        pt.dailyRespiratoryRate ||
+        pt.respiratoryRate ||
+        pt.dailySleepTemperatureDerivations ||
+        pt.sleepTemperatureDerivations ||
+        pt.skinTemperatureDerivation ||
+        pt.dailyVo2Max ||
+        (pt.vo2Max && typeof pt.vo2Max === "object") ||
+        (pt.bodyFat && typeof pt.bodyFat === "object")
+      ) {
+        for (const recType of Object.keys(recoveryTypes) as RecoveryType[]) {
+          const parsedRec = parseGoogleRecovery(recType, { dataPoints: [pt] }, timezone);
+          for (const [day, val] of parsedRec.rows) {
+            mergeRecovery(day, { source: "google", [parsedRec.field]: val });
+          }
+        }
+      }
+
+      // 1. Native app / export array entry (energy and/or recovery)
       if (typeof pt.day === "string" && z.iso.date().safeParse(pt.day).success) {
         const src = pt.source === "apple" || pt.source === "manual" ? pt.source : "google";
-        mergeDay(pt.day, {
-          source: src,
-          totalKcal: typeof pt.totalKcal === "number" ? pt.totalKcal : null,
-          activeKcal: typeof pt.activeKcal === "number" ? pt.activeKcal : null,
-          steps: typeof pt.steps === "number" ? Math.round(pt.steps) : null,
-          weightKg: typeof pt.weightKg === "number" ? Math.round(pt.weightKg * 100) / 100 : null,
-          complete: typeof pt.complete === "boolean" ? pt.complete : typeof pt.totalKcal === "number",
-        });
+        const hasRec =
+          typeof pt.restingHrBpm === "number" ||
+          typeof pt.hrvRmssdMs === "number" ||
+          typeof pt.spo2Pct === "number" ||
+          typeof pt.respiratoryRate === "number" ||
+          typeof pt.skinTempDeltaC === "number" ||
+          typeof pt.vo2Max === "number" ||
+          typeof pt.bodyFatPct === "number";
+        if (hasRec) {
+          mergeRecovery(pt.day, {
+            source: src,
+            restingHrBpm: typeof pt.restingHrBpm === "number" ? pt.restingHrBpm : undefined,
+            hrvRmssdMs: typeof pt.hrvRmssdMs === "number" ? pt.hrvRmssdMs : undefined,
+            spo2Pct: typeof pt.spo2Pct === "number" ? pt.spo2Pct : undefined,
+            respiratoryRate: typeof pt.respiratoryRate === "number" ? pt.respiratoryRate : undefined,
+            skinTempDeltaC: typeof pt.skinTempDeltaC === "number" ? pt.skinTempDeltaC : undefined,
+            vo2Max: typeof pt.vo2Max === "number" ? pt.vo2Max : undefined,
+            bodyFatPct: typeof pt.bodyFatPct === "number" ? pt.bodyFatPct : undefined,
+          });
+        }
+        const hasEnergy =
+          typeof pt.totalKcal === "number" ||
+          typeof pt.activeKcal === "number" ||
+          typeof pt.steps === "number" ||
+          typeof pt.activeZoneMinutes === "number" ||
+          typeof pt.distanceMeters === "number" ||
+          typeof pt.floors === "number" ||
+          typeof pt.weightKg === "number";
+        if (hasEnergy || !hasRec) {
+          mergeDay(pt.day, {
+            source: src,
+            totalKcal: typeof pt.totalKcal === "number" ? pt.totalKcal : undefined,
+            activeKcal: typeof pt.activeKcal === "number" ? pt.activeKcal : undefined,
+            steps: typeof pt.steps === "number" ? Math.round(pt.steps) : undefined,
+            activeZoneMinutes: typeof pt.activeZoneMinutes === "number" ? Math.round(pt.activeZoneMinutes) : undefined,
+            distanceMeters: typeof pt.distanceMeters === "number" ? Math.round(pt.distanceMeters * 10) / 10 : undefined,
+            floors: typeof pt.floors === "number" ? Math.round(pt.floors) : undefined,
+            weightKg: typeof pt.weightKg === "number" ? Math.round(pt.weightKg * 100) / 100 : undefined,
+            complete: typeof pt.complete === "boolean" ? pt.complete : typeof pt.totalKcal === "number",
+          });
+        }
         return;
       }
 
@@ -909,16 +1671,31 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
         const tot = (pt.totalCalories as { kcalSum?: number } | undefined)?.kcalSum;
         const act = (pt.activeEnergyBurned as { kcalSum?: number } | undefined)?.kcalSum;
         const st = (pt.steps as { countSum?: number | string } | undefined)?.countSum;
+        const azmObj = pt.activeZoneMinutes as
+          | { minutesSum?: number; activeZoneMinutesSum?: number; countSum?: number; totalMinutes?: number }
+          | undefined;
+        const azm =
+          azmObj?.minutesSum ?? azmObj?.activeZoneMinutesSum ?? azmObj?.countSum ?? azmObj?.totalMinutes;
+        const distObj = pt.distance as { metersSum?: number; millimetersSum?: number } | undefined;
+        const dist =
+          distObj?.metersSum ?? (distObj?.millimetersSum != null ? Number(distObj.millimetersSum) / 1000 : undefined);
+        const flObj = pt.floors as { countSum?: number; floorsSum?: number } | undefined;
+        const fl = flObj?.countSum ?? flObj?.floorsSum;
         const wtObj = pt.weight as { weightGramsAvg?: number; kilogramsAvg?: number } | undefined;
         const wt = wtObj?.weightGramsAvg != null ? wtObj.weightGramsAvg / 1000 : wtObj?.kilogramsAvg;
-        mergeDay(day, {
-          source: "google",
-          totalKcal: tot != null ? Math.round(Number(tot) * 10) / 10 : undefined,
-          activeKcal: act != null ? Math.round(Number(act) * 10) / 10 : undefined,
-          steps: st != null ? Math.round(Number(st)) : undefined,
-          weightKg: wt != null ? Math.round(Number(wt) * 100) / 100 : undefined,
-          complete: tot != null,
-        });
+        if (tot != null || act != null || st != null || azm != null || dist != null || fl != null || wt != null) {
+          mergeDay(day, {
+            source: "google",
+            totalKcal: tot != null ? Math.round(Number(tot) * 10) / 10 : undefined,
+            activeKcal: act != null ? Math.round(Number(act) * 10) / 10 : undefined,
+            steps: st != null ? Math.round(Number(st)) : undefined,
+            activeZoneMinutes: azm != null ? Math.round(Number(azm)) : undefined,
+            distanceMeters: dist != null ? Math.round(Number(dist) * 10) / 10 : undefined,
+            floors: fl != null ? Math.round(Number(fl)) : undefined,
+            weightKg: wt != null ? Math.round(Number(wt) * 100) / 100 : undefined,
+            complete: tot != null,
+          });
+        }
         return;
       }
 
@@ -1035,22 +1812,45 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
       }
     };
 
-    if (Array.isArray(parsed)) {
-      for (const item of parsed) {
-        if (item && typeof item === "object") ingestPoint(item as Record<string, unknown>);
-      }
-    } else if (parsed && typeof parsed === "object") {
-      const obj = parsed as Record<string, unknown>;
+    const ingestContainer = (obj: Record<string, unknown>) => {
       if (typeof obj.heightCm === "number" && obj.heightCm > 50 && obj.heightCm < 300) {
         heightCm = Math.round(obj.heightCm * 10) / 10;
       }
-      for (const keyName of ["dataPoints", "rollupDataPoints", "entries", "dailyEnergy", "dailySleep", "sleep", "sleepLogs", "weight", "calories", "steps"]) {
+      for (const keyName of [
+        "dataPoints",
+        "rollupDataPoints",
+        "entries",
+        "dailyEnergy",
+        "dailySleep",
+        "dailyRecovery",
+        "recovery",
+        "dailyWorkout",
+        "workouts",
+        "exercises",
+        "exercise",
+        "sleep",
+        "sleepLogs",
+        "weight",
+        "calories",
+        "steps",
+      ]) {
         if (Array.isArray(obj[keyName])) {
           for (const item of obj[keyName] as unknown[]) {
             if (item && typeof item === "object") ingestPoint(item as Record<string, unknown>);
           }
         }
       }
+      if (obj.nutrition && typeof obj.nutrition === "object" && !Array.isArray(obj.nutrition)) {
+        ingestContainer(obj.nutrition as Record<string, unknown>);
+      }
+    };
+
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (item && typeof item === "object") ingestPoint(item as Record<string, unknown>);
+      }
+    } else if (parsed && typeof parsed === "object") {
+      ingestContainer(parsed as Record<string, unknown>);
     }
   } else {
     // Parse CSV (Google Takeout / Fitbit / custom export)
@@ -1063,34 +1863,91 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
     const iTotal = col("caloriesburned", "totalcalories", "totalkcal", "tdee", "energy");
     const iActive = col("activitycalories", "activecalories", "activekcal");
     const iSteps = col("steps");
+    const iAzm = col("activezoneminutes", "azm", "zoneminutes");
+    const iDistance = col("distance", "distancemeters", "distancekm");
+    const distanceInKm = iDistance !== -1 && (headers[iDistance]?.includes("km") || headers[iDistance]?.includes("kilometer"));
+    const iFloors = col("floors");
     const iWeight = col("weight");
-    const weightInLbs = headers[iWeight]?.includes("lb") || headers[iWeight]?.includes("pound");
+    const weightInLbs = iWeight !== -1 && (headers[iWeight]?.includes("lb") || headers[iWeight]?.includes("pound"));
+    const iRhr = col("restingheartrate", "restinghr", "rhr");
+    const iHrv = col("hrv", "heartratevariability", "rmssd");
+    const iSpo2 = col("spo2", "oxygensaturation");
+    const iResp = col("respiratoryrate", "breathingrate");
+    const iSkinTemp = col("skintemp", "temperaturedelta");
+    const iVo2 = col("vo2max", "cardiofitness");
+    const iBodyFat = col("bodyfat", "fatpct");
     if (iDate === -1) throw new NutritionError("CSV must contain a Date or Day column.");
 
     for (const line of lines.slice(1)) {
       const cells = splitCsvLine(line);
       const day = normalizeDateString(cells[iDate] ?? "");
       if (!day) continue;
-      const numAt = (idx: number) => {
+      const numAt = (idx: number, allowNegative = false) => {
         if (idx === -1 || !cells[idx]) return null;
-        const clean = cells[idx].replace(/,/g, "").trim();
+        const clean = cells[idx].replace(/,/g, "").replace(/%/g, "").trim();
+        if (!clean) return null;
         const n = Number(clean);
-        return Number.isFinite(n) && n >= 0 ? n : null;
+        return Number.isFinite(n) && (allowNegative || n >= 0) ? n : null;
       };
       const totalKcal = numAt(iTotal);
       const activeKcal = numAt(iActive);
       const steps = numAt(iSteps);
+      const azm = numAt(iAzm);
+      const rawDist = numAt(iDistance);
+      const distanceMeters = rawDist != null ? Math.round((distanceInKm ? rawDist * 1000 : rawDist) * 10) / 10 : null;
+      const floors = numAt(iFloors);
       const rawWt = numAt(iWeight);
       const weightKg = rawWt != null && rawWt > 0 ? Math.round((weightInLbs ? rawWt * 0.45359237 : rawWt) * 100) / 100 : null;
-      if (totalKcal == null && activeKcal == null && steps == null && weightKg == null) continue;
-      mergeDay(day, {
-        source: "google",
-        totalKcal,
-        activeKcal: totalKcal != null && activeKcal != null && activeKcal > totalKcal ? null : activeKcal,
-        steps: steps != null ? Math.round(steps) : null,
-        weightKg,
-        complete: totalKcal != null,
-      });
+
+      if (
+        totalKcal != null ||
+        activeKcal != null ||
+        steps != null ||
+        azm != null ||
+        distanceMeters != null ||
+        floors != null ||
+        weightKg != null
+      ) {
+        mergeDay(day, {
+          source: "google",
+          totalKcal,
+          activeKcal: totalKcal != null && activeKcal != null && activeKcal > totalKcal ? null : activeKcal,
+          steps: steps != null ? Math.round(steps) : null,
+          activeZoneMinutes: azm != null ? Math.round(azm) : null,
+          distanceMeters,
+          floors: floors != null ? Math.round(floors) : null,
+          weightKg,
+          complete: totalKcal != null,
+        });
+      }
+
+      const restingHrBpm = numAt(iRhr);
+      const hrvRmssdMs = numAt(iHrv);
+      const spo2Pct = numAt(iSpo2);
+      const respiratoryRate = numAt(iResp);
+      const skinTempDeltaC = numAt(iSkinTemp, true);
+      const vo2Max = numAt(iVo2);
+      const bodyFatPct = numAt(iBodyFat);
+      if (
+        restingHrBpm != null ||
+        hrvRmssdMs != null ||
+        spo2Pct != null ||
+        respiratoryRate != null ||
+        skinTempDeltaC != null ||
+        vo2Max != null ||
+        bodyFatPct != null
+      ) {
+        mergeRecovery(day, {
+          source: "google",
+          restingHrBpm,
+          hrvRmssdMs,
+          spo2Pct,
+          respiratoryRate,
+          skinTempDeltaC,
+          vo2Max,
+          bodyFatPct,
+        });
+      }
     }
   }
 
@@ -1103,6 +1960,9 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
         totalKcal: entry.totalKcal ?? null,
         activeKcal: entry.activeKcal ?? null,
         steps: entry.steps ?? null,
+        activeZoneMinutes: entry.activeZoneMinutes ?? null,
+        distanceMeters: entry.distanceMeters ?? null,
+        floors: entry.floors ?? null,
         weightKg: entry.weightKg ?? null,
         complete: entry.complete ?? entry.totalKcal != null,
       }),
@@ -1112,11 +1972,38 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
     .slice(0, 365)
     .map((s) => sleepInput.parse({ ...s, source: "google" }));
 
-  if (energyEntries.length === 0 && sleepEntries.length === 0 && meals.length === 0 && heightCm == null) {
-    throw new NutritionError("No valid energy, sleep, weight, height, or meal records found in that file.");
+  const recoveryEntries = [...recoveryByDay.values()]
+    .slice(0, 365)
+    .map((r) =>
+      recoveryInput.parse({
+        day: r.day,
+        source: r.source,
+        restingHrBpm: r.restingHrBpm ?? null,
+        hrvRmssdMs: r.hrvRmssdMs ?? null,
+        spo2Pct: r.spo2Pct ?? null,
+        respiratoryRate: r.respiratoryRate ?? null,
+        skinTempDeltaC: r.skinTempDeltaC ?? null,
+        vo2Max: r.vo2Max ?? null,
+        bodyFatPct: r.bodyFatPct ?? null,
+      }),
+    );
+
+  const workoutEntries = [...workoutMap.values()]
+    .slice(0, 365)
+    .map((w) => workoutInput.parse({ ...w, source: w.source ?? "google" }));
+
+  if (
+    energyEntries.length === 0 &&
+    sleepEntries.length === 0 &&
+    recoveryEntries.length === 0 &&
+    workoutEntries.length === 0 &&
+    meals.length === 0 &&
+    heightCm == null
+  ) {
+    throw new NutritionError("No valid energy, sleep, recovery, workout, weight, height, or meal records found in that file.");
   }
 
-  return { energyEntries, sleepEntries, heightCm, meals };
+  return { energyEntries, sleepEntries, recoveryEntries, workoutEntries, heightCm, meals };
 }
 
 export async function disconnectGoogle(db: AuthDatabase, userId: string) {
@@ -1127,6 +2014,25 @@ export async function disconnectGoogle(db: AuthDatabase, userId: string) {
       .returning({ credential: healthIntegration.credential });
     await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
     await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google")));
+    await tx.delete(dailyRecovery).where(and(eq(dailyRecovery.userId, userId), eq(dailyRecovery.source, "google")));
+    await tx.delete(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google")));
+    await tx
+      .insert(nutritionPreference)
+      .values({
+        userId,
+        timezone: DEFAULT_TIMEZONE,
+        trackingMode: "manual",
+        preferredEnergySource: "manual",
+        googleTwoWaySync: false,
+        sleepRolloverEnabled: true,
+      })
+      .onConflictDoUpdate({
+        target: nutritionPreference.userId,
+        set: {
+          trackingMode: "manual",
+          preferredEnergySource: "manual",
+        },
+      });
     await tx.delete(googleMealSync).where(eq(googleMealSync.userId, userId));
     await tx.update(meal).set({ googleDatapointName: null }).where(eq(meal.userId, userId));
     return removed;

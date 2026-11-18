@@ -51,7 +51,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   const [activeHomeDay, setActiveHomeDay] = useState(initialActiveDay);
   const activeHomeDayRef = useRef(initialActiveDay);
-  const [waitingForSleep, setWaitingForSleep] = useState(Boolean(initial.waitingForSleep));
   const [showSleep, setShowSleep] = useState(Boolean(initial.showSleep));
 
   const [homeDay, setHomeDay] = useState(initialActiveDay);
@@ -130,6 +129,12 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           selectedDayRef.current = currentDay;
           setSelectedDay(currentDay);
         }
+        if (homeDayRef.current === todayRef.current) {
+          homeDayRef.current = currentDay;
+          setHomeDay(currentDay);
+        }
+        activeHomeDayRef.current = currentDay;
+        setActiveHomeDay(currentDay);
         todayRef.current = currentDay;
         setToday(currentDay);
       }
@@ -198,7 +203,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const hs = payload.homeState as {
         calendarToday?: string;
         activeDay?: string;
-        waitingForSleep?: boolean;
         showSleep?: boolean;
       };
       if (hs.calendarToday && hs.calendarToday !== todayRef.current) {
@@ -214,7 +218,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           setHomeDay(hs.activeDay);
         }
       }
-      setWaitingForSleep(Boolean(hs.waitingForSleep));
       setShowSleep(Boolean(hs.showSleep));
     }
   }
@@ -395,6 +398,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         const parts: string[] = [];
         if (payload.energyImported) parts.push(`${payload.energyImported} day(s) of energy`);
         if (payload.sleepImported) parts.push(`${payload.sleepImported} sleep session(s)`);
+        if (payload.recoveryImported) parts.push(`${payload.recoveryImported} recovery day(s)`);
+        if (payload.workoutsImported) parts.push(`${payload.workoutsImported} workout(s)`);
         if (payload.weightsSynced) parts.push(`${payload.weightsSynced} weight reading(s)`);
         if (payload.mealsImported) parts.push(`${payload.mealsImported} meal(s)`);
         if (payload.heightUpdated) parts.push("height profile");
@@ -498,7 +503,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             calendarToday={today}
             activeDay={activeHomeDay}
             viewDay={homeDay}
-            waitingForSleep={waitingForSleep}
             showSleep={showSleep}
             daily={homeDaily}
             history30={history30}
@@ -509,14 +513,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             busy={busy}
             onToggleTheme={toggleTheme}
             onSelectHomeDay={(d) => void selectHomeDay(d)}
-            onLogMeal={() => openNewMeal(today)}
+            onLogMeal={() => openNewMeal(homeDay)}
             onEditMeal={openEditMeal}
-            onToggleComplete={(day, complete) =>
-              void runNutritionAction(
-                { action: "complete", day, complete },
-                complete ? "Day marked complete." : "Day marked in progress.",
-              )
-            }
             onSyncGoogle={() => void syncGoogle(14)}
             onPushGoogle={() => void pushGoogle(14)}
             onNavigate={navigate}
@@ -530,6 +528,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             dayView={selectedDaily}
             history30={history30}
             tracker={tracker}
+            settings={settings}
             theme={theme}
             busy={busy}
             loading={dayLoading || selectedDaily.day !== selectedDay}
@@ -546,18 +545,15 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             onDeleteMeal={(id, name) =>
               void runNutritionAction({ action: "delete", id }, `Deleted "${name}".`)
             }
-            onToggleComplete={(day, complete) =>
-              void runNutritionAction(
-                { action: "complete", day, complete },
-                complete ? "Day marked complete." : "Day marked in progress.",
-              )
-            }
           />
         )}
 
         {tab === "Measurements" && (
           <MeasurementsView
             snapshot={tracker}
+            nutritionSettings={settings}
+            history30={history30}
+            daily={homeDaily}
             today={today}
             theme={theme}
             busy={busy}
@@ -616,7 +612,16 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         />
       )}
 
-      {!composerOpen && <button className="log-meal-fab" type="button" onClick={() => openNewMeal(tab === "Nutrition" ? selectedDay : today)}><Plus size={20} aria-hidden="true" />Log meal</button>}
+      {!composerOpen && (
+        <button
+          className="log-meal-fab"
+          type="button"
+          onClick={() => openNewMeal(tab === "Home" ? homeDay : tab === "Nutrition" ? selectedDay : today)}
+        >
+          <Plus size={20} aria-hidden="true" />
+          Log meal
+        </button>
+      )}
       <nav className="tabs" aria-label="FitnessTrackr views">
         {tabs.map(({ title, icon: Icon }) => (
           <button

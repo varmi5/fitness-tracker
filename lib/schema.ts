@@ -82,6 +82,7 @@ export const measurement = pgTable("measurement", {
 export const nutritionPreference = pgTable("nutrition_preference", {
   userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
   timezone: text().notNull().default("Europe/London"),
+  trackingMode: text("tracking_mode").notNull().default("manual"),
   preferredEnergySource: text("preferred_energy_source").notNull().default("google"),
   googleTwoWaySync: boolean("google_two_way_sync").notNull().default(false),
   sleepRolloverEnabled: boolean("sleep_rollover_enabled").notNull().default(true),
@@ -184,6 +185,9 @@ export const dailyEnergy = pgTable("daily_energy", {
   totalKcal: doublePrecision("total_kcal"),
   activeKcal: doublePrecision("active_kcal"),
   steps: integer(),
+  activeZoneMinutes: integer("active_zone_minutes"),
+  distanceMeters: doublePrecision("distance_meters"),
+  floors: integer(),
   weightKg: doublePrecision("weight_kg"),
   complete: boolean().notNull().default(false),
   syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
@@ -209,6 +213,43 @@ export const dailySleep = pgTable("daily_sleep", {
 }, (t) => [
   primaryKey({ columns: [t.userId, t.source, t.day] }),
   index("daily_sleep_user_day_idx").on(t.userId, t.day),
+]);
+
+export const dailyRecovery = pgTable("daily_recovery", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  day: date().notNull(),
+  source: text().notNull(),
+  restingHrBpm: doublePrecision("resting_hr_bpm"),
+  hrvRmssdMs: doublePrecision("hrv_rmssd_ms"),
+  spo2Pct: doublePrecision("spo2_pct"),
+  respiratoryRate: doublePrecision("respiratory_rate"),
+  skinTempDeltaC: doublePrecision("skin_temp_delta_c"),
+  vo2Max: doublePrecision("vo2_max"),
+  bodyFatPct: doublePrecision("body_fat_pct"),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.source, t.day] }),
+  index("daily_recovery_user_day_idx").on(t.userId, t.day),
+]);
+
+export const dailyWorkout = pgTable("daily_workout", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  source: text().notNull(),
+  sessionId: text("session_id").notNull(),
+  day: date().notNull(),
+  title: text().notNull(),
+  exerciseType: text("exercise_type").notNull().default(""),
+  startTime: timestamp("start_time", { withTimezone: true }),
+  endTime: timestamp("end_time", { withTimezone: true }),
+  durationSeconds: integer("duration_seconds"),
+  caloriesKcal: doublePrecision("calories_kcal"),
+  distanceMeters: doublePrecision("distance_meters"),
+  avgHrBpm: doublePrecision("avg_hr_bpm"),
+  activeZoneMinutes: integer("active_zone_minutes"),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.source, t.sessionId] }),
+  index("daily_workout_user_day_idx").on(t.userId, t.day),
 ]);
 
 export const healthIntegration = pgTable("health_integration", {

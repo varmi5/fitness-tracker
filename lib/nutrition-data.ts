@@ -4,29 +4,37 @@ import type { z } from "zod";
 import type { AuthDatabase } from "./auth";
 import {
   addDays,
+  computeSleepEfficiencyPct,
   dayRange,
   DEFAULT_CALORIE_TARGET,
   DEFAULT_TIMEZONE,
   energyInput,
   historyInput,
+  isDayComplete,
   localDay,
   localTime,
   logMealInput,
   preferencesInput,
+  recoveryInput,
   resolveActiveHomeDay,
   resolveLocalDateTime,
   resolveTargetForDay,
+  resolveTrackingPreferences,
   sleepInput,
   summarizeItems,
   targetInput,
   templateInput,
   updateMealInput,
+  workoutInput,
   type EnergySource,
   type EstimationMethod,
   type FoodUnit,
   type MealCategory,
   type NutrientSummary,
+  type RecoveryRecord,
   type SleepRecord,
+  type TrackingMode,
+  type WorkoutRecord,
 } from "./nutrition-model";
 import {
   scoreDayNutrition,
@@ -37,7 +45,9 @@ import {
 import {
   calorieTarget,
   dailyEnergy,
+  dailyRecovery,
   dailySleep,
+  dailyWorkout,
   healthIntegration,
   idempotencyRecord,
   meal,
@@ -58,6 +68,7 @@ import type { MealItemInput } from "./nutrition-model";
 import { searchUkStaples } from "./uk-foods";
 
 export { preferencesInput, targetInput };
+export type { RecoveryRecord, SleepRecord, TrackingMode, WorkoutRecord };
 
 export class NutritionError extends Error {
   status: number;
@@ -108,6 +119,9 @@ export interface EnergyRecord {
   totalKcal: number | null;
   activeKcal: number | null;
   steps: number | null;
+  activeZoneMinutes: number | null;
+  distanceMeters: number | null;
+  floors: number | null;
   weightKg: number | null;
   complete: boolean;
   syncedAt: string;
@@ -123,10 +137,13 @@ export interface DailyNutritionView {
   meals: MealRecord[];
   totals: NutrientSummary;
   nutritionScore: DailyNutritionScore;
+  trackingMode: TrackingMode;
   preferredEnergySource: EnergySource;
   energy: EnergyRecord | null;
   energySources: Partial<Record<EnergySource, EnergyRecord>>;
   sleep: SleepRecord | null;
+  recovery: RecoveryRecord | null;
+  workouts: WorkoutRecord[];
   deficit: number | null;
   provisional: boolean;
 }
@@ -142,6 +159,9 @@ function mapEnergyRow(row: typeof dailyEnergy.$inferSelect): EnergyRecord {
     totalKcal: row.totalKcal,
     activeKcal: row.activeKcal,
     steps: row.steps,
+    activeZoneMinutes: row.activeZoneMinutes,
+    distanceMeters: row.distanceMeters,
+    floors: row.floors,
     weightKg: row.weightKg,
     complete: row.complete,
     syncedAt: row.syncedAt.toISOString(),
@@ -160,7 +180,41 @@ function mapSleepRow(row: typeof dailySleep.$inferSelect): SleepRecord {
     deepMinutes: row.deepMinutes,
     remMinutes: row.remMinutes,
     lightMinutes: row.lightMinutes,
+    sleepEfficiencyPct: computeSleepEfficiencyPct(row.minutesAsleep, row.minutesAwake),
     stages: Array.isArray(row.stagesJson) ? (row.stagesJson as SleepRecord["stages"]) : [],
+    syncedAt: row.syncedAt.toISOString(),
+  };
+}
+
+function mapRecoveryRow(row: typeof dailyRecovery.$inferSelect): RecoveryRecord {
+  return {
+    day: row.day,
+    source: row.source as EnergySource,
+    restingHrBpm: row.restingHrBpm,
+    hrvRmssdMs: row.hrvRmssdMs,
+    spo2Pct: row.spo2Pct,
+    respiratoryRate: row.respiratoryRate,
+    skinTempDeltaC: row.skinTempDeltaC,
+    vo2Max: row.vo2Max,
+    bodyFatPct: row.bodyFatPct,
+    syncedAt: row.syncedAt.toISOString(),
+  };
+}
+
+function mapWorkoutRow(row: typeof dailyWorkout.$inferSelect): WorkoutRecord {
+  return {
+    day: row.day,
+    source: row.source as EnergySource,
+    sessionId: row.sessionId,
+    title: row.title,
+    exerciseType: row.exerciseType,
+    startTime: row.startTime?.toISOString() ?? null,
+    endTime: row.endTime?.toISOString() ?? null,
+    durationSeconds: row.durationSeconds,
+    caloriesKcal: row.caloriesKcal,
+    distanceMeters: row.distanceMeters,
+    avgHrBpm: row.avgHrBpm,
+    activeZoneMinutes: row.activeZoneMinutes,
     syncedAt: row.syncedAt.toISOString(),
   };
 }
@@ -215,9 +269,16 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         .from(healthIntegration).where(eq(healthIntegration.userId, userId)),
     ]);
     const pref = prefRows[0];
+    const trackingMode: TrackingMode = pref
+      ? (pref.trackingMode === "fitbit" ? "fitbit" : "manual")
+      : "manual";
+    const preferredEnergySource: EnergySource = pref
+      ? (trackingMode === "fitbit" ? "google" : (pref.preferredEnergySource === "apple" ? "apple" : "manual"))
+      : "manual";
     return {
       timezone: pref?.timezone ?? DEFAULT_TIMEZONE,
-      preferredEnergySource: (pref?.preferredEnergySource ?? "google") as EnergySource,
+      trackingMode,
+      preferredEnergySource,
       googleTwoWaySync: pref?.googleTwoWaySync ?? false,
       sleepRolloverEnabled: pref?.sleepRolloverEnabled ?? true,
       targets: targets.map((t) => ({ id: t.id, effectiveFrom: t.effectiveFrom, calories: t.calories, proteinG: t.proteinG, carbsG: t.carbsG, fatG: t.fatG, fibreG: t.fibreG })),
@@ -229,13 +290,12 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     bySource: Partial<Record<EnergySource, EnergyRecord>>,
     preferred: EnergySource,
     hasGoogleConnected: boolean,
+    trackingMode: TrackingMode,
   ): EnergyRecord | null {
-    if (bySource[preferred]) return bySource[preferred]!;
-    // If Google isn't connected yet and the user entered manual data, allow manual fallback cleanly.
-    if (preferred === "google" && !hasGoogleConnected && bySource.manual) {
-      return bySource.manual;
+    if (trackingMode === "manual") {
+      return preferred === "apple" ? (bySource.apple ?? bySource.manual ?? null) : (bySource.manual ?? null);
     }
-    return null;
+    return bySource.google ?? (!hasGoogleConnected ? (bySource.manual ?? null) : null);
   }
 
   async function assembleMeals(
@@ -292,23 +352,48 @@ export function nutritionData(db: AuthDatabase, userId: string) {
 
   function pickSleep(
     bySource: Partial<Record<EnergySource, SleepRecord>>,
-    preferred: EnergySource,
+    trackingMode: TrackingMode,
   ): SleepRecord | null {
-    return bySource[preferred] ?? bySource.google ?? bySource.manual ?? null;
+    if (trackingMode !== "fitbit") return null;
+    return bySource.google ?? bySource.manual ?? null;
   }
 
-  async function daily(day: string): Promise<DailyNutritionView> {
+  function pickRecovery(
+    bySource: Partial<Record<EnergySource, RecoveryRecord>>,
+    trackingMode: TrackingMode,
+  ): RecoveryRecord | null {
+    if (trackingMode !== "fitbit") return null;
+    return bySource.google ?? bySource.manual ?? null;
+  }
+
+  function pickWorkouts(
+    rows: WorkoutRecord[],
+    trackingMode: TrackingMode,
+  ): WorkoutRecord[] {
+    if (trackingMode !== "fitbit") return [];
+    return rows.filter((r) => r.source === "google" || r.source === "manual");
+  }
+
+  async function daily(day: string, options: { calendarToday?: string; now?: Date } = {}): Promise<DailyNutritionView> {
     const prefs = await getPrefs();
-    const [mealRows, statusRows, energyRows, sleepRows] = await Promise.all([
+    const calendarToday = options.calendarToday ?? localDay(options.now ?? new Date(), prefs.timezone);
+    const { activeDay } = resolveActiveHomeDay({ calendarToday });
+
+    const [mealRows, energyRows, sleepRows] = await Promise.all([
       db.select().from(meal)
         .where(and(eq(meal.userId, userId), eq(meal.localDay, day)))
         .orderBy(asc(meal.consumedAt), asc(meal.createdAt)),
-      db.select().from(nutritionDayStatus)
-        .where(and(eq(nutritionDayStatus.userId, userId), eq(nutritionDayStatus.day, day))),
       db.select().from(dailyEnergy)
         .where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.day, day))),
       db.select().from(dailySleep)
         .where(and(eq(dailySleep.userId, userId), eq(dailySleep.day, day))),
+    ]);
+    const [recoveryRows, workoutRows] = await Promise.all([
+      db.select().from(dailyRecovery)
+        .where(and(eq(dailyRecovery.userId, userId), eq(dailyRecovery.day, day))),
+      db.select().from(dailyWorkout)
+        .where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.day, day)))
+        .orderBy(asc(dailyWorkout.startTime), asc(dailyWorkout.sessionId)),
     ]);
 
     const itemRows = mealRows.length
@@ -323,18 +408,26 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const target = resolveTargetForDay(prefs.targets, day);
     const macroTargets = resolveMacroTargets(prefs.targets, day);
     const remaining = totals.calories == null ? target : round1(target - totals.calories);
-    const diaryComplete = statusRows[0]?.complete ?? false;
+    const diaryComplete = isDayComplete(day, activeDay);
 
     const energySources: Partial<Record<EnergySource, EnergyRecord>> = {};
     for (const row of energyRows) {
+      if (prefs.trackingMode !== "fitbit" && row.source === "google") continue;
       energySources[row.source as EnergySource] = mapEnergyRow(row);
     }
-    const energy = pickEnergy(energySources, prefs.preferredEnergySource, prefs.hasGoogleConnected);
+    const energy = pickEnergy(energySources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode);
     const sleepSources: Partial<Record<EnergySource, SleepRecord>> = {};
     for (const row of sleepRows) {
       sleepSources[row.source as EnergySource] = mapSleepRow(row);
     }
-    const sleep = pickSleep(sleepSources, prefs.preferredEnergySource);
+    const sleep = pickSleep(sleepSources, prefs.trackingMode);
+
+    const recoverySources: Partial<Record<EnergySource, RecoveryRecord>> = {};
+    for (const row of recoveryRows) {
+      recoverySources[row.source as EnergySource] = mapRecoveryRow(row);
+    }
+    const recovery = pickRecovery(recoverySources, prefs.trackingMode);
+    const workouts = pickWorkouts(workoutRows.map(mapWorkoutRow), prefs.trackingMode);
 
     const totalBurn = energy?.totalKcal ?? null;
     const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
@@ -351,19 +444,25 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       meals,
       totals,
       nutritionScore,
+      trackingMode: prefs.trackingMode,
       preferredEnergySource: prefs.preferredEnergySource,
       energy,
       energySources,
       sleep,
+      recovery,
+      workouts,
       deficit,
       provisional,
     };
   }
 
-  async function history(from: string, to: string) {
+  async function history(from: string, to: string, options: { calendarToday?: string; now?: Date } = {}) {
     historyInput.parse({ from, to });
     const prefs = await getPrefs();
-    const [mealRows, itemRows, statusRows, energyRows, sleepRows] = await Promise.all([
+    const calendarToday = options.calendarToday ?? localDay(options.now ?? new Date(), prefs.timezone);
+    const { activeDay } = resolveActiveHomeDay({ calendarToday });
+
+    const [mealRows, itemRows, energyRows] = await Promise.all([
       db.select().from(meal)
         .where(and(eq(meal.userId, userId), gte(meal.localDay, from), lte(meal.localDay, to)))
         .orderBy(asc(meal.localDay), asc(meal.consumedAt), asc(meal.createdAt)),
@@ -372,12 +471,17 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         .innerJoin(meal, eq(meal.id, mealItem.mealId))
         .where(and(eq(meal.userId, userId), gte(meal.localDay, from), lte(meal.localDay, to)))
         .orderBy(asc(mealItem.sortOrder)),
-      db.select().from(nutritionDayStatus)
-        .where(and(eq(nutritionDayStatus.userId, userId), gte(nutritionDayStatus.day, from), lte(nutritionDayStatus.day, to))),
       db.select().from(dailyEnergy)
         .where(and(eq(dailyEnergy.userId, userId), gte(dailyEnergy.day, from), lte(dailyEnergy.day, to))),
+    ]);
+    const [sleepRows, recoveryRows, workoutRows] = await Promise.all([
       db.select().from(dailySleep)
         .where(and(eq(dailySleep.userId, userId), gte(dailySleep.day, from), lte(dailySleep.day, to))),
+      db.select().from(dailyRecovery)
+        .where(and(eq(dailyRecovery.userId, userId), gte(dailyRecovery.day, from), lte(dailyRecovery.day, to))),
+      db.select().from(dailyWorkout)
+        .where(and(eq(dailyWorkout.userId, userId), gte(dailyWorkout.day, from), lte(dailyWorkout.day, to)))
+        .orderBy(asc(dailyWorkout.startTime), asc(dailyWorkout.sessionId)),
     ]);
 
     const meals = await assembleMeals(mealRows, itemRows.map((r) => r.item), prefs.timezone);
@@ -388,11 +492,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       mealsByDay.set(m.localDay, list);
     }
 
-    const statusByDay = new Map<string, boolean>();
-    for (const s of statusRows) statusByDay.set(s.day, s.complete);
-
     const energyByDay = new Map<string, Partial<Record<EnergySource, EnergyRecord>>>();
     for (const e of energyRows) {
+      if (prefs.trackingMode !== "fitbit" && e.source === "google") continue;
       const entry = energyByDay.get(e.day) ?? {};
       entry[e.source as EnergySource] = mapEnergyRow(e);
       energyByDay.set(e.day, entry);
@@ -405,6 +507,20 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       sleepByDay.set(s.day, entry);
     }
 
+    const recoveryByDay = new Map<string, Partial<Record<EnergySource, RecoveryRecord>>>();
+    for (const r of recoveryRows) {
+      const entry = recoveryByDay.get(r.day) ?? {};
+      entry[r.source as EnergySource] = mapRecoveryRow(r);
+      recoveryByDay.set(r.day, entry);
+    }
+
+    const workoutsByDay = new Map<string, WorkoutRecord[]>();
+    for (const w of workoutRows) {
+      const list = workoutsByDay.get(w.day) ?? [];
+      list.push(mapWorkoutRow(w));
+      workoutsByDay.set(w.day, list);
+    }
+
     const calendarDays = dayRange(from, to);
     const days = calendarDays.map((day) => {
       const dayMeals = mealsByDay.get(day) ?? [];
@@ -412,10 +528,12 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       const target = resolveTargetForDay(prefs.targets, day);
       const macroTargets = resolveMacroTargets(prefs.targets, day);
       const remaining = totals.calories == null ? target : round1(target - totals.calories);
-      const diaryComplete = statusByDay.get(day) ?? false;
+      const diaryComplete = isDayComplete(day, activeDay);
       const sources = energyByDay.get(day) ?? {};
-      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected);
-      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.preferredEnergySource);
+      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode);
+      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.trackingMode);
+      const recovery = pickRecovery(recoveryByDay.get(day) ?? {}, prefs.trackingMode);
+      const workouts = pickWorkouts(workoutsByDay.get(day) ?? [], prefs.trackingMode);
       const totalBurn = energy?.totalKcal ?? null;
       const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
       const provisional = !diaryComplete || totalBurn == null || totals.calories == null;
@@ -432,6 +550,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         diaryComplete,
         energy,
         sleep,
+        recovery,
+        workouts,
         deficit,
         provisional,
       };
@@ -471,6 +591,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       from,
       to,
       timezone: prefs.timezone,
+      trackingMode: prefs.trackingMode,
       preferredEnergySource: prefs.preferredEnergySource,
       totalDays: days.length,
       completeNutritionDays: completeNutritionDays.length,
@@ -759,6 +880,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const today = localDay(new Date(), prefs.timezone);
     return {
       timezone: prefs.timezone,
+      trackingMode: prefs.trackingMode,
       preferredEnergySource: prefs.preferredEnergySource,
       googleTwoWaySync: prefs.googleTwoWaySync,
       sleepRolloverEnabled: prefs.sleepRolloverEnabled,
@@ -787,36 +909,26 @@ export function nutritionData(db: AuthDatabase, userId: string) {
   async function setPreferences(rawInput: z.input<typeof preferencesInput>) {
     const input = preferencesInput.parse(rawInput);
     const existing = await getPrefs();
+    const resolved = resolveTrackingPreferences(input, existing);
     const sleepRolloverEnabled = input.sleepRolloverEnabled ?? existing.sleepRolloverEnabled;
     await db.insert(nutritionPreference).values({
       userId,
       timezone: input.timezone,
-      preferredEnergySource: input.preferredEnergySource,
+      trackingMode: resolved.trackingMode,
+      preferredEnergySource: resolved.preferredEnergySource,
       googleTwoWaySync: input.googleTwoWaySync,
       sleepRolloverEnabled,
     }).onConflictDoUpdate({
       target: nutritionPreference.userId,
       set: {
         timezone: input.timezone,
-        preferredEnergySource: input.preferredEnergySource,
+        trackingMode: resolved.trackingMode,
+        preferredEnergySource: resolved.preferredEnergySource,
         googleTwoWaySync: input.googleTwoWaySync,
         sleepRolloverEnabled,
       },
     });
     return settings();
-  }
-
-  async function markDay(day: string, complete: boolean) {
-    await db.insert(nutritionDayStatus).values({
-      userId,
-      day,
-      complete,
-      updatedAt: new Date(),
-    }).onConflictDoUpdate({
-      target: [nutritionDayStatus.userId, nutritionDayStatus.day],
-      set: { complete, updatedAt: new Date() },
-    });
-    return daily(day);
   }
 
   async function saveEnergy(rawInput: z.input<typeof energyInput>) {
@@ -830,6 +942,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         totalKcal: input.totalKcal ?? null,
         activeKcal: input.activeKcal ?? null,
         steps: input.steps ?? null,
+        activeZoneMinutes: input.activeZoneMinutes ?? null,
+        distanceMeters: input.distanceMeters ?? null,
+        floors: input.floors ?? null,
         weightKg: input.weightKg ?? null,
         complete: input.complete,
         syncedAt: new Date(),
@@ -839,6 +954,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
           totalKcal: input.totalKcal ?? null,
           activeKcal: input.activeKcal ?? null,
           steps: input.steps ?? null,
+          activeZoneMinutes: input.activeZoneMinutes ?? null,
+          distanceMeters: input.distanceMeters ?? null,
+          floors: input.floors ?? null,
           weightKg: input.weightKg ?? null,
           complete: input.complete,
           syncedAt: new Date(),
@@ -849,6 +967,76 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       }
     });
     return daily(input.day);
+  }
+
+  async function saveRecovery(rawInput: z.input<typeof recoveryInput>) {
+    const input = recoveryInput.parse(rawInput);
+    await db.insert(dailyRecovery).values({
+      userId,
+      day: input.day,
+      source: input.source,
+      restingHrBpm: input.restingHrBpm ?? null,
+      hrvRmssdMs: input.hrvRmssdMs ?? null,
+      spo2Pct: input.spo2Pct ?? null,
+      respiratoryRate: input.respiratoryRate ?? null,
+      skinTempDeltaC: input.skinTempDeltaC ?? null,
+      vo2Max: input.vo2Max ?? null,
+      bodyFatPct: input.bodyFatPct ?? null,
+      syncedAt: new Date(),
+    }).onConflictDoUpdate({
+      target: [dailyRecovery.userId, dailyRecovery.source, dailyRecovery.day],
+      set: {
+        restingHrBpm: input.restingHrBpm ?? null,
+        hrvRmssdMs: input.hrvRmssdMs ?? null,
+        spo2Pct: input.spo2Pct ?? null,
+        respiratoryRate: input.respiratoryRate ?? null,
+        skinTempDeltaC: input.skinTempDeltaC ?? null,
+        vo2Max: input.vo2Max ?? null,
+        bodyFatPct: input.bodyFatPct ?? null,
+        syncedAt: new Date(),
+      },
+    });
+    return daily(input.day);
+  }
+
+  async function saveWorkouts(rawInputs: z.input<typeof workoutInput>[]) {
+    const entries = rawInputs.map((raw) => workoutInput.parse(raw));
+    await db.transaction(async (tx) => {
+      for (const entry of entries) {
+        await tx.insert(dailyWorkout).values({
+          userId,
+          source: entry.source,
+          sessionId: entry.sessionId,
+          day: entry.day,
+          title: entry.title,
+          exerciseType: entry.exerciseType,
+          startTime: entry.startTime ? new Date(entry.startTime) : null,
+          endTime: entry.endTime ? new Date(entry.endTime) : null,
+          durationSeconds: entry.durationSeconds ?? null,
+          caloriesKcal: entry.caloriesKcal ?? null,
+          distanceMeters: entry.distanceMeters ?? null,
+          avgHrBpm: entry.avgHrBpm ?? null,
+          activeZoneMinutes: entry.activeZoneMinutes ?? null,
+          syncedAt: new Date(),
+        }).onConflictDoUpdate({
+          target: [dailyWorkout.userId, dailyWorkout.source, dailyWorkout.sessionId],
+          set: {
+            day: entry.day,
+            title: entry.title,
+            exerciseType: entry.exerciseType,
+            startTime: entry.startTime ? new Date(entry.startTime) : null,
+            endTime: entry.endTime ? new Date(entry.endTime) : null,
+            durationSeconds: entry.durationSeconds ?? null,
+            caloriesKcal: entry.caloriesKcal ?? null,
+            distanceMeters: entry.distanceMeters ?? null,
+            avgHrBpm: entry.avgHrBpm ?? null,
+            activeZoneMinutes: entry.activeZoneMinutes ?? null,
+            syncedAt: new Date(),
+          },
+        });
+      }
+    });
+    return { imported: entries.length };
   }
 
   async function saveTemplate(rawInput: z.input<typeof templateInput>) {
@@ -1011,26 +1199,56 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       db.select().from(dailyEnergy).where(eq(dailyEnergy.userId, userId)).orderBy(desc(dailyEnergy.day)),
       db.select().from(dailySleep).where(eq(dailySleep.userId, userId)).orderBy(desc(dailySleep.day)),
     ]);
+    const [recoveryRows, workoutRows] = await Promise.all([
+      db.select().from(dailyRecovery).where(eq(dailyRecovery.userId, userId)).orderBy(desc(dailyRecovery.day)),
+      db.select().from(dailyWorkout).where(eq(dailyWorkout.userId, userId)).orderBy(desc(dailyWorkout.day), asc(dailyWorkout.startTime)),
+    ]);
+    const rawPref = prefs[0];
+    const resolvedTracking = rawPref
+      ? resolveTrackingPreferences({}, {
+          trackingMode: rawPref.trackingMode === "fitbit" ? "fitbit" : "manual",
+          preferredEnergySource: rawPref.preferredEnergySource as EnergySource,
+        })
+      : { trackingMode: "manual" as TrackingMode, preferredEnergySource: "manual" as EnergySource };
+    const normalizedPreferences = rawPref
+      ? {
+          ...rawPref,
+          trackingMode: resolvedTracking.trackingMode,
+          preferredEnergySource: resolvedTracking.preferredEnergySource,
+        }
+      : {
+          timezone: DEFAULT_TIMEZONE,
+          trackingMode: "manual" as TrackingMode,
+          preferredEnergySource: "manual" as EnergySource,
+          googleTwoWaySync: false,
+          sleepRolloverEnabled: true,
+        };
     return {
-      preferences: prefs[0] ?? { timezone: DEFAULT_TIMEZONE, preferredEnergySource: "google", googleTwoWaySync: false, sleepRolloverEnabled: true },
+      preferences: normalizedPreferences,
       targets,
       dayStatuses: statuses,
-      meals: await assembleMeals(meals, items, prefs[0]?.timezone ?? DEFAULT_TIMEZONE),
+      meals: await assembleMeals(meals, items, rawPref?.timezone ?? DEFAULT_TIMEZONE),
       savedFoods: saved,
       dailyEnergy: energy.map(mapEnergyRow),
       dailySleep: sleepRows.map(mapSleepRow),
+      dailyRecovery: recoveryRows.map(mapRecoveryRow),
+      dailyWorkout: workoutRows.map(mapWorkoutRow),
     };
   }
 
   async function importHealthRecords(payload: {
     energyEntries?: z.input<typeof energyInput>[];
     sleepEntries?: z.input<typeof sleepInput>[];
+    recoveryEntries?: z.input<typeof recoveryInput>[];
+    workoutEntries?: z.input<typeof workoutInput>[];
     heightCm?: number | null;
     meals?: z.input<typeof logMealInput>[];
   }) {
     const prefs = await getPrefs();
     let energyImported = 0;
     let sleepImported = 0;
+    let recoveryImported = 0;
+    let workoutsImported = 0;
     let weightsSynced = 0;
     let mealsImported = 0;
     let heightUpdated = false;
@@ -1056,6 +1274,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
           totalKcal: entry.totalKcal ?? null,
           activeKcal: entry.activeKcal ?? null,
           steps: entry.steps ?? null,
+          activeZoneMinutes: entry.activeZoneMinutes ?? null,
+          distanceMeters: entry.distanceMeters ?? null,
+          floors: entry.floors ?? null,
           weightKg: entry.weightKg ?? null,
           complete: entry.complete,
           syncedAt: new Date(),
@@ -1065,6 +1286,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
             totalKcal: entry.totalKcal ?? null,
             activeKcal: entry.activeKcal ?? null,
             steps: entry.steps ?? null,
+            activeZoneMinutes: entry.activeZoneMinutes ?? null,
+            distanceMeters: entry.distanceMeters ?? null,
+            floors: entry.floors ?? null,
             weightKg: entry.weightKg ?? null,
             complete: entry.complete,
             syncedAt: new Date(),
@@ -1110,6 +1334,72 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         });
         sleepImported += 1;
       }
+
+      for (const rawRecovery of payload.recoveryEntries ?? []) {
+        const entry = recoveryInput.parse(rawRecovery);
+        await tx.insert(dailyRecovery).values({
+          userId,
+          day: entry.day,
+          source: entry.source,
+          restingHrBpm: entry.restingHrBpm ?? null,
+          hrvRmssdMs: entry.hrvRmssdMs ?? null,
+          spo2Pct: entry.spo2Pct ?? null,
+          respiratoryRate: entry.respiratoryRate ?? null,
+          skinTempDeltaC: entry.skinTempDeltaC ?? null,
+          vo2Max: entry.vo2Max ?? null,
+          bodyFatPct: entry.bodyFatPct ?? null,
+          syncedAt: new Date(),
+        }).onConflictDoUpdate({
+          target: [dailyRecovery.userId, dailyRecovery.source, dailyRecovery.day],
+          set: {
+            restingHrBpm: entry.restingHrBpm ?? null,
+            hrvRmssdMs: entry.hrvRmssdMs ?? null,
+            spo2Pct: entry.spo2Pct ?? null,
+            respiratoryRate: entry.respiratoryRate ?? null,
+            skinTempDeltaC: entry.skinTempDeltaC ?? null,
+            vo2Max: entry.vo2Max ?? null,
+            bodyFatPct: entry.bodyFatPct ?? null,
+            syncedAt: new Date(),
+          },
+        });
+        recoveryImported += 1;
+      }
+
+      for (const rawWorkout of payload.workoutEntries ?? []) {
+        const entry = workoutInput.parse(rawWorkout);
+        await tx.insert(dailyWorkout).values({
+          userId,
+          source: entry.source,
+          sessionId: entry.sessionId,
+          day: entry.day,
+          title: entry.title,
+          exerciseType: entry.exerciseType,
+          startTime: entry.startTime ? new Date(entry.startTime) : null,
+          endTime: entry.endTime ? new Date(entry.endTime) : null,
+          durationSeconds: entry.durationSeconds ?? null,
+          caloriesKcal: entry.caloriesKcal ?? null,
+          distanceMeters: entry.distanceMeters ?? null,
+          avgHrBpm: entry.avgHrBpm ?? null,
+          activeZoneMinutes: entry.activeZoneMinutes ?? null,
+          syncedAt: new Date(),
+        }).onConflictDoUpdate({
+          target: [dailyWorkout.userId, dailyWorkout.source, dailyWorkout.sessionId],
+          set: {
+            day: entry.day,
+            title: entry.title,
+            exerciseType: entry.exerciseType,
+            startTime: entry.startTime ? new Date(entry.startTime) : null,
+            endTime: entry.endTime ? new Date(entry.endTime) : null,
+            durationSeconds: entry.durationSeconds ?? null,
+            caloriesKcal: entry.caloriesKcal ?? null,
+            distanceMeters: entry.distanceMeters ?? null,
+            avgHrBpm: entry.avgHrBpm ?? null,
+            activeZoneMinutes: entry.activeZoneMinutes ?? null,
+            syncedAt: new Date(),
+          },
+        });
+        workoutsImported += 1;
+      }
     });
 
     for (const rawMeal of payload.meals ?? []) {
@@ -1124,25 +1414,32 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       timezone: prefs.timezone,
       energyImported,
       sleepImported,
+      recoveryImported,
+      workoutsImported,
       weightsSynced,
       mealsImported,
       heightUpdated,
     };
   }
 
-  async function homeSnapshot(calendarToday: string, options: { canReadSleep?: boolean } = {}) {
+  async function homeSnapshot(calendarToday: string, _options: { canReadSleep?: boolean } = {}) {
     const prefs = await getPrefs();
     const from = addDays(calendarToday, -29);
-    const [mealRows, statusRows, energyRows, sleepRows] = await Promise.all([
+    const [mealRows, energyRows, sleepRows] = await Promise.all([
       db.select().from(meal)
         .where(and(eq(meal.userId, userId), gte(meal.localDay, from), lte(meal.localDay, calendarToday)))
         .orderBy(asc(meal.localDay), asc(meal.consumedAt), asc(meal.createdAt)),
-      db.select().from(nutritionDayStatus)
-        .where(and(eq(nutritionDayStatus.userId, userId), gte(nutritionDayStatus.day, from), lte(nutritionDayStatus.day, calendarToday))),
       db.select().from(dailyEnergy)
         .where(and(eq(dailyEnergy.userId, userId), gte(dailyEnergy.day, from), lte(dailyEnergy.day, calendarToday))),
       db.select().from(dailySleep)
         .where(and(eq(dailySleep.userId, userId), gte(dailySleep.day, from), lte(dailySleep.day, calendarToday))),
+    ]);
+    const [recoveryRows, workoutRows] = await Promise.all([
+      db.select().from(dailyRecovery)
+        .where(and(eq(dailyRecovery.userId, userId), gte(dailyRecovery.day, from), lte(dailyRecovery.day, calendarToday))),
+      db.select().from(dailyWorkout)
+        .where(and(eq(dailyWorkout.userId, userId), gte(dailyWorkout.day, from), lte(dailyWorkout.day, calendarToday)))
+        .orderBy(asc(dailyWorkout.startTime), asc(dailyWorkout.sessionId)),
     ]);
 
     const itemRows = mealRows.length
@@ -1159,33 +1456,37 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       mealsByDay.set(m.localDay, list);
     }
 
-    const statusByDay = new Map<string, boolean>();
-    for (const s of statusRows) statusByDay.set(s.day, s.complete);
-
     const energyByDay = new Map<string, Partial<Record<EnergySource, EnergyRecord>>>();
     for (const e of energyRows) {
+      if (prefs.trackingMode !== "fitbit" && e.source === "google") continue;
       const entry = energyByDay.get(e.day) ?? {};
       entry[e.source as EnergySource] = mapEnergyRow(e);
       energyByDay.set(e.day, entry);
     }
 
     const sleepByDay = new Map<string, Partial<Record<EnergySource, SleepRecord>>>();
-    const googleSleepDates = new Set<string>();
     for (const s of sleepRows) {
       const entry = sleepByDay.get(s.day) ?? {};
       entry[s.source as EnergySource] = mapSleepRow(s);
       sleepByDay.set(s.day, entry);
-      if (s.source === "google") googleSleepDates.add(s.day);
     }
 
-    const hasFitbitSleep = Boolean(options.canReadSleep) || googleSleepDates.size > 0;
-    const { activeDay, waitingForSleep } = resolveActiveHomeDay({
-      calendarToday,
-      hasFitbitSleep,
-      sleepRolloverEnabled: prefs.sleepRolloverEnabled,
-      sleepDates: googleSleepDates,
-    });
-    const showSleep = hasFitbitSleep || sleepRows.length > 0;
+    const recoveryByDay = new Map<string, Partial<Record<EnergySource, RecoveryRecord>>>();
+    for (const r of recoveryRows) {
+      const entry = recoveryByDay.get(r.day) ?? {};
+      entry[r.source as EnergySource] = mapRecoveryRow(r);
+      recoveryByDay.set(r.day, entry);
+    }
+
+    const workoutsByDay = new Map<string, WorkoutRecord[]>();
+    for (const w of workoutRows) {
+      const list = workoutsByDay.get(w.day) ?? [];
+      list.push(mapWorkoutRow(w));
+      workoutsByDay.set(w.day, list);
+    }
+
+    const { activeDay, waitingForSleep } = resolveActiveHomeDay({ calendarToday });
+    const showSleep = prefs.trackingMode === "fitbit";
 
     const calendarDays = dayRange(from, calendarToday);
     const days = calendarDays.map((day) => {
@@ -1194,10 +1495,12 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       const target = resolveTargetForDay(prefs.targets, day);
       const macroTargets = resolveMacroTargets(prefs.targets, day);
       const remaining = totals.calories == null ? target : round1(target - totals.calories);
-      const diaryComplete = statusByDay.get(day) ?? false;
+      const diaryComplete = isDayComplete(day, activeDay);
       const sources = energyByDay.get(day) ?? {};
-      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected);
-      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.preferredEnergySource);
+      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode);
+      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.trackingMode);
+      const recovery = pickRecovery(recoveryByDay.get(day) ?? {}, prefs.trackingMode);
+      const workouts = pickWorkouts(workoutsByDay.get(day) ?? [], prefs.trackingMode);
       const totalBurn = energy?.totalKcal ?? null;
       const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
       const provisional = !diaryComplete || totalBurn == null || totals.calories == null;
@@ -1214,6 +1517,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         diaryComplete,
         energy,
         sleep,
+        recovery,
+        workouts,
         deficit,
         provisional,
       };
@@ -1256,16 +1561,20 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       meals: mealsByDay.get(activeDay) ?? [],
       totals: activeSummary.totals,
       nutritionScore: activeSummary.nutritionScore,
+      trackingMode: prefs.trackingMode,
       preferredEnergySource: prefs.preferredEnergySource,
       energy: activeSummary.energy,
       energySources: activeEnergySources,
       sleep: activeSummary.sleep,
+      recovery: activeSummary.recovery,
+      workouts: activeSummary.workouts,
       deficit: activeSummary.deficit,
       provisional: activeSummary.provisional,
     };
 
     const settingsView = {
       timezone: prefs.timezone,
+      trackingMode: prefs.trackingMode,
       preferredEnergySource: prefs.preferredEnergySource,
       googleTwoWaySync: prefs.googleTwoWaySync,
       sleepRolloverEnabled: prefs.sleepRolloverEnabled,
@@ -1286,6 +1595,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         from,
         to: calendarToday,
         timezone: prefs.timezone,
+        trackingMode: prefs.trackingMode,
         preferredEnergySource: prefs.preferredEnergySource,
         totalDays: days.length,
         completeNutritionDays: completeNutritionDays.length,
@@ -1309,28 +1619,18 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     };
   }
 
-  async function homeState(options: { canReadSleep?: boolean; timezone?: string } = {}) {
+  async function homeState(options: { canReadSleep?: boolean; timezone?: string; calendarToday?: string; now?: Date } = {}) {
     const prefs = await getPrefs();
     const tz = options.timezone ?? prefs.timezone;
-    const calendarToday = localDay(new Date(), tz);
-    const from = addDays(calendarToday, -29);
-    const sleepRows = await db
-      .select({ day: dailySleep.day, source: dailySleep.source })
-      .from(dailySleep)
-      .where(and(eq(dailySleep.userId, userId), gte(dailySleep.day, from), lte(dailySleep.day, calendarToday)));
-    const googleSleepDates = new Set(sleepRows.filter((s) => s.source === "google").map((s) => s.day));
-    const hasFitbitSleep = Boolean(options.canReadSleep) || googleSleepDates.size > 0;
-    const { activeDay, waitingForSleep } = resolveActiveHomeDay({
-      calendarToday,
-      hasFitbitSleep,
-      sleepRolloverEnabled: prefs.sleepRolloverEnabled,
-      sleepDates: googleSleepDates,
-    });
+    const calendarToday = options.calendarToday ?? localDay(options.now ?? new Date(), tz);
+    const { activeDay, waitingForSleep } = resolveActiveHomeDay({ calendarToday });
+    const showSleep = prefs.trackingMode === "fitbit";
     return {
       calendarToday,
       activeDay,
       waitingForSleep,
-      showSleep: hasFitbitSleep || sleepRows.length > 0,
+      showSleep,
+      trackingMode: prefs.trackingMode,
     };
   }
 
@@ -1339,11 +1639,12 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       SELECT json_build_object(
         'meals', (SELECT json_build_object('n', count(*)::int, 'm', max(updated_at)::text) FROM meal WHERE user_id = ${userId}),
         'items', (SELECT count(*)::int FROM meal_item WHERE user_id = ${userId}),
-        'statuses', (SELECT json_build_object('n', count(*)::int, 'c', coalesce(sum(case when complete then 1 else 0 end), 0)::int, 'm', max(updated_at)::text) FROM nutrition_day_status WHERE user_id = ${userId}),
         'targets', (SELECT json_build_object('n', count(*)::int, 'cal', coalesce(sum(calories), 0)::text, 'pro', coalesce(sum(protein_g), 0)::text, 'fib', coalesce(sum(fibre_g), 0)::text, 'm', max(created_at)::text) FROM calorie_target WHERE user_id = ${userId}),
-        'prefs', (SELECT json_build_object('tz', timezone, 'src', preferred_energy_source, 'g', google_two_way_sync, 'sr', sleep_rollover_enabled) FROM nutrition_preference WHERE user_id = ${userId} LIMIT 1),
+        'prefs', (SELECT json_build_object('tz', timezone, 'tm', tracking_mode, 'src', preferred_energy_source, 'g', google_two_way_sync, 'sr', sleep_rollover_enabled) FROM nutrition_preference WHERE user_id = ${userId} LIMIT 1),
         'energy', (SELECT json_build_object('n', count(*)::int, 'm', max(synced_at)::text) FROM daily_energy WHERE user_id = ${userId}),
         'sleep', (SELECT json_build_object('n', count(*)::int, 'd', max(day)::text, 'm', max(synced_at)::text) FROM daily_sleep WHERE user_id = ${userId}),
+        'recovery', (SELECT json_build_object('n', count(*)::int, 'd', max(day)::text, 'm', max(synced_at)::text) FROM daily_recovery WHERE user_id = ${userId}),
+        'workouts', (SELECT json_build_object('n', count(*)::int, 'd', max(day)::text, 'm', max(synced_at)::text) FROM daily_workout WHERE user_id = ${userId}),
         'health', (SELECT json_build_object('s', status, 'a', account_label, 'm', last_sync::text, 'e', last_error) FROM health_integration WHERE user_id = ${userId} AND provider = 'google' LIMIT 1),
         'audit', (SELECT json_build_object('n', count(*)::int, 'm', max(created_at)::text) FROM mcp_audit WHERE user_id = ${userId}),
         'measurements', (SELECT json_build_object('n', count(*)::int, 's', coalesce(sum(value), 0)::text) FROM measurement WHERE user_id = ${userId}),
@@ -1372,8 +1673,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     setTarget,
     setNutritionTargets,
     setPreferences,
-    markDay,
     saveEnergy,
+    saveRecovery,
+    saveWorkouts,
     importHealthRecords,
     saveTemplate,
     removeTemplate,

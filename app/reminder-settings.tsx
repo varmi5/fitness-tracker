@@ -47,7 +47,7 @@ export function ReminderSettings() {
     try { const registration = await navigator.serviceWorker.ready; const subscription = await registration.pushManager.getSubscription(); if (subscription) { setSettings(await post({ action: "unsubscribe", endpoint: subscription.endpoint })); await subscription.unsubscribe(); } setMessage("Notifications removed from this device."); }
     catch { setMessage("Could not remove this device. Please try again."); } finally { setBusy(false); }
   }
-  return <section className="card"><h2>Meal reminders</h2><p className="search-hint">Private, opt-in phone notifications. Your own schedule uses your account timezone and skips days marked complete. Notification text contains no meal, calorie or body data.</p>
+  return <section className="card"><h2>Meal reminders</h2><p className="search-hint">Private, opt-in phone notifications. Your own schedule uses your account timezone and skips windows once meals are logged. Notification text contains no meal, calorie or body data.</p>
     <p className="search-hint">On iPhone, add FitnessTrackr to your Home Screen in Safari, open the installed app, then enable notifications here.</p>
     {settings && <><label>Reminder times ({settings.timezone})<input value={times} onChange={(e) => setTimes(e.target.value)} placeholder="09:00, 13:00, 18:30" /></label>
       <p className="search-hint">Up to four times, separated by commas. {settings.deviceCount} device(s) connected · {settings.enabled ? "Reminders on" : "Reminders paused"}</p>

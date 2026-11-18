@@ -1,10 +1,23 @@
-import type { DailyNutritionView, MealRecord, nutritionData } from "../lib/nutrition-data";
+import type {
+  DailyNutritionView,
+  EnergyRecord,
+  MealRecord,
+  nutritionData,
+  RecoveryRecord,
+  SleepRecord,
+  TrackingMode,
+  WorkoutRecord,
+} from "../lib/nutrition-data";
 import type { EstimationMethod } from "../lib/nutrition-model";
 import type { trackerData } from "../lib/tracker-data";
 
+export type { EnergyRecord, RecoveryRecord, SleepRecord, TrackingMode, WorkoutRecord };
 export type TrackerSnapshot = Awaited<ReturnType<ReturnType<typeof trackerData>["snapshot"]>>;
-export type NutritionSettings = Awaited<ReturnType<ReturnType<typeof nutritionData>["settings"]>>;
+export type NutritionSettings = Awaited<ReturnType<ReturnType<typeof nutritionData>["settings"]>> & {
+  trackingMode: TrackingMode;
+};
 export type NutritionHistory = Awaited<ReturnType<ReturnType<typeof nutritionData>["history"]>>;
+export type HistoryDay = NutritionHistory["days"][number];
 export type FoodLibrary = Awaited<ReturnType<ReturnType<typeof nutritionData>["library"]>>;
 export type AuditEntry = Awaited<ReturnType<ReturnType<typeof nutritionData>["recentAudit"]>>[number];
 
@@ -29,7 +42,7 @@ export interface InitialAppData {
   today: string;
   calendarToday: string;
   activeDay: string;
-  waitingForSleep: boolean;
+  waitingForSleep?: boolean;
   showSleep: boolean;
   daily: DailyNutritionView;
   history30: NutritionHistory;

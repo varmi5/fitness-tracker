@@ -4,7 +4,6 @@ import { ChevronLeft, ChevronRight, Plus, RefreshCw } from "lucide-react";
 import {
   BevelDotGauge,
   BevelSegmentedRing,
-  CheckRingIcon,
   FitbitPulseIcon,
   FlameBurnIcon,
   FootstepsIcon,
@@ -37,7 +36,6 @@ interface HomeViewProps {
   calendarToday: string;
   activeDay: string;
   viewDay: string;
-  waitingForSleep: boolean;
   showSleep: boolean;
   daily: DailyNutritionView;
   history30: NutritionHistory;
@@ -50,50 +48,21 @@ interface HomeViewProps {
   onSelectHomeDay: (day: string) => void;
   onLogMeal: () => void;
   onEditMeal: (meal: MealRecord) => void;
-  onToggleComplete: (day: string, complete: boolean) => void;
   onSyncGoogle: () => void;
   onPushGoogle: () => void;
   onNavigate: (tab: AppTab) => void;
-}
-
-function summarizeWindow(history: NutritionHistory, fromDay: string) {
-  const slice = history.days.filter((d) => d.day >= fromDay);
-  const foodComplete = slice.filter((d) => d.diaryComplete && d.totals.calories != null);
-  const foodLogged = slice.filter((d) => d.mealCount > 0 && d.totals.calories != null);
-  const burnDays = slice.filter((d) => d.energy?.totalKcal != null);
-  const comparable = slice.filter((d) => !d.provisional && d.deficit != null);
-
-  const avg = (nums: (number | null)[]) => {
-    const valid = nums.filter((n): n is number => n != null);
-    return valid.length ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : null;
-  };
-  const netDeficit = comparable.length
-    ? Math.round(comparable.reduce((sum, d) => sum + (d.deficit ?? 0), 0))
-    : null;
-
-  const intakeSource = foodComplete.length > 0 ? foodComplete : foodLogged;
-  const usingUnmarkedFallback = foodComplete.length === 0 && foodLogged.length > 0;
-
-  return {
-    totalDays: slice.length,
-    comparableDays: comparable.length,
-    completeNutritionDays: foodComplete.length,
-    loggedDays: foodLogged.length,
-    burnDays: burnDays.length,
-    usingUnmarkedFallback,
-    netDeficit,
-    avgDeficit: avg(comparable.map((d) => d.deficit)),
-    avgIntake: avg(intakeSource.map((d) => d.totals.calories)),
-    avgBurn: avg(burnDays.map((d) => d.energy?.totalKcal ?? null)),
-    avgProtein: avg(intakeSource.map((d) => d.totals.proteinG)),
-    avgFibre: avg(intakeSource.map((d) => d.totals.fibreG)),
-  };
 }
 
 function formatDurationMinutes(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function formatDurationSeconds(seconds: number | null): string | null {
+  if (seconds == null || seconds <= 0) return null;
+  const mins = Math.round(seconds / 60);
+  return formatDurationMinutes(mins);
 }
 
 function formatIsoClock(iso: string | null, timezone: string): string | null {
@@ -112,8 +81,6 @@ export function HomeView({
   calendarToday,
   activeDay,
   viewDay,
-  waitingForSleep,
-  showSleep,
   daily,
   history30,
   tracker,
@@ -121,19 +88,18 @@ export function HomeView({
   settings,
   busy,
   onSelectHomeDay,
+  onLogMeal,
   onEditMeal,
-  onToggleComplete,
   onSyncGoogle,
   onPushGoogle,
   onNavigate,
 }: HomeViewProps) {
+  const isFitbitMode = settings.trackingMode === "fitbit";
+
   const intake = daily.totals.calories;
   const target = daily.target;
   const pct = intake == null || target <= 0 ? 0 : Math.min(100, Math.round((intake / target) * 100));
   const overTarget = intake != null && intake > target;
-
-  const weekSummary = summarizeWindow(history30, addDays(calendarToday, -6));
-  const monthSummary = summarizeWindow(history30, addDays(calendarToday, -29));
 
   const remainingLabel =
     intake == null
@@ -155,12 +121,16 @@ export function HomeView({
     { label: "Fat", val: daily.totals.fatG, goal: fatGoal, color: "var(--macro-fat)", priority: false },
   ];
 
-  // Weight resolution: prefer tracker weight readings, fall back to synced daily energy weights
+  // Weight resolution scoped strictly to viewDay
   const weightMetric = metrics.find((m) => m.key === "weight")!;
   const weightReadings = readingsFor(tracker.readings, weightMetric);
   const weightSummary = summary(weightReadings, viewDay);
-  const latestEnergyWeight = [...history30.days].reverse().find((d) => d.energy?.weightKg != null)?.energy?.weightKg ?? null;
-  const displayWeight = weightSummary.latest?.value ?? daily.energy?.weightKg ?? latestEnergyWeight;
+  const latestEnergyWeightUpToViewDay =
+    [...history30.days]
+      .filter((d) => d.day <= viewDay && d.energy?.weightKg != null)
+      .pop()?.energy?.weightKg ?? null;
+  const displayWeight =
+    daily.energy?.weightKg ?? weightSummary.latest?.value ?? latestEnergyWeightUpToViewDay;
   const weightChange7d = weightSummary.change;
 
   const viewDateDisplay = new Date(`${viewDay}T12:00:00Z`).toLocaleDateString("en-GB", {
@@ -178,24 +148,19 @@ export function HomeView({
         ? "Yesterday"
         : viewDateDisplay;
 
-  const hasFitbitIntegration = Boolean(google.connected || showSleep || daily.energy?.source === "google");
-
-  const sourceLabel =
-    daily.energy?.source === "google"
-      ? "Google Health · Fitbit Air"
+  const manualSourceLabel =
+    daily.energy?.source === "manual"
+      ? "Manual TDEE"
       : daily.energy?.source === "apple"
         ? "Saved Health Import"
-        : daily.energy?.source === "manual"
-          ? "Manual TDEE"
-          : "No TDEE entered";
-
-  const last7 = history30.days.slice(-7);
-  const barCeiling = Math.max(target * 1.15, ...last7.map((d) => d.totals.calories ?? 0), 1000);
-  const targetLinePct = Math.min(92, Math.max(8, Math.round((target / barCeiling) * 100)));
+        : "Manual TDEE mode · No TDEE entered";
 
   const score = daily.nutritionScore;
   const bedClock = formatIsoClock(daily.sleep?.sleepStart ?? null, daily.timezone);
   const wakeClock = formatIsoClock(daily.sleep?.sleepEnd ?? null, daily.timezone);
+
+  const showManualSteps = !isFitbitMode && daily.energy?.steps != null;
+  const showManualActiveBurn = !isFitbitMode && daily.energy?.activeKcal != null;
 
   return (
     <>
@@ -228,9 +193,6 @@ export function HomeView({
           <div className="page-sub">
             <span>{viewDateDisplay}</span>
             <span className="pill">{daily.timezone}</span>
-            {waitingForSleep && viewDay === activeDay && (
-              <span className="pill amber-soft">Holding yesterday · pre-sleep</span>
-            )}
             {viewDay !== activeDay && (
               <button
                 type="button"
@@ -266,12 +228,15 @@ export function HomeView({
               </div>
               <button
                 type="button"
-                className={`pill-btn ${daily.diaryComplete ? "active" : ""}`}
-                disabled={busy}
-                onClick={() => onToggleComplete(daily.day, !daily.diaryComplete)}
+                className={`pill score-pill-${score.grade ?? "none"}`}
+                style={{ minHeight: "36px", cursor: "pointer" }}
+                onClick={() => onNavigate("Nutrition")}
               >
-                <CheckRingIcon size={15} />
-                {daily.diaryComplete ? "Day complete" : "Finish day"}
+                <span>Score</span>
+                <strong className="num">
+                  {score.score == null ? "—" : `${score.score}/100`}
+                </strong>
+                {score.grade && <span>· {score.grade}</span>}
               </button>
             </div>
 
@@ -332,7 +297,7 @@ export function HomeView({
         })}
       </section>
 
-      {/* Bevel-Style Nutrition Quality Score Card */}
+      {/* Compact Nutrition Quality Score Strip (viewDay-scoped, links to Nutrition) */}
       <section className="card score-card" aria-label="Nutrition quality score">
         <div className="split-row">
           <div>
@@ -345,10 +310,15 @@ export function HomeView({
                   : `Food quality, macro balance & fibre · ${daily.meals.length} ${daily.meals.length === 1 ? "meal" : "meals"}`}
             </p>
           </div>
-          <div className={`score-badge score-grade-${score.grade ?? "none"}`}>
+          <button
+            type="button"
+            className={`score-badge score-grade-${score.grade ?? "none"}`}
+            onClick={() => onNavigate("Nutrition")}
+            title="View full nutrition diary & trends"
+          >
             <strong className="num">{score.score ?? "—"}</strong>
             <span>{score.grade ? `Grade ${score.grade}` : "No data"}</span>
-          </div>
+          </button>
         </div>
 
         <div className="score-pillars">
@@ -373,160 +343,124 @@ export function HomeView({
             <small>FSA + processing</small>
           </div>
         </div>
-
-        {score.contributors.length > 0 && (
-          <div className="contrib-list">
-            {score.contributors.slice(0, 4).map((c) => (
-              <span
-                key={`${c.impact}-${c.key}`}
-                className={`pill ${c.impact === "positive" ? "teal-soft" : "amber-soft"}`}
-                title={c.detail}
-              >
-                {c.impact === "positive" ? "+" : "−"} {c.label}
-              </span>
-            ))}
-          </div>
-        )}
-        {score.unknownFibreCount > 0 && (
-          <p style={{ fontSize: ".74rem" }}>
-            {score.unknownFibreCount} food {score.unknownFibreCount === 1 ? "item has" : "items have"} unrecorded fibre; missing values stay excluded rather than treated as 0 g.
-          </p>
-        )}
       </section>
 
-      {/* Fitbit Sleep Card (strictly shown only when Fitbit sleep integration is active or sleep exists) */}
-      {showSleep && (
-        <section className="card sleep-card" aria-label="Sleep summary">
-          <div className="split-row">
-            <div>
-              <h2>Sleep</h2>
-              <p style={{ fontSize: ".76rem" }}>
-                {daily.sleep
-                  ? bedClock && wakeClock
-                    ? `Slept ${bedClock} → woke ${wakeClock}`
-                    : "Synced from Fitbit Air"
-                  : "No Fitbit sleep recorded for this date"}
-              </p>
-            </div>
-            <span className={`pill ${daily.sleep ? "teal-soft" : ""}`}>
-              {daily.sleep ? formatDurationMinutes(daily.sleep.minutesAsleep) : "—"}
-            </span>
-          </div>
-          {daily.sleep && (
-            <div className="sleep-stages">
-              <div className="energy-cell">
-                <span>Deep</span>
-                <strong className="num">{daily.sleep.deepMinutes != null ? `${daily.sleep.deepMinutes}m` : "—"}</strong>
-              </div>
-              <div className="energy-cell">
-                <span>REM</span>
-                <strong className="num">{daily.sleep.remMinutes != null ? `${daily.sleep.remMinutes}m` : "—"}</strong>
-              </div>
-              <div className="energy-cell">
-                <span>Light</span>
-                <strong className="num">{daily.sleep.lightMinutes != null ? `${daily.sleep.lightMinutes}m` : "—"}</strong>
-              </div>
-              <div className="energy-cell">
-                <span>Awake</span>
-                <strong className="num">{daily.sleep.minutesAwake != null ? `${daily.sleep.minutesAwake}m` : "—"}</strong>
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* NutriTrace-style 7-Day Calorie Intake Mini Bars */}
-      <section className="card week-bars-card" aria-label="7-day calorie intake">
-        <div className="split-row" style={{ flexWrap: "nowrap" }}>
-          <div style={{ minWidth: 0 }}>
-            <h2>Last 7 Days Intake</h2>
-            <p style={{ fontSize: ".76rem" }}>Daily intake vs {fmtKcal(target)} kcal target</p>
-          </div>
-          <button type="button" className="secondary compact" onClick={() => onNavigate("Nutrition")}>
-            Open diary
-          </button>
-        </div>
-        <div className="week-bars-wrap">
-          <div className="week-target-line" style={{ bottom: `calc(${targetLinePct}% * 0.72 + 18px)` }} />
-          {last7.map((d) => {
-            const cal = d.totals.calories;
-            const barH = cal == null ? 0 : Math.max(8, Math.min(100, Math.round((cal / barCeiling) * 100)));
-            const dow = new Date(`${d.day}T12:00:00Z`).toLocaleDateString("en-GB", {
-              timeZone: "UTC",
-              weekday: "narrow",
-            });
-            return (
-              <div className="week-bar-col" key={d.day} title={`${d.day}: ${cal == null ? "no data" : `${cal} kcal`}`}>
-                <div className="week-bar-track">
-                  {cal != null && (
-                    <div
-                      className={`week-bar-fill ${cal > d.target ? "over" : ""}`}
-                      style={{ height: `${barH}%` }}
-                    />
-                  )}
-                </div>
-                <span className="week-bar-label num">{dow}</span>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* Energy Balance & Weight Widget */}
+      {/* Energy Balance & Activity Card (strictly viewDay-scoped and mode-adaptive) */}
       <section className="card" aria-label="Energy balance and activity">
         <div className="split-row">
           <div style={{ display: "flex", alignItems: "center", gap: ".55rem", minWidth: 0 }}>
-            <FitbitPulseIcon size={20} className="accent" />
+            {isFitbitMode ? <FitbitPulseIcon size={20} className="accent" /> : <FlameBurnIcon size={20} className="accent" />}
             <div style={{ minWidth: 0 }}>
-              <h2>Energy Balance</h2>
+              <h2>{isFitbitMode ? "Energy & Activity" : "Energy Balance"}</h2>
               <p style={{ fontSize: ".76rem" }}>
-                {sourceLabel}
-                {google.connected && ` · ${fmtRelativeSync(google.lastSync)}`}
-                {settings.googleTwoWaySync && google.connected && " · 2-way on"}
+                {isFitbitMode ? (
+                  <>
+                    Google Health · Fitbit Air
+                    {google.connected && ` · ${fmtRelativeSync(google.lastSync)}`}
+                    {settings.googleTwoWaySync && google.connected && " · 2-way on"}
+                  </>
+                ) : (
+                  manualSourceLabel
+                )}
               </p>
             </div>
           </div>
           <div className="header-actions">
-            {google.connected ? (
-              <>
-                <button type="button" className="secondary compact" disabled={busy} onClick={onSyncGoogle}>
-                  <RefreshCw size={14} /> Sync
-                </button>
-                {(google.canWriteNutrition || google.canWriteWeights) && (
-                  <button type="button" className="secondary compact" disabled={busy} onClick={onPushGoogle} title="Push meals & weights to Google Health">
-                    <TwoWaySyncIcon size={14} /> Push
+            {isFitbitMode ? (
+              google.connected ? (
+                <>
+                  <button type="button" className="secondary compact" disabled={busy} onClick={onSyncGoogle}>
+                    <RefreshCw size={14} /> Sync
                   </button>
-                )}
-              </>
+                  {(google.canWriteNutrition || google.canWriteWeights) && (
+                    <button
+                      type="button"
+                      className="secondary compact"
+                      disabled={busy}
+                      onClick={onPushGoogle}
+                      title="Push meals & weights to Google Health"
+                    >
+                      <TwoWaySyncIcon size={14} /> Push
+                    </button>
+                  )}
+                </>
+              ) : (
+                <button type="button" className="secondary compact" onClick={() => onNavigate("Settings")}>
+                  Connect Fitbit
+                </button>
+              )
             ) : (
               <button type="button" className="secondary compact" onClick={() => onNavigate("Settings")}>
-                Add TDEE
+                {daily.energy?.totalKcal != null ? "Edit TDEE" : "Add TDEE"}
               </button>
             )}
           </div>
         </div>
 
-        <div className={`energy-strip ${hasFitbitIntegration ? "" : "energy-strip-compact"}`}>
+        <div className={`energy-strip ${isFitbitMode || showManualSteps || showManualActiveBurn ? "" : "energy-strip-compact"}`}>
           <div className="energy-cell">
             <span>
               <FlameBurnIcon size={14} /> Total TDEE
             </span>
-            <strong className="num">{daily.energy?.totalKcal != null ? `${fmtKcal(daily.energy.totalKcal)} kcal` : "—"}</strong>
+            <strong className="num">
+              {daily.energy?.totalKcal != null ? `${fmtKcal(daily.energy.totalKcal)} kcal` : "—"}
+            </strong>
           </div>
-          {hasFitbitIntegration && (
+
+          {isFitbitMode ? (
             <>
+              <div className="energy-cell">
+                <span>Active burn</span>
+                <strong className="num">
+                  {daily.energy?.activeKcal != null ? `${fmtKcal(daily.energy.activeKcal)} kcal` : "—"}
+                </strong>
+              </div>
               <div className="energy-cell">
                 <span>
                   <FootstepsIcon size={14} /> Steps
                 </span>
-                <strong className="num">{daily.energy?.steps != null ? daily.energy.steps.toLocaleString("en-GB") : "—"}</strong>
+                <strong className="num">
+                  {daily.energy?.steps != null ? daily.energy.steps.toLocaleString("en-GB") : "—"}
+                </strong>
               </div>
               <div className="energy-cell">
-                <span>Active burn</span>
-                <strong className="num">{daily.energy?.activeKcal != null ? `${fmtKcal(daily.energy.activeKcal)} kcal` : "—"}</strong>
+                <span>Zone mins</span>
+                <strong className="num">
+                  {daily.energy?.activeZoneMinutes != null ? `${daily.energy.activeZoneMinutes} min` : "—"}
+                </strong>
               </div>
+              <div className="energy-cell">
+                <span>Distance</span>
+                <strong className="num">
+                  {daily.energy?.distanceMeters != null ? `${(daily.energy.distanceMeters / 1000).toFixed(1)} km` : "—"}
+                </strong>
+              </div>
+              {daily.energy?.floors != null && (
+                <div className="energy-cell">
+                  <span>Floors</span>
+                  <strong className="num">{daily.energy.floors}</strong>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {showManualSteps && (
+                <div className="energy-cell">
+                  <span>
+                    <FootstepsIcon size={14} /> Steps
+                  </span>
+                  <strong className="num">{daily.energy!.steps!.toLocaleString("en-GB")}</strong>
+                </div>
+              )}
+              {showManualActiveBurn && (
+                <div className="energy-cell">
+                  <span>Active burn</span>
+                  <strong className="num">{fmtKcal(daily.energy!.activeKcal)} kcal</strong>
+                </div>
+              )}
             </>
           )}
+
           <div className="energy-cell">
             <span>
               <WeightScaleIcon size={14} /> Weight
@@ -554,87 +488,168 @@ export function HomeView({
         </div>
         <p style={{ fontSize: ".74rem", marginTop: ".6rem" }}>
           Total TDEE already includes resting metabolism.
-          {daily.provisional && " Net balance stays provisional until this day is marked complete and TDEE is entered."}
+          {daily.provisional &&
+            (daily.diaryComplete
+              ? " Add TDEE to lock net balance for this day."
+              : " Net balance updates as you log meals and locks at midnight.")}
         </p>
       </section>
 
-      {/* Weekly & Monthly Net Calorie Balance Widgets */}
-      <section className="two-col" aria-label="Weekly and monthly net calorie balance">
-        {[
-          { title: "7-Day Net Balance", stats: weekSummary },
-          { title: "30-Day Net Balance", stats: monthSummary },
-        ].map(({ title, stats }) => {
-          const kgEquiv = stats.netDeficit != null ? (stats.netDeficit / 7700).toFixed(2) : null;
-          const statusBadge =
-            stats.comparableDays > 0
-              ? `${stats.comparableDays} of ${stats.totalDays} paired`
-              : stats.completeNutritionDays > 0
-                ? `${stats.completeNutritionDays} food · add TDEE`
-                : stats.loggedDays > 0
-                  ? `${stats.loggedDays} logged · tap Finish day`
-                  : `0 of ${stats.totalDays} logged`;
-          return (
-            <article className="card" key={title}>
-              <div className="split-row">
-                <h2>{title}</h2>
-                <span className={`pill ${stats.comparableDays > 0 ? "teal-soft" : stats.completeNutritionDays > 0 ? "accent-soft" : ""}`}>
-                  {statusBadge}
-                </span>
+      {/* Fitbit-Only Cards: Sleep, Recovery & Vitals, Workouts (viewDay-scoped) */}
+      {isFitbitMode && (
+        <>
+          <section className="card sleep-card" aria-label="Sleep summary">
+            <div className="split-row">
+              <div>
+                <h2>Sleep</h2>
+                <p style={{ fontSize: ".76rem" }}>
+                  {daily.sleep
+                    ? bedClock && wakeClock
+                      ? `Slept ${bedClock} → woke ${wakeClock}`
+                      : "Synced from Fitbit Air"
+                    : "No Fitbit sleep recorded for this date"}
+                </p>
               </div>
-              <div className="reading num" style={{ fontSize: "clamp(1.35rem, 4.2vw, 1.95rem)", margin: ".5rem 0 .25rem" }}>
-                {stats.netDeficit != null ? (
-                  <>
-                    {stats.netDeficit >= 0
-                      ? `${stats.netDeficit.toLocaleString("en-GB")} kcal`
-                      : `${Math.abs(stats.netDeficit).toLocaleString("en-GB")} kcal`}
-                    <small style={{ marginLeft: ".35rem" }}>
-                      {stats.netDeficit >= 0 ? "net deficit" : "net surplus"}
-                    </small>
-                  </>
-                ) : stats.completeNutritionDays > 0 ? (
-                  <small style={{ fontSize: ".9rem" }}>Add TDEE for deficit</small>
-                ) : stats.loggedDays > 0 ? (
-                  <small style={{ fontSize: ".9rem" }}>Tap Finish day to lock</small>
-                ) : (
-                  "—"
+              <div className="button-row">
+                {daily.sleep?.sleepEfficiencyPct != null && (
+                  <span className="pill accent-soft num">{daily.sleep.sleepEfficiencyPct}% efficiency</span>
                 )}
-              </div>
-              <div className="metric-meta">
-                <span>Daily avg balance</span>
-                <span className="num">
-                  {stats.avgDeficit == null
-                    ? "—"
-                    : `${stats.avgDeficit >= 0 ? "+" : ""}${stats.avgDeficit.toLocaleString("en-GB")} kcal/d`}
+                <span className={`pill ${daily.sleep ? "teal-soft" : ""}`}>
+                  {daily.sleep ? formatDurationMinutes(daily.sleep.minutesAsleep) : "—"}
                 </span>
               </div>
-              <div className="metric-meta">
-                <span>Avg intake{stats.usingUnmarkedFallback ? " (unmarked)" : ""} · Avg burn</span>
-                <span className="num">
-                  {fmtKcal(stats.avgIntake)} · {fmtKcal(stats.avgBurn)} kcal
-                </span>
+            </div>
+            {daily.sleep && (
+              <div className="sleep-stages">
+                <div className="energy-cell">
+                  <span>Deep</span>
+                  <strong className="num">{daily.sleep.deepMinutes != null ? `${daily.sleep.deepMinutes}m` : "—"}</strong>
+                </div>
+                <div className="energy-cell">
+                  <span>REM</span>
+                  <strong className="num">{daily.sleep.remMinutes != null ? `${daily.sleep.remMinutes}m` : "—"}</strong>
+                </div>
+                <div className="energy-cell">
+                  <span>Light</span>
+                  <strong className="num">{daily.sleep.lightMinutes != null ? `${daily.sleep.lightMinutes}m` : "—"}</strong>
+                </div>
+                <div className="energy-cell">
+                  <span>Awake</span>
+                  <strong className="num">{daily.sleep.minutesAwake != null ? `${daily.sleep.minutesAwake}m` : "—"}</strong>
+                </div>
               </div>
-              <div className="metric-meta">
-                <span>Avg Protein · Fibre</span>
-                <span className="num">
-                  {stats.avgProtein == null ? "—" : `${stats.avgProtein} g`} · {stats.avgFibre == null ? "—" : `${stats.avgFibre} g`}
-                </span>
-              </div>
-              <div className="metric-meta">
-                <span>Est. weight equiv.</span>
-                <span className="num">{kgEquiv == null ? "—" : `~${kgEquiv} kg`}</span>
-              </div>
-            </article>
-          );
-        })}
-      </section>
+            )}
+          </section>
 
-      {/* Active/Viewed Day Meal Timeline */}
+          <section className="card" aria-label="Recovery and vitals">
+            <div className="split-row" style={{ marginBottom: ".6rem" }}>
+              <div>
+                <h2>Recovery &amp; Vitals</h2>
+                <p style={{ fontSize: ".76rem" }}>
+                  {daily.recovery
+                    ? "Fitbit Air overnight & cardio metrics"
+                    : "No Fitbit recovery metrics recorded for this date"}
+                </p>
+              </div>
+              <span className="pill">Fitbit Air</span>
+            </div>
+            <div className="sleep-stages">
+              <div className="energy-cell">
+                <span>Resting HR</span>
+                <strong className="num">
+                  {daily.recovery?.restingHrBpm != null ? `${Math.round(daily.recovery.restingHrBpm)} bpm` : "—"}
+                </strong>
+              </div>
+              <div className="energy-cell">
+                <span>HRV</span>
+                <strong className="num">
+                  {daily.recovery?.hrvRmssdMs != null ? `${Math.round(daily.recovery.hrvRmssdMs)} ms` : "—"}
+                </strong>
+              </div>
+              <div className="energy-cell">
+                <span>SpO2</span>
+                <strong className="num">
+                  {daily.recovery?.spo2Pct != null ? `${Number(daily.recovery.spo2Pct.toFixed(1))}%` : "—"}
+                </strong>
+              </div>
+              <div className="energy-cell">
+                <span>Br. rate</span>
+                <strong className="num">
+                  {daily.recovery?.respiratoryRate != null ? `${Number(daily.recovery.respiratoryRate.toFixed(1))} br/m` : "—"}
+                </strong>
+              </div>
+              <div className="energy-cell">
+                <span>Skin temp</span>
+                <strong className="num">
+                  {daily.recovery?.skinTempDeltaC != null
+                    ? `${daily.recovery.skinTempDeltaC >= 0 ? "+" : ""}${daily.recovery.skinTempDeltaC.toFixed(1)} °C`
+                    : "—"}
+                </strong>
+              </div>
+              <div className="energy-cell">
+                <span>Cardio VO2</span>
+                <strong className="num">
+                  {daily.recovery?.vo2Max != null ? `${Number(daily.recovery.vo2Max.toFixed(1))} ml/kg` : "—"}
+                </strong>
+              </div>
+            </div>
+          </section>
+
+          {daily.workouts.length > 0 && (
+            <section className="card" aria-label="Workouts">
+              <div className="split-row" style={{ marginBottom: ".65rem" }}>
+                <h2>Workouts</h2>
+                <span className="pill teal-soft num">{daily.workouts.length} logged</span>
+              </div>
+              <div className="meal-list">
+                {daily.workouts.map((w) => {
+                  const dur = formatDurationSeconds(w.durationSeconds);
+                  const startClock = formatIsoClock(w.startTime, daily.timezone);
+                  return (
+                    <div className="meal-card" key={w.sessionId}>
+                      <div className="meal-head">
+                        <div>
+                          <div className="meal-title-row">
+                            <strong>{w.title}</strong>
+                            {w.exerciseType && w.exerciseType !== w.title && (
+                              <span className="pill">{w.exerciseType}</span>
+                            )}
+                          </div>
+                          <div className="meal-meta" style={{ marginTop: ".3rem" }}>
+                            {startClock && <span className="num">{startClock}</span>}
+                            {dur && <span className="num">{dur}</span>}
+                            {w.avgHrBpm != null && <span className="num">{Math.round(w.avgHrBpm)} bpm avg</span>}
+                            {w.activeZoneMinutes != null && <span className="pill accent-soft num">{w.activeZoneMinutes} AZM</span>}
+                            {w.distanceMeters != null && <span className="num">{(w.distanceMeters / 1000).toFixed(2)} km</span>}
+                          </div>
+                        </div>
+                        <div className="meal-kcal">
+                          <strong className="num">
+                            {w.caloriesKcal != null ? `${fmtKcal(w.caloriesKcal)} kcal` : "—"}
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+        </>
+      )}
+
+      {/* Viewed Day Meal Timeline */}
       <section className="card">
         <div className="split-row" style={{ marginBottom: ".65rem" }}>
           <h2>{viewDay === calendarToday ? "Today\u2019s Meals" : `Meals · ${viewTitle}`}</h2>
-          <button type="button" className="secondary compact" onClick={() => onNavigate("Nutrition")}>
-            Full diary
-          </button>
+          <div className="button-row">
+            <button type="button" className="secondary compact" onClick={onLogMeal}>
+              <Plus size={14} /> Add meal
+            </button>
+            <button type="button" className="secondary compact" onClick={() => onNavigate("Nutrition")}>
+              Full diary
+            </button>
+          </div>
         </div>
         {daily.meals.length === 0 ? (
           <p style={{ fontSize: ".88rem" }}>
