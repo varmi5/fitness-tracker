@@ -34,7 +34,7 @@ export interface GoogleIntegrationStatus {
   canWriteWeights: boolean;
   canReadNutrition: boolean;
   canWriteNutrition: boolean;
-  mealSync?: { pending: number; failed: number; lastError: string | null };
+  mealSync?: { pending: number; failed: number; verified?: number; lastVerifiedAt?: string | null; lastError: string | null };
 }
 
 export interface InitialAppData {

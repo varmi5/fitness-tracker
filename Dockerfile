@@ -17,6 +17,7 @@ COPY --from=build --chown=node:node /app/public ./public
 COPY --chown=node:node migrations ./migrations
 COPY --chown=node:node scripts/migrate.mjs ./scripts/migrate.mjs
 COPY --from=build --chown=node:node /app/scripts/set-password.mjs /app/scripts/set-password.ts ./scripts/
+COPY --from=build --chown=node:node /app/scripts/google-meals.mjs ./scripts/
 USER node
 EXPOSE 3000
 CMD ["sh", "-c", "node scripts/migrate.mjs --if-configured && exec node server.js"]

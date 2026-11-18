@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createCipheriv, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, mkdir } from "node:fs/promises";
 import { once } from "node:events";
@@ -15,8 +15,9 @@ await database.start();
 const origin = "http://localhost:3087";
 const code = randomBytes(24).toString("hex");
 const password = randomBytes(24).toString("hex");
+const integrationKey = randomBytes(32);
 const email = "mobile-review@example.test";
-const env = { ...process.env, FITNESS_BACKGROUND_WORKER: "false", HOSTNAME: "127.0.0.1", PORT: "3087", SIGNUP_MODE: "closed",
+const env = { ...process.env, FITNESS_BACKGROUND_WORKER: "false", FITNESS_INTEGRATION_KEY: integrationKey.toString("hex"), GOOGLE_HEALTH_CLIENT_ID: "synthetic", GOOGLE_HEALTH_CLIENT_SECRET: "synthetic", HOSTNAME: "127.0.0.1", PORT: "3087", SIGNUP_MODE: "closed",
   FITNESS_MCP_ENABLED: "false", SETUP_CODE: code, BETTER_AUTH_URL: origin,
   BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
   DATABASE_URL: `postgresql://postgres:postgres@${database.getServerConn()}/postgres` };
@@ -40,6 +41,11 @@ try {
     body: JSON.stringify({ name: "Synthetic UI test", email, password }),
   });
   assert.equal(owner.status, 200);
+  const ownerId = (await owner.json()).user.id;
+  const iv = randomBytes(12), cipher = createCipheriv("aes-256-gcm", integrationKey, iv);
+  cipher.setAAD(Buffer.from(ownerId));
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify({ accessToken: "synthetic", refreshToken: "synthetic", expiresAt: Date.now() + 3600000, scopes: ["https://www.googleapis.com/auth/googlehealth.nutrition.writeonly"] })), cipher.final()]);
+  await db.query("INSERT INTO health_integration(user_id,provider,account_label,credential) VALUES ($1,'google','synthetic@example.test',$2)", [ownerId, Buffer.concat([iv,cipher.getAuthTag(),encrypted]).toString("base64url")]);
 
   for (const [name, preferredEngine, device] of [["iphone", webkit, devices["iPhone 15"]], ["desktop", chromium, { viewport: { width: 1280, height: 900 } }]]) {
     if (process.env.UI_ENGINE && process.env.UI_ENGINE !== name) continue;
@@ -178,6 +184,26 @@ try {
         assert.deepEqual(optionTexts, ["Manual TDEE entry", "Google Health (Fitbit Air)"]);
         const settingsText = await page.locator("main").innerText();
         assert.equal(settingsText.includes("Apple Health"), false, "Settings must not reference Apple Health");
+        const syncButton = page.getByRole("button", { name: "Sync Now", exact: true });
+        await syncButton.waitFor();
+        const status = { available: true, connected: true, status: "connected", accountLabel: "synthetic@example.test", canWriteNutrition: true, mealSync: { pending: 0, failed: 1, verified: 2, lastVerifiedAt: "2026-11-17T12:00:00Z", lastError: "Google meal creation returned HTTP 400; check serving.food_measurement_unit." } };
+        const requests = [];
+        await page.route("**/api/integrations/google/push", async (route) => {
+          if (route.request().method() === "POST") requests.push(route.request().postDataJSON());
+          await route.fulfill({ contentType: "application/json", body: JSON.stringify({ mealsQueued: 1, nextCursor: null, status }) });
+        });
+        await syncButton.click();
+        await page.getByText(/2 verified in Google/).waitFor();
+        await page.getByText(/check serving.food_measurement_unit/).waitFor();
+        assert.ok(requests[0].from, "Sync Now queues the last 14 days");
+        await page.getByRole("button", { name: "Backfill all meals", exact: true }).click();
+        await page.waitForFunction(() => [...document.querySelectorAll("button")].some((button) => button.textContent.includes("Sync Now") && !button.disabled));
+        assert.equal(requests.at(-1).allHistory, true);
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+        const feedbackBox = await page.locator(".feedback").boundingBox();
+        const logBox = await page.getByRole("button", { name: "Log meal", exact: true }).boundingBox();
+        assert.ok(feedbackBox.y + feedbackBox.height <= logBox.y || feedbackBox.x + feedbackBox.width <= logBox.x, "Sync feedback must not overlap Log meal");
+        if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/${name}-google-sync.png` });
       }
     }
 

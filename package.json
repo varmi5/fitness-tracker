@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "esbuild scripts/service-worker.ts --bundle --minify --outfile=public/sw.js && esbuild scripts/set-password.ts --bundle --platform=node --format=esm --packages=external --outfile=scripts/set-password.mjs && next build",
+    "build": "esbuild scripts/service-worker.ts --bundle --minify --outfile=public/sw.js && esbuild scripts/set-password.ts --bundle --platform=node --format=esm --packages=external --outfile=scripts/set-password.mjs && esbuild scripts/google-meals.ts --bundle --minify --platform=node --format=esm --packages=external --outfile=scripts/google-meals.mjs && next build",
     "start": "node .next/standalone/server.js",
     "test": "tsx --test tests/*.test.ts",
     "db:migrate": "node scripts/migrate.mjs",

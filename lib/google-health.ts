@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { and, asc, eq, gte, isNull, lte } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
 import type { AuthDatabase } from "./auth";
 import { NutritionError, nutritionData, upsertSyncedWeight, type MealRecord } from "./nutrition-data";
@@ -983,9 +983,12 @@ export async function googleStatus(db: AuthDatabase, userId: string) {
     }
   }
 
-  const jobs = await db.select({ state: googleMealSync.state, lastError: googleMealSync.lastError }).from(googleMealSync).where(eq(googleMealSync.userId, userId));
+  const jobs = await db.select({ state: googleMealSync.state, lastError: googleMealSync.lastError, updatedAt: googleMealSync.updatedAt, verifiedAt: googleMealSync.verifiedAt }).from(googleMealSync).where(eq(googleMealSync.userId, userId));
   return {
-    mealSync: { pending: jobs.filter((job) => job.state === "pending").length, failed: jobs.filter((job) => job.state === "error").length, lastError: jobs.find((job) => job.lastError)?.lastError ?? null },
+    mealSync: { pending: jobs.filter((job) => job.state === "pending").length, failed: jobs.filter((job) => job.state === "error").length,
+      verified: jobs.filter((job) => job.state === "synced" && job.verifiedAt).length,
+      lastVerifiedAt: jobs.filter((job) => job.verifiedAt).sort((a, b) => b.verifiedAt!.getTime() - a.verifiedAt!.getTime())[0]?.verifiedAt?.toISOString() ?? null,
+      lastError: jobs.filter((job) => job.lastError && ["pending", "error"].includes(job.state)).sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0]?.lastError ?? null },
     available: googleConfigured(),
     connected: Boolean(row),
     accountLabel: row?.accountLabel ?? null,
@@ -1309,9 +1312,9 @@ export function buildGoogleNutritionLogDataPoint(record: {
         endTime: end.toISOString(),
       },
       foodDisplayName: record.name.slice(0, 160),
-      serving: { amount: 1 },
+      // Anonymous logs have no catalogue serving unit. Omit serving entirely.
       mealType: mapCategoryToGoogleMealType(record.category),
-      ...(record.totals.calories != null ? { energy: { kcal: Math.round(record.totals.calories) } } : {}),
+      ...(record.totals.calories != null ? { energy: { kcal: Math.round(record.totals.calories * 10) / 10 } } : {}),
       ...(record.totals.carbsG != null ? { totalCarbohydrate: { grams: Math.round(record.totals.carbsG * 10) / 10 } } : {}),
       ...(record.totals.fatG != null ? { totalFat: { grams: Math.round(record.totals.fatG * 10) / 10 } } : {}),
       ...(nutrients.length ? { nutrients } : {}),
@@ -1364,14 +1367,16 @@ export async function pushMealToGoogle(db: AuthDatabase, userId: string, record:
   return { queued: await queueGoogleMeal(db, userId, record.id, "upsert", true) };
 }
 
-export async function pushPendingToGoogle(db: AuthDatabase, userId: string, from: string, to: string) {
-  historyInput.parse({ from, to });
+export async function pushPendingToGoogle(db: AuthDatabase, userId: string, from: string | undefined, to: string, after?: string) {
+  if (from) historyInput.parse({ from, to });
   const { grant } = await getFreshGrant(db, userId);
   if (!grant.scopes.includes(nutritionWriteScope)) throw new NutritionError("Reconnect Google Health and grant meal write permission.", 403);
   const { queueGoogleMeal } = await import("./google-sync-queue");
-  const rows = await db.select({ id: meal.id }).from(meal).where(and(eq(meal.userId, userId), gte(meal.localDay, from), lte(meal.localDay, to)));
-  for (const row of rows) await queueGoogleMeal(db, userId, row.id, "upsert", true);
-  return { mealsQueued: rows.length, mealsPushed: 0, weightsPushed: 0 };
+  if (!after) await db.update(googleMealSync).set({ state: "pending", manual: true, nextAttemptAt: new Date(), lastError: null }).where(and(eq(googleMealSync.userId, userId), inArray(googleMealSync.state, ["error", "pending"]), eq(googleMealSync.action, "delete")));
+  const rows = await db.select({ id: meal.id }).from(meal).where(and(eq(meal.userId, userId), eq(meal.origin, "local"), from ? gte(meal.localDay, from) : undefined, lte(meal.localDay, to), after ? gt(meal.id, after) : undefined)).orderBy(asc(meal.id)).limit(101);
+  let mealsQueued = 0;
+  for (const row of rows.slice(0, 100)) if (await queueGoogleMeal(db, userId, row.id, "upsert", true)) mealsQueued++;
+  return { mealsQueued, mealsPushed: 0, weightsPushed: 0, nextCursor: rows.length > 100 ? rows[99].id : null };
 }
 
 function normalizeDateString(raw: string): string | null {
@@ -1454,6 +1459,7 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
   let heightCm: number | null = null;
   const sleepMap = new Map<string, ParsedSleepSession>();
   const meals: {
+    sourceRecordName?: string;
     day: string;
     time: string;
     name: string;
@@ -1741,6 +1747,7 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
             return match?.quantity?.grams ?? null;
           };
           meals.push({
+            ...(typeof pt.name === "string" ? { sourceRecordName: pt.name } : {}),
             day,
             time,
             name: nut.foodDisplayName.slice(0, 160),
@@ -1813,6 +1820,7 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
     };
 
     const ingestContainer = (obj: Record<string, unknown>) => {
+      if (obj.nutritionLog && typeof obj.nutritionLog === "object") ingestPoint(obj);
       if (typeof obj.heightCm === "number" && obj.heightCm > 50 && obj.heightCm < 300) {
         heightCm = Math.round(obj.heightCm * 10) / 10;
       }

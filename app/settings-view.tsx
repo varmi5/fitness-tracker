@@ -473,7 +473,11 @@ export function SettingsView({
                   {google.canWriteNutrition ? "Write Meals" : "Write Meals needs reconnect"}
                 </span>
               </div>
-              {google.mealSync && <p>Meal write-back: {google.mealSync.pending} queued · {google.mealSync.failed} need attention{google.mealSync.lastError ? ` · ${google.mealSync.lastError}` : ""}</p>}
+              {google.mealSync && <div aria-live="polite" role="status">
+                <p>Meal sync: {google.mealSync.pending} queued · {google.mealSync.failed} need attention · {google.mealSync.verified ?? 0} verified in Google</p>
+                {google.mealSync.lastVerifiedAt && <p>Last verified: {new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: settings.timezone }).format(new Date(google.mealSync.lastVerifiedAt))}</p>}
+                {google.mealSync.lastError && <p style={{ color: "var(--danger-fg)" }}>{google.mealSync.lastError} Use Sync Now to retry.</p>}
+              </div>}
               {google.lastError && <div style={{ color: "var(--danger-fg)" }}>Last error: {google.lastError}</div>}
             </div>
           )}
@@ -505,10 +509,15 @@ export function SettingsView({
                 <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncGoogle(30)}>
                   Pull 30 days
                 </button>
-                {(google.canWriteNutrition || google.canWriteWeights) && (
-                  <button type="button" className="secondary compact" disabled={busy} onClick={() => void onPushGoogle(14)}>
-                    <TwoWaySyncIcon size={14} /> Push pending (14d)
-                  </button>
+                {google.canWriteNutrition && (
+                  <>
+                    <button type="button" className="secondary compact" disabled={busy} onClick={() => void onPushGoogle(14)}>
+                      <TwoWaySyncIcon size={14} /> {busy ? "Working…" : "Sync Now"}
+                    </button>
+                    <button type="button" className="secondary compact" disabled={busy} onClick={() => void onPushGoogle(0)}>
+                      Backfill all meals
+                    </button>
+                  </>
                 )}
                 <button type="button" className="danger compact" disabled={busy} onClick={() => void onDisconnectGoogle()}>
                   Disconnect &amp; delete Google data

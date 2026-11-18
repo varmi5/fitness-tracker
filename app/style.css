@@ -930,7 +930,7 @@ label small { color: var(--muted); font-weight: 400; }
 summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight: 580; }
 .feedback {
   position: sticky;
-  bottom: calc(5.1rem + env(safe-area-inset-bottom));
+  bottom: calc(10.7rem + env(safe-area-inset-bottom));
   z-index: 15;
   padding: .72rem .95rem;
   border: 1px solid var(--accent-border);

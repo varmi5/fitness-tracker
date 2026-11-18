@@ -624,7 +624,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
   const portionColumns = (item: MealItemInput) => ({ portionLabel: item.portionLabel ?? null, portionId: item.portionId ?? null,
     gramWeight: item.gramWeight ?? null, millilitreVolume: item.millilitreVolume ?? null, foodSnapshot: item.foodSnapshot ?? null });
 
-  async function log(rawInput: z.input<typeof logMealInput>) {
+  async function log(rawInput: z.input<typeof logMealInput>, imported?: { sourceRecordName?: string }) {
     const parsed = logMealInput.parse(rawInput);
     const input = logMealInput.parse({ ...parsed, items: parsed.items.map(materialize) });
     const prefs = await getPrefs();
@@ -658,6 +658,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         ingredients: input.ingredients,
         notes: input.notes,
         idempotencyKey: input.idempotencyKey ?? null,
+        origin: imported ? "health_import" : "local",
+        sourceRecordName: imported?.sourceRecordName ?? null,
       });
 
       const validFoodIds = [...new Set(input.items.map((i) => i.savedFoodId).filter((v): v is string => Boolean(v)))];
@@ -1249,7 +1251,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     recoveryEntries?: z.input<typeof recoveryInput>[];
     workoutEntries?: z.input<typeof workoutInput>[];
     heightCm?: number | null;
-    meals?: z.input<typeof logMealInput>[];
+    meals?: (z.input<typeof logMealInput> & { sourceRecordName?: string })[];
   }) {
     const prefs = await getPrefs();
     let energyImported = 0;
@@ -1410,10 +1412,16 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     });
 
     for (const rawMeal of payload.meals ?? []) {
+      const sourceRecordName = /^users\/[A-Za-z0-9-]+\/dataTypes\/nutrition-log\/dataPoints\/[a-z0-9-]{4,63}$/.test(rawMeal.sourceRecordName ?? "") ? rawMeal.sourceRecordName : undefined;
+      const exportedMealId = /\/ft-([0-9a-f-]{36})-[0-9a-f]{12}$/.exec(sourceRecordName ?? "")?.[1];
+      if (exportedMealId) {
+        const [original] = await db.select({ id: meal.id }).from(meal).where(and(eq(meal.userId, userId), eq(meal.id, exportedMealId)));
+        if (original) continue; // Our own write-back, not another meal to import.
+      }
       const res = await log({
         ...rawMeal,
-        idempotencyKey: rawMeal.idempotencyKey ?? `import:${rawMeal.day ?? ""}:${rawMeal.time ?? ""}:${rawMeal.name}`.slice(0, 120),
-      });
+        idempotencyKey: `import:${sourceRecordName ? createHash("sha256").update(sourceRecordName.split("/").at(-1)!).digest("hex") : `${rawMeal.day ?? ""}:${rawMeal.time ?? ""}:${rawMeal.name}`}`.slice(0, 120),
+      }, { sourceRecordName });
       if (!res.deduplicated) mealsImported += 1;
     }
 

@@ -55,7 +55,7 @@ test("Google meal retries reuse IDs, replacement confirms before cleanup and del
   const url=String(input), name=url.replace("https://health.googleapis.com/v4/","");
   if(init?.method==="POST"&&url.endsWith(":batchDelete")){ for(const key of JSON.parse(String(init.body)).names) remote.delete(key); return Response.json({done:true,response:{}}); }
   if(init?.method==="POST"){posts++;const body=JSON.parse(String(init.body));assert.ok(body.name);assert.equal(url.includes("dataPointId"),false);remote.set(body.name,body);if(loseResponse){loseResponse=false;throw new Error("synthetic lost response");}return Response.json({done:true,response:{name:body.name}});}
-  return remote.has(name)?Response.json({name}):Response.json({}, {status:404});
+  return remote.has(name)?Response.json(remote.get(name)):Response.json({}, {status:404});
  }) as typeof fetch;
  try {
   await a.setPreferences({timezone:"Europe/London",trackingMode:"manual",preferredEnergySource:"manual",googleTwoWaySync:true});
