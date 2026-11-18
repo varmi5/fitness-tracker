@@ -70,6 +70,18 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [selectedDaily, setSelectedDaily] = useState<DailyNutritionView>(initial.daily);
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
+  useEffect(() => {
+    if (!google.connected || (!google.mealSync?.pending && !google.mealSync?.failed)) return;
+    const controller = new AbortController();
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void fetch("/api/integrations/google/push", { cache: "no-store", signal: controller.signal })
+        .then(async (response) => response.ok ? response.json() : null)
+        .then((payload) => { if (payload?.status && !controller.signal.aborted) setGoogle(payload.status); })
+        .catch(() => undefined);
+    }, 5000);
+    return () => { clearInterval(timer); controller.abort(); };
+  }, [google.connected, google.mealSync?.pending, google.mealSync?.failed]);
   const [audit, setAudit] = useState(initial.audit);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -446,17 +458,22 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     setBusy(true);
     setMessage("");
     try {
-      const from = addDays(today, 1 - days);
-      const res = await fetch("/api/integrations/google/push", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from, to: today }),
-      });
-      const payload = await res.json();
-      if (!res.ok) throw new Error(payload.message ?? "Google push failed.");
-      if (payload.status) setGoogle(payload.status);
+      let cursor: string | null = null;
+      let queued = 0;
+      do {
+        const res = await fetch("/api/integrations/google/push", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...(days === 0 ? { allHistory: true } : { from: addDays(today, 1 - days) }), to: today, ...(cursor ? { cursor } : {}) }),
+        });
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.message ?? "Google push failed.");
+        if (payload.status) setGoogle(payload.status);
+        queued += payload.mealsQueued ?? 0;
+        cursor = payload.nextCursor ?? null;
+      } while (cursor);
       void refreshSyncToken().catch(() => null);
-      setMessage(payload.mealsQueued != null ? `Queued ${payload.mealsQueued} meal(s) for Google Health. Check sync status for confirmation.` : `Pushed ${payload.mealsPushed ?? 0} meal(s) and ${payload.weightsPushed ?? 0} weight(s) to Google Health.`);
+      setMessage(`Sync requested for ${queued} meal(s). See Google sync status.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Google push failed.");
     } finally {

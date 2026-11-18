@@ -251,6 +251,11 @@ try {
 
   // User-scoped /api/nutrition?sync=1 token must reflect owner's MCP writes without affecting other users
   assert.equal((await fetch(url("/api/nutrition?sync=1"))).status, 401);
+  assert.equal((await fetch(url("/api/integrations/google/push"))).status, 401);
+  const googleStateResponse = await fetch(url("/api/integrations/google/push"), { headers: { Cookie: cookie } });
+  assert.equal(googleStateResponse.status, 200);
+  assert.match(googleStateResponse.headers.get("cache-control"), /private, no-store/);
+  assert.equal((await googleStateResponse.json()).status.mealSync.verified, 0);
   const ownerSyncBefore = await (await fetch(url("/api/nutrition?sync=1"), { headers: { Cookie: cookie } })).json();
   const memberSyncBefore = await (await fetch(url("/api/nutrition?sync=1"), { headers: { Cookie: memberCookie } })).json();
   assert.ok(ownerSyncBefore.token && memberSyncBefore.token);

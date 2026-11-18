@@ -147,6 +147,8 @@ export const meal = pgTable("meal", {
   notes: text().notNull().default(""),
   idempotencyKey: text("idempotency_key"),
   googleDatapointName: text("google_datapoint_name"),
+  origin: text().notNull().default("local"),
+  sourceRecordName: text("source_record_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
@@ -293,6 +295,7 @@ export const googleMealSync = pgTable("google_meal_sync", {
   targetName: text("target_name"), remoteName: text("remote_name"), cleanupNames: jsonb("cleanup_names").notNull().default([]), pendingNames: jsonb("pending_names").notNull().default([]),
   state: text().notNull().default("pending"), attempts: integer().notNull().default(0), nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
   leasedUntil: timestamp("leased_until", { withTimezone: true }), lastError: text("last_error"), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
 }, (t) => [primaryKey({ columns: [t.userId, t.mealId] })]);
 export const reminderPreference = pgTable("reminder_preference", {
  userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }), enabled: boolean().notNull().default(false),
