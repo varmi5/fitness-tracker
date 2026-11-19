@@ -1413,6 +1413,10 @@ export function nutritionData(db: AuthDatabase, userId: string) {
 
     for (const rawMeal of payload.meals ?? []) {
       const sourceRecordName = /^users\/[A-Za-z0-9-]+\/dataTypes\/nutrition-log\/dataPoints\/[a-z0-9-]{4,63}$/.test(rawMeal.sourceRecordName ?? "") ? rawMeal.sourceRecordName : undefined;
+      if (sourceRecordName) {
+        const [exported] = await db.select({ id: meal.id }).from(meal).where(and(eq(meal.userId, userId), eq(meal.origin, "local"), sql`split_part(${meal.googleDatapointName}, '/', 6) = ${sourceRecordName.split("/").at(-1)}`));
+        if (exported) continue; // Includes Google's assigned numeric IDs.
+      }
       const exportedMealId = /\/ft-([0-9a-f-]{36})-[0-9a-f]{12}$/.exec(sourceRecordName ?? "")?.[1];
       if (exportedMealId) {
         const [original] = await db.select({ id: meal.id }).from(meal).where(and(eq(meal.userId, userId), eq(meal.id, exportedMealId)));

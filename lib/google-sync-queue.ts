@@ -4,11 +4,11 @@ import type { AuthDatabase } from "./auth";
 import { googleMealSync, healthIntegration, meal, mealItem, nutritionPreference } from "./schema";
 import { summarizeItems, type MealCategory } from "./nutrition-model";
 export type QueueDatabase = AuthDatabase | Parameters<Parameters<AuthDatabase["transaction"]>[0]>[0];
-export interface GoogleMealSnapshot { id: string; name: string; category: MealCategory; consumedAt: string; totals: ReturnType<typeof summarizeItems> }
+export interface GoogleMealSnapshot { id: string; name: string; category: MealCategory; consumedAt: string; timezone?: string; totals: ReturnType<typeof summarizeItems> }
 export function googleMealTarget(snapshot: GoogleMealSnapshot) {
   // Include the wire-format revision: an immutable anonymous Google log needs replacement
   // when its serialization changes, even if the local meal did not change.
-  const version = createHash("sha256").update("nutrition-log:v2:").update(JSON.stringify(snapshot)).digest("hex");
+  const version = createHash("sha256").update("nutrition-log:v3:").update(JSON.stringify(snapshot)).digest("hex");
   return { version, name: `users/me/dataTypes/nutrition-log/dataPoints/ft-${snapshot.id}-${version.slice(0, 12)}` };
 }
 export async function queueGoogleMeal(db: QueueDatabase, userId: string, mealId: string, action: "upsert" | "delete" = "upsert", force = false) {
@@ -23,7 +23,7 @@ export async function queueGoogleMeal(db: QueueDatabase, userId: string, mealId:
   if (!entry && action === "upsert") return false;
   if (action === "upsert" && entry?.origin !== "local") return false;
   const rows = action === "upsert" ? await db.select().from(mealItem).where(and(eq(mealItem.userId, userId), eq(mealItem.mealId, mealId))) : [];
-  const snapshot: GoogleMealSnapshot | null = entry && action === "upsert" ? { id: mealId, name: entry.name, category: entry.category as MealCategory, consumedAt: entry.consumedAt.toISOString(), totals: summarizeItems(rows) } : null;
+  const snapshot: GoogleMealSnapshot | null = entry && action === "upsert" ? { id: mealId, name: entry.name, category: entry.category as MealCategory, consumedAt: entry.consumedAt.toISOString(), timezone: prefs?.timezone ?? "Europe/London", totals: summarizeItems(rows) } : null;
   const target = snapshot ? googleMealTarget(snapshot) : { version: "deleted", name: null };
   if (action === "upsert" && existing?.connectionId === connection.connectionId && existing.version === target.version && existing.state === "synced" && existing.verifiedAt) return false;
   const manual = force || Boolean(existing?.manual) || (action === "delete" && Boolean(existing?.remoteName || entry?.googleDatapointName));
