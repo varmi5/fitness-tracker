@@ -29,7 +29,7 @@ async function account(id: string, scopes = [scope]) {
 }
 const input = (name = "Synthetic lunch", day = "2026-11-17") => ({ day, time: "12:00", name, category: "lunch" as const,
   items: [{ name: "Synthetic food", calories: 410.5, proteinG: 35, carbsG: 41, fatG: 12, fibreG: 5.5 }] });
-function provider() {
+function provider(assignedIds = false, loseFirstResponse = false) {
   const records = new Map<string, any>();
   let posts = 0;
   const mock = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -43,9 +43,12 @@ function provider() {
       assert.equal(body.nutritionLog.serving, undefined, "Anonymous logs must omit the invalid serving-without-unit object");
       posts++;
       if (records.has(body.name)) return Response.json({}, { status: 409 });
-      records.set(body.name, body);
-      return Response.json({ done: true, response: { name: body.name } });
+      const storedName = assignedIds ? `users/123/dataTypes/nutrition-log/dataPoints/${1000 + posts}` : body.name;
+      records.set(storedName, { ...body, name: storedName });
+      if (loseFirstResponse && posts === 1) throw new Error("Synthetic lost response after Google stored a numeric ID");
+      return Response.json({ done: true, response: { name: storedName } });
     }
+    if (name.includes("dataPoints?")) return Response.json({ dataPoints: [...records.values()] });
     return records.has(name) ? Response.json(records.get(name)) : Response.json({}, { status: 404 });
   }) as typeof fetch;
   return { records, mock, posts: () => posts };
@@ -54,6 +57,10 @@ test("nutrition payload preserves all five values and rejects mismatched read-ba
   const snapshot = { id: "synthetic", name: "Bowl", category: "lunch", consumedAt: "2026-03-29T00:30:00Z", totals: { calories: 410.5, proteinG: 35, carbsG: 41, fatG: 12, fibreG: null } } as GoogleMealSnapshot;
   const name = googleMealTarget(snapshot).name;
   const body = buildGoogleNutritionLogDataPoint(snapshot);
+  const midnight = buildGoogleNutritionLogDataPoint({ ...snapshot, consumedAt: "2026-11-17T23:58:00Z" });
+  assert.equal(midnight.nutritionLog.interval.endTime, "2026-11-17T23:58:01.000Z");
+  const summer = buildGoogleNutritionLogDataPoint({ ...snapshot, consumedAt: "2026-07-01T22:58:00Z", timezone: "Europe/London" });
+  assert.equal(summer.nutritionLog.interval.startUtcOffset, "3600s");
   assert.equal(body.nutritionLog.energy?.kcal, 410.5);
   assert.equal(body.nutritionLog.totalCarbohydrate?.grams, 41);
   assert.equal(body.nutritionLog.totalFat?.grams, 12);
@@ -121,7 +128,7 @@ test("edits verify the new record before cleanup; failed read-back retains the o
     await data.update({ id: logged.meal.id, appendItems: [{ name: "Extra egg", calories: 80, proteinG: 7, carbsG: 0, fatG: 5, fibreG: 0 }], idempotencyKey: "extra-egg" });
     globalThis.fetch = (async (url, init) => {
       const response = await remote.mock(url, init);
-      if ((!init?.method || init.method === "GET") && response.ok && !String(url).endsWith(oldName)) {
+      if ((!init?.method || init.method === "GET") && response.ok && !String(url).includes("?") && !String(url).endsWith(oldName)) {
         const body = await response.json(); body.nutritionLog.energy.kcal = 1; return Response.json(body);
       }
       return response;
@@ -150,5 +157,42 @@ test("a connection without nutrition write scope fails explicitly before any upl
     await processGoogleMeals(db, "NOSCOPE", 1);
     assert.match((await googleStatus(db, "NOSCOPE")).mealSync.lastError!, /Reconnect Google Health/);
     await assert.rejects(() => pushPendingToGoogle(db, "NOSCOPE", undefined, "2026-11-18"), /grant meal write permission/);
+  } finally { globalThis.fetch = original; }
+});
+
+test("Google-assigned IDs survive a lost response, double Sync, edits, deletes and import echo", async () => {
+  const data = await account("ASSIGNED");
+  const logged = await data.log(input("Yesterday meal", "2026-11-16"));
+  const original = globalThis.fetch, remote = provider(true, true); globalThis.fetch = remote.mock;
+  try {
+    await processGoogleMeals(db, "ASSIGNED", 1);
+    assert.equal(remote.records.size, 1);
+    await db.update(schema.googleMealSync).set({ nextAttemptAt: new Date(0) }).where(eq(schema.googleMealSync.userId, "ASSIGNED"));
+    await processGoogleMeals(db, "ASSIGNED", 1);
+    assert.equal((await googleStatus(db, "ASSIGNED")).mealSync.verified, 1);
+    assert.equal(remote.posts(), 1);
+    for (let repeat = 0; repeat < 2; repeat++) { await pushPendingToGoogle(db, "ASSIGNED", undefined, "2026-11-18"); await processGoogleMeals(db, "ASSIGNED", 1); }
+    assert.equal(remote.posts(), 1);
+    const point = [...remote.records.values()][0];
+    assert.equal(point.nutritionLog.interval.startTime, "2026-11-16T12:00:00.000Z");
+    assert.equal((await data.importHealthRecords(parseSavedHealthImport(JSON.stringify(point)))).mealsImported, 0);
+    await data.update({ id: logged.meal.id, appendItems: [{ name: "Tea", calories: 5 }], idempotencyKey: "tea" });
+    await processGoogleMeals(db, "ASSIGNED", 1);
+    assert.equal(remote.records.size, 1); assert.equal(remote.posts(), 2);
+    await data.remove(logged.meal.id, true); await processGoogleMeals(db, "ASSIGNED", 1);
+    assert.equal(remote.records.size, 0);
+  } finally { globalThis.fetch = original; }
+});
+
+test("an account-level lease prevents overlapping Sync requests and separate identical meals retain separate IDs", async () => {
+  const data = await account("LEASE");
+  await data.log(input()); await data.log(input());
+  await db.update(schema.healthIntegration).set({ mealSyncLeasedUntil: new Date(Date.now() + 60000) }).where(eq(schema.healthIntegration.userId, "LEASE"));
+  const original = globalThis.fetch, remote = provider(true); globalThis.fetch = remote.mock;
+  try {
+    assert.equal((await processGoogleMeals(db, "LEASE", 2)).synced, 0); assert.equal(remote.posts(), 0);
+    await db.update(schema.healthIntegration).set({ mealSyncLeasedUntil: null }).where(eq(schema.healthIntegration.userId, "LEASE"));
+    assert.equal((await processGoogleMeals(db, "LEASE", 2)).synced, 2);
+    assert.equal(remote.records.size, 2);
   } finally { globalThis.fetch = original; }
 });

@@ -24,7 +24,15 @@ food measurement unit. Calories use `energy.kcal`; carbohydrate and fat use thei
 gram fields; protein and available fibre use `PROTEIN` and `DIETARY_FIBER`. Unknown values
 remain absent, never fabricated as zero. Values retain one decimal place.
 
-IDs contain the local meal UUID and a content/wire-format hash. Retries reuse the same ID.
+Stable local sync IDs contain the meal UUID and a content/wire-format hash. Google may
+ignore that requested ID and return a numeric record ID. The worker persists that actual
+reference before read-back, and retries reuse it. Lost responses are reconciled against
+this OAuth client's own records, matching the saved time, name, category and nutrition;
+ambiguous matches stop uploads rather than creating another record. Concurrent writes
+for an account are protected by a database lease, including across app instances.
+An uncertain write with no confirmed match stays pending and never blindly creates again.
+Meals use a one-second interval and the user's timezone offset, avoiding the previous
+fabricated 15-minute interval that could spill a late dinner into the next day.
 Anonymous Google logs cannot be edited in place, so edits create and read back a replacement
 before deleting the previous record. Delete jobs survive local meal deletion, remove only
 record IDs tracked for that meal/account, and verify Google returns 404 afterward.
@@ -35,8 +43,10 @@ For an authorised operator inside the app container, `node scripts/google-meals.
 --account=GOOGLE_ACCOUNT_EMAIL` is a read-only, uniquely-account-scoped dry run. Add `--apply`
 to backfill/retry that account, or `--verify` to GET and compare every synced nutrition record.
 It prints counts/status only and never grants account privileges or prints credentials.
+After inspecting a failed old-format queue, `--adopt-existing` can associate uniquely matching
+existing Google records with their jobs before `--apply`; it does not delete any record.
 
-Migration `014-google-nutrition-verification.sql` adds provenance and verification timestamps.
+Migrations `014-google-nutrition-verification.sql` and `015-google-assigned-references.sql` add provenance, verification timestamps, uncertain-write snapshots and an account write lease.
 Existing `import:` records are marked imported and their upsert jobs paused; no meal, item,
 or health history is removed. Imports retain Google source IDs and skip known local exports.
 Exports and account deletion continue to use existing per-user services.

@@ -3,7 +3,7 @@ import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { and, eq } from "drizzle-orm";
 import { getFreshGrant, googleStatus, pushPendingToGoogle } from "../lib/google-health";
-import { processGoogleMeals, verifyGoogleNutritionRecord } from "../lib/google-meal-worker";
+import { findGoogleMealRecords, processGoogleMeals, verifyGoogleNutritionRecord } from "../lib/google-meal-worker";
 import type { GoogleMealSnapshot } from "../lib/google-sync-queue";
 import * as schema from "../lib/schema";
 
@@ -18,6 +18,24 @@ async function main() {
   const { userId, connectionId } = matches[0];
   const local = await db.select({ day: schema.meal.localDay }).from(schema.meal).where(and(eq(schema.meal.userId, userId), eq(schema.meal.origin, "local")));
   console.log(JSON.stringify({ userId, localMeals: local.length, mealSync: (await googleStatus(db, userId)).mealSync }));
+  if (process.argv.includes("--adopt-existing")) {
+    const { grant } = await getFreshGrant(db, userId);
+    const jobs = await db.select().from(schema.googleMealSync).where(and(eq(schema.googleMealSync.userId, userId), eq(schema.googleMealSync.connectionId, connectionId)));
+    let adopted = 0;
+    for (const job of jobs) {
+      if (job.action !== "upsert" || !job.payload) continue;
+      const reserved = jobs.filter((other) => other.mealId !== job.mealId && other.remoteName).map((other) => other.remoteName!);
+      const matches = await findGoogleMealRecords(job.payload as GoogleMealSnapshot, grant.accessToken, reserved, true);
+      if (matches.length !== 1) throw new Error("Existing Google records are ambiguous; no deletion attempted.");
+      const remoteName = matches[0];
+      await db.transaction(async (tx) => {
+        await tx.update(schema.googleMealSync).set({ remoteName, pendingNames: [], pendingPayloads: {}, leasedUntil: null }).where(and(eq(schema.googleMealSync.userId, userId), eq(schema.googleMealSync.mealId, job.mealId), eq(schema.googleMealSync.connectionId, connectionId), eq(schema.googleMealSync.version, job.version)));
+        await tx.update(schema.meal).set({ googleDatapointName: remoteName }).where(and(eq(schema.meal.userId, userId), eq(schema.meal.id, job.mealId)));
+      });
+      job.remoteName = remoteName; adopted++;
+    }
+    console.log(JSON.stringify({ adoptedExistingProviderReferences: adopted, deletedRecords: 0 }));
+  }
   if (process.argv.includes("--apply")) {
     const to = local.map((entry) => entry.day).sort().at(-1) ?? new Date().toISOString().slice(0, 10);
     let cursor: string | null = null, queued = 0;

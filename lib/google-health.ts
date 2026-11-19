@@ -1287,6 +1287,7 @@ export function buildGoogleNutritionLogDataPoint(record: {
   name: string;
   category: MealCategory;
   consumedAt: string;
+  timezone?: string;
   totals: {
     calories: number | null;
     proteinG: number | null;
@@ -1296,7 +1297,13 @@ export function buildGoogleNutritionLogDataPoint(record: {
   };
 }) {
   const start = new Date(record.consumedAt);
-  const end = new Date(start.getTime() + 15 * 60 * 1000);
+  // A meal is an observation, not a fabricated 15-minute session crossing midnight.
+  const end = new Date(start.getTime() + 1000);
+  const offset = (date: Date) => {
+    const zone = new Intl.DateTimeFormat("en-GB", { timeZone: record.timezone ?? DEFAULT_TIMEZONE, timeZoneName: "longOffset" }).formatToParts(date).find((part) => part.type === "timeZoneName")?.value ?? "GMT";
+    const match = /GMT([+-])(\d{2}):(\d{2})/.exec(zone);
+    return `${match ? (match[1] === "-" ? -1 : 1) * (Number(match[2]) * 3600 + Number(match[3]) * 60) : 0}s`;
+  };
   const nutrients: { nutrient: string; quantity: { grams: number } }[] = [];
   if (record.totals.proteinG != null) {
     nutrients.push({ nutrient: "PROTEIN", quantity: { grams: Math.round(record.totals.proteinG * 10) / 10 } });
@@ -1309,7 +1316,9 @@ export function buildGoogleNutritionLogDataPoint(record: {
     nutritionLog: {
       interval: {
         startTime: start.toISOString(),
+        startUtcOffset: offset(start),
         endTime: end.toISOString(),
+        endUtcOffset: offset(end),
       },
       foodDisplayName: record.name.slice(0, 160),
       // Anonymous logs have no catalogue serving unit. Omit serving entirely.

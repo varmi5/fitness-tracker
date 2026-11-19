@@ -261,6 +261,7 @@ export const healthIntegration = pgTable("health_integration", {
   connectionId: text("connection_id").notNull().default(sql`gen_random_uuid()::text`),
   credential: text().notNull(),
   accountLabel: text("account_label"),
+  mealSyncLeasedUntil: timestamp("meal_sync_leased_until", { withTimezone: true }),
   status: text().notNull().default("connected"),
   lastSync: timestamp("last_sync", { withTimezone: true }),
   lastError: text("last_error"),
@@ -296,6 +297,7 @@ export const googleMealSync = pgTable("google_meal_sync", {
   state: text().notNull().default("pending"), attempts: integer().notNull().default(0), nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
   leasedUntil: timestamp("leased_until", { withTimezone: true }), lastError: text("last_error"), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  pendingPayloads: jsonb("pending_payloads").notNull().default({}),
 }, (t) => [primaryKey({ columns: [t.userId, t.mealId] })]);
 export const reminderPreference = pgTable("reminder_preference", {
  userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }), enabled: boolean().notNull().default(false),
