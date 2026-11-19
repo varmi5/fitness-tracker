@@ -54,7 +54,7 @@ async function main() {
       if (!row.remoteName || !row.payload) throw new Error("A synced meal lacks its reference.");
       const response = await fetch(`https://health.googleapis.com/v4/${row.remoteName}`, { headers: { Authorization: `Bearer ${grant.accessToken}` }, signal: AbortSignal.timeout(8000), cache: "no-store" });
       if (!response.ok) throw new Error("Provider read-back failed.");
-      verifyGoogleNutritionRecord(await response.json(), row.payload as GoogleMealSnapshot, row.targetName!);
+      verifyGoogleNutritionRecord(await response.json(), row.payload as GoogleMealSnapshot, row.remoteName);
       verified++;
     }
     console.log(JSON.stringify({ liveReadBackVerified: verified, duplicateLocalMealJobs: rows.length - new Set(rows.map((row) => row.mealId)).size }));
