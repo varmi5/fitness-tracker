@@ -457,6 +457,19 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     };
   }
 
+  async function healthHistory(from: string, to: string) {
+    historyInput.parse({ from, to });
+    const prefs = await getPrefs();
+    const [sleep, recovery, workouts] = await Promise.all([
+      db.select().from(dailySleep).where(and(eq(dailySleep.userId, userId), gte(dailySleep.day, from), lte(dailySleep.day, to))).orderBy(asc(dailySleep.day)),
+      db.select().from(dailyRecovery).where(and(eq(dailyRecovery.userId, userId), gte(dailyRecovery.day, from), lte(dailyRecovery.day, to))).orderBy(asc(dailyRecovery.day)),
+      db.select().from(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), gte(dailyWorkout.day, from), lte(dailyWorkout.day, to))).orderBy(asc(dailyWorkout.startTime)),
+    ]);
+    return { from, to, timezone: prefs.timezone, sleep: sleep.map(mapSleepRow), recovery: recovery.map(mapRecoveryRow), workouts: workouts.map(mapWorkoutRow),
+      days: dayRange(from, to).map((day) => ({ day, hasSleep: sleep.some((row) => row.day === day), hasRecovery: recovery.some((row) => row.day === day), workoutCount: workouts.filter((row) => row.day === day).length })),
+      note: "Stored synced records only. Missing records do not establish no sleep or no workout. Check syncedAt for freshness. Display preferences do not restrict this authorised health history." };
+  }
+
   async function history(from: string, to: string, options: { calendarToday?: string; now?: Date } = {}) {
     historyInput.parse({ from, to });
     const prefs = await getPrefs();
@@ -1680,6 +1693,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
   }
 
   return {
+    healthHistory,
     homeSnapshot,
     homeState,
     syncToken,

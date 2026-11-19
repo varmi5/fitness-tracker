@@ -511,7 +511,7 @@ export function HomeView({
         </p>
       </section>
 
-      {/* Fitbit-Only Cards: Sleep, Recovery & Vitals, Workouts (viewDay-scoped) */}
+      {/* Fitbit-Only Cards: Sleep and Workouts (viewDay-scoped) */}
       {isFitbitMode && (
         <>
           <section className="card sleep-card" aria-label="Sleep summary">
@@ -555,60 +555,6 @@ export function HomeView({
                 </div>
               </div>
             )}
-          </section>
-
-          <section className="card" aria-label="Recovery and vitals">
-            <div className="split-row" style={{ marginBottom: ".6rem" }}>
-              <div>
-                <h2>Recovery &amp; Vitals</h2>
-                <p style={{ fontSize: ".76rem" }}>
-                  {daily.recovery
-                    ? "Fitbit Air overnight & cardio metrics"
-                    : "No Fitbit recovery metrics recorded for this date"}
-                </p>
-              </div>
-              <span className="pill">Fitbit Air</span>
-            </div>
-            <div className="sleep-stages">
-              <div className="energy-cell">
-                <span>Resting HR</span>
-                <strong className="num">
-                  {daily.recovery?.restingHrBpm != null ? `${Math.round(daily.recovery.restingHrBpm)} bpm` : "—"}
-                </strong>
-              </div>
-              <div className="energy-cell">
-                <span>HRV</span>
-                <strong className="num">
-                  {daily.recovery?.hrvRmssdMs != null ? `${Math.round(daily.recovery.hrvRmssdMs)} ms` : "—"}
-                </strong>
-              </div>
-              <div className="energy-cell">
-                <span>SpO2</span>
-                <strong className="num">
-                  {daily.recovery?.spo2Pct != null ? `${Number(daily.recovery.spo2Pct.toFixed(1))}%` : "—"}
-                </strong>
-              </div>
-              <div className="energy-cell">
-                <span>Br. rate</span>
-                <strong className="num">
-                  {daily.recovery?.respiratoryRate != null ? `${Number(daily.recovery.respiratoryRate.toFixed(1))} br/m` : "—"}
-                </strong>
-              </div>
-              <div className="energy-cell">
-                <span>Skin temp</span>
-                <strong className="num">
-                  {daily.recovery?.skinTempDeltaC != null
-                    ? `${daily.recovery.skinTempDeltaC >= 0 ? "+" : ""}${daily.recovery.skinTempDeltaC.toFixed(1)} °C`
-                    : "—"}
-                </strong>
-              </div>
-              <div className="energy-cell">
-                <span>Cardio VO2</span>
-                <strong className="num">
-                  {daily.recovery?.vo2Max != null ? `${Number(daily.recovery.vo2Max.toFixed(1))} ml/kg` : "—"}
-                </strong>
-              </div>
-            </div>
           </section>
 
           {daily.workouts.length > 0 && (

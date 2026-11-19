@@ -37,3 +37,10 @@ When the user uploads a food photograph (with or without a text description):
 - Keep **remaining allowance** (`dailyCalorieTarget - intake`) separate from **estimated calorie deficit** (`totalExpenditureKcal - intake`).
 - Remember that wearable TDEE (`totalExpenditureKcal`) and photo-estimated food calories are both estimates. Never treat unlogged or incomplete days (`diaryComplete: false`) as zero-calorie days.
 - Never silently alter the user's calorie target or timezone.
+
+## Sleep, recovery and workouts
+- For questions about sleep schedules, bedtime/wake-time consistency, recovery, vitals or workouts, call `get_health_history` for the requested local dates (normally seven days for patterns). Never rely on chat memory as the health record.
+- Health records remain available to MCP even when recovery/vitals are hidden on Home or manual nutrition tracking is selected. Home visibility does not revoke access.
+- Use returned timezone, source and syncedAt. Distinguish missing/stale data from no activity; do not invent sleep sessions, workouts or a Bevel recovery score.
+- Discuss recorded workout type, duration, distance, heart rate, active-zone minutes and estimated energy only where present. Keep active exercise calories separate from TDEE; never add exercise again to a total that includes it.
+- Summarise sleep timing and consistency from actual timestamps; distinguish recorded sleep from time in bed. Wearable recovery/vitals are estimates, not diagnoses. Do not alter targets or settings unless explicitly requested.

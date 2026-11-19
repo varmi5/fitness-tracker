@@ -12,7 +12,7 @@ import { getDatabase } from "./runtime";
 import { trackerData } from "./tracker-data";
 
 export function fitnessMcp(userId: string, permissions: string[], db: AuthDatabase = getDatabase()) {
-  const server = new McpServer({ name: "mcp-logger", version: "1.0.0" });
+  const server = new McpServer({ name: "mcp-logger", version: "1.1.3" }, { instructions: "For sleep schedules, recovery, vitals or workouts, call get_health_history for the user's requested local dates. These records remain accessible with fitness:read even when hidden on Home or manual tracking mode is selected. Use returned timezone, sources and syncedAt; missing data is unknown, not inactivity. Discuss trends as wearable estimates, not diagnoses. Do not assume a Bevel recovery score is supplied. Never change targets or health settings without explicit consent." });
   const data = nutritionData(db, userId);
 
   const format = (payload: unknown, isError = false) => ({
@@ -208,6 +208,14 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
     "Retrieve waist (cm) and weight (kg) measurements for an inclusive date range.",
     historyInput,
     measurements,
+    { summarize: ({ from, to }) => `${from}..${to}` },
+  );
+
+  register(
+    "get_health_history",
+    "Read this user's stored Google Health/imported sleep schedules and stages, recovery/vitals (resting HR, HRV, SpO2, respiration, temperature, VO2/body fat where available), and workouts (type, start/end, duration, calories, distance, heart rate, active-zone minutes where available) for inclusive local dates. Works independently of Home visibility or manual tracking mode. Returns sources, sync timestamps and missing-data indicators; no new Google permission or live refresh is performed.",
+    historyInput,
+    ({ from, to }) => data.healthHistory(from, to),
     { summarize: ({ from, to }) => `${from}..${to}` },
   );
 

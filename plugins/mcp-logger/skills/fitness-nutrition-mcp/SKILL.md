@@ -1,11 +1,11 @@
 ---
 name: fitness-nutrition-mcp
-description: Log, inspect, update, and analyse meals, energy balance, and body measurements in the user's private FitnessTrackr account via MCP.
+description: Log and analyse meals, energy balance, body measurements, sleep schedules, recovery, vitals and workouts in the user's private FitnessTrackr account via MCP.
 ---
 
 # Fitness Nutrition & Energy Balance Workflow
 
-Use these rules whenever the user asks to estimate, log, update, review, or analyse food, calories, macros, TDEE/deficit, or waist/weight trends using the FitnessTrackr MCP server.
+Use these rules whenever the user asks to estimate, log, update, review, or analyse food, calories, macros, TDEE/deficit, waist/weight trends, sleep schedules, recovery, vitals or workouts using the FitnessTrackr MCP server.
 
 ## 1. Photo & Meal Estimation Rules
 When the user uploads a food photograph (with or without a text description):
@@ -45,3 +45,10 @@ When the user uploads a food photograph (with or without a text description):
 - Use `get_logging_reminders` to inspect only this user's schedule and recorded meals. Do not assume an unreported meal was skipped. Change reminders with `set_logging_reminders` and confirmation APPLY only when requested. Phone push additionally needs the user to install the PWA and enable notifications in Settings on their phone.
 - Installing this plugin does not itself create ChatGPT notifications or a scheduled task. A ChatGPT task requires a separate explicit request and host support. Never claim a reminder/task exists without a successful tool confirmation. Phone push is delivered by FitnessTrackr, not ChatGPT.
 - Meal write-back to Google Health is per user and opt-in. A database save confirms the local diary write only; queued Google sync is not confirmation that Google saved it.
+
+## Sleep, recovery and workouts
+- For questions about sleep schedules, bedtime/wake-time consistency, recovery, vitals or workouts, call `get_health_history` for the requested local dates (normally seven days for patterns). Never rely on chat memory as the health record.
+- Health records remain available to MCP even when recovery/vitals are hidden on Home or manual nutrition tracking is selected. Home visibility does not revoke access.
+- Use returned timezone, source and syncedAt. Distinguish missing/stale data from no activity; do not invent sleep sessions, workouts or a Bevel recovery score.
+- Discuss recorded workout type, duration, distance, heart rate, active-zone minutes and estimated energy only where present. Keep active exercise calories separate from TDEE; never add exercise again to a total that includes it.
+- Summarise sleep timing and consistency from actual timestamps; distinguish recorded sleep from time in bed. Wearable recovery/vitals are estimates, not diagnoses. Do not alter targets or settings unless explicitly requested.
