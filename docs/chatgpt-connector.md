@@ -127,3 +127,18 @@ rotation, and uses the resulting token for authenticated MCP calls.
 
 Users with previously issued broken refresh grants should reconnect their existing ChatGPT
 connection once and approve offline access. No reinstall or new account plugin is needed.
+
+## Health conversations (1.1.3)
+
+`get_health_history` reads this user's stored sleep schedules/stages, recovery/vitals and
+workouts for an inclusive local date range. It uses the existing `fitness:read` permission;
+Home visibility and manual nutrition mode do not block this read. Sync, privacy, export and
+deletion controls remain in effect. No provider refresh is performed by this read tool.
+Returned sources, sync timestamps and missing-data flags distinguish absent/stale records
+from no activity. Recovery/vitals are no longer displayed on Home.
+
+The MCP initialize instructions and tool descriptions are served by the deployed server.
+Refresh the existing connection's tools/start a new chat if the host caches them. The website
+ZIP also includes the updated sleep/workout skill; update the existing website-installed
+plugin to use those packaged instructions. No new plugin identity, client or OAuth scope
+is needed for this feature, and no account plugin is created.

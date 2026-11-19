@@ -244,7 +244,7 @@ try {
   };
   await mcpCall("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "smoke", version: "1" } });
   const listed = await mcpCall("tools/list", {});
-  assert.equal(listed.tools.length, 13);
+  assert.equal(listed.tools.length, 14);
   const dailyLog = await mcpCall("tools/call", { name: "get_daily_log", arguments: { day: "2026-11-17" } });
   assert.equal(dailyLog.isError, false);
   assert.equal(JSON.parse(dailyLog.content[0].text).totals.calories, 257);

@@ -144,7 +144,7 @@ test("MCP server enforces read vs write scopes and executes meal + energy tools 
   await Promise.all([rwServer.connect(rwServerT), rwClient.connect(rwClientT)]);
 
   const rwTools = (await rwClient.listTools()).tools.map((t) => t.name);
-  assert.equal(rwTools.length, 13);
+  assert.equal(rwTools.length, 14);
   assert.equal(rwTools.includes("set_nutrition_targets"), false);
   assert.equal(rwTools.includes("set_logging_reminders"), false);
 
@@ -964,3 +964,27 @@ test("syncGoogle ingests Fitbit Air metrics best-effort and syncGoogleAllUsers/p
 
 
 
+
+test("health MCP exposes only the user's synced sleep, vitals and workouts in manual mode", async () => {
+  for (const id of ["HEALTH-A", "HEALTH-B"]) {
+    await db.insert(schema.user).values({id,name:id,email:`${id}@example.test`,createdAt:new Date(),updatedAt:new Date()});
+    await nutritionData(db,id).importHealthRecords({
+      sleepEntries:[{day:"2026-11-17",source:"google",minutesAsleep:id==="HEALTH-A"?420:500,sleepStart:"2026-11-16T23:00:00Z",sleepEnd:"2026-11-17T06:00:00Z"}],
+      recoveryEntries:[{day:"2026-11-17",source:"google",restingHrBpm:id==="HEALTH-A"?55:70}],
+      workoutEntries:[{day:"2026-11-17",source:"google",sessionId:id,title:id==="HEALTH-A"?"Cycling":"Private run",durationSeconds:1800}],
+    });
+    await nutritionData(db,id).setPreferences({timezone:"Europe/London",trackingMode:"manual",preferredEnergySource:"manual"});
+  }
+  const server=fitnessMcp("HEALTH-A",["fitness:read"],db);
+  const [ct,st]=InMemoryTransport.createLinkedPair();const client=new Client({name:"health-read",version:"1"});
+  await Promise.all([server.connect(st),client.connect(ct)]);
+  try {
+    const result=await client.callTool({name:"get_health_history",arguments:{from:"2026-11-17",to:"2026-11-18"}});
+    assert.equal(result.isError,false);
+    const data=JSON.parse((result.content as {text:string}[])[0].text);
+    assert.equal(data.sleep[0].minutesAsleep,420);assert.equal(data.recovery[0].restingHrBpm,55);
+    assert.equal(data.workouts[0].title,"Cycling");assert.equal(data.workouts.length,1);
+    assert.equal(data.days[1].hasSleep,false);assert.equal(data.days[1].hasRecovery,false);
+    assert.ok(data.sleep[0].syncedAt);assert.equal(JSON.stringify(data).includes("Private run"),false);
+  } finally { await Promise.all([client.close(),server.close()]); }
+});
