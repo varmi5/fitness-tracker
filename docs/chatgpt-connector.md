@@ -142,3 +142,16 @@ Refresh the existing connection's tools/start a new chat if the host caches them
 ZIP also includes the updated sleep/workout skill; update the existing website-installed
 plugin to use those packaged instructions. No new plugin identity, client or OAuth scope
 is needed for this feature, and no account plugin is created.
+
+## Renewable food logging (1.1.4)
+
+Meal read/write and offline_access are now baseScopes, requested on every connection and
+scope-upgrade flow. Settings writes remain optional. Missing/invalid-token challenges
+request that same minimum meal bundle rather than unrelated settings-write access.
+Invalid credentials are identified as invalid_token so hosts can attempt refresh.
+
+Previously installed packages may retain old OAuth settings. Update the existing plugin
+from the website ZIP (same identity), then approve the existing connection once, checking
+that consent includes “Stay connected using renewable access”. A server push cannot create
+a refresh token for a prior grant that never requested offline_access; user consent is
+required. Do not edit database grants or tokens to bypass that consent.

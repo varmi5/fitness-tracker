@@ -2,20 +2,20 @@ import { randomUUID } from "node:crypto";
 import { and, eq, gt, sql } from "drizzle-orm";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import type { AuthDatabase } from "./auth";
-import { mcpResource, metadataURL, scopes } from "./mcp-config";
+import { mcpResource, metadataURL } from "./mcp-config";
 import { getAuth, getAuthConfig, getDatabase } from "./runtime";
 import { mcpAudit, mcpRevocation, oauthClient, oauthConsent, session } from "./schema";
 
 export async function mcpIdentity(request: Request) {
   const config = getAuthConfig();
   const token = /^Bearer\s+([^\s,]{1,8192})$/i.exec(request.headers.get("authorization") ?? "")?.[1];
-  const unauthorized = () =>
+  const unauthorized = (invalid = false) =>
     Response.json(
       { error: "Authentication required." },
       {
         status: 401,
         headers: {
-          "WWW-Authenticate": `Bearer resource_metadata="${metadataURL(config.baseURL)}", scope="${scopes.join(" ")}"`,
+          "WWW-Authenticate": `Bearer resource_metadata="${metadataURL(config.baseURL)}", scope="fitness:read fitness:write offline_access"${invalid ? ', error="invalid_token"' : ""}`,
         },
       },
     );
@@ -32,7 +32,7 @@ export async function mcpIdentity(request: Request) {
       requiredClaims: ["exp", "iat", "sub"],
     }));
   } catch {
-    return unauthorized();
+    return unauthorized(true);
   }
 
   const { sub, sid, azp, scope, iat } = payload;
@@ -44,7 +44,7 @@ export async function mcpIdentity(request: Request) {
     typeof iat !== "number" ||
     payload.cnf
   ) {
-    return unauthorized();
+    return unauthorized(true);
   }
 
   const db = getDatabase();
@@ -68,7 +68,7 @@ export async function mcpIdentity(request: Request) {
   ]);
 
   if (!consent || !active || (revocation && iat <= Math.floor(revocation.revokedAt.getTime() / 1000))) {
-    return unauthorized();
+    return unauthorized(true);
   }
 
   return {
