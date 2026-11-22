@@ -221,6 +221,17 @@ try {
   const grant = await tokenResponse.json();
   assert.ok(grant.access_token);
   assert.ok(grant.refresh_token, "Offline access must issue a refresh token");
+  async function assertRefreshLifetime() {
+    const { rows } = await db.query(
+      `SELECT extract(epoch FROM ("expiresAt" - "createdAt"))::integer AS lifetime
+       FROM "oauthRefreshToken"
+       WHERE "clientId" = $1 AND revoked IS NULL
+       ORDER BY "createdAt" DESC LIMIT 1`,
+      [client.client_id],
+    );
+    assert.equal(rows[0]?.lifetime, 90 * 86400, "Refresh tokens must be valid for 90 days");
+  }
+  await assertRefreshLifetime();
   for (let refresh = 0; refresh < 2; refresh++) {
     const previousRefreshToken = grant.refresh_token;
     const renewed = await fetch(url(new URL(asJson.token_endpoint).pathname), {
@@ -239,6 +250,7 @@ try {
     assert.ok(retry.ok, "Immediate refresh retry must not invalidate the connection");
     assert.equal((await retry.json()).refresh_token, result.refresh_token);
     Object.assign(grant, result);
+    await assertRefreshLifetime();
   }
 
   const mcpCall = async (method, params) => {
