@@ -179,6 +179,14 @@ try {
   assert.match(mcpChallenge.headers.get("www-authenticate") ?? "", /resource_metadata="/);
   console.log("MCP OAuth discovery metadata and Bearer challenge passed.");
 
+  const missingToken = await fetch(url("/mcp"));
+  assert.match(missingToken.headers.get("www-authenticate"), /scope="fitness:read fitness:write offline_access"/);
+  assert.equal(missingToken.headers.get("www-authenticate").includes("fitness:settings:write"), false);
+  const expiredToken = await fetch(url("/mcp"), {headers:{Authorization:"Bearer invalid-synthetic-token"}});
+  assert.match(expiredToken.headers.get("www-authenticate"), /error="invalid_token"/);
+  const packagedAuth = JSON.parse(await readFile("plugins/mcp-logger/mcp.json", "utf8")).mcpServers["mcp-logger"].extensions["com.openai"].auth;
+  assert.deepEqual(packagedAuth.baseScopes, ["fitness:read", "fitness:write", "offline_access"]);
+
   const callback = "http://127.0.0.1:3089/callback";
   const verifier = randomBytes(32).toString("base64url");
   const registration = await post("/api/auth/oauth2/register", {
