@@ -121,7 +121,9 @@ public directory approval requires the separate submission workflow and is not c
 The resource policy must allow `offline_access` as well as fitness scopes, or Better Auth
 can issue the initial refresh token but drop renewable access on its first rotation.
 Resource seed mode `merge` updates existing deployments as well as new databases.
-A 30-second refresh-token reuse window tolerates immediate retries without disabling rotation.
+Refresh tokens are valid for 90 days from issuance or the most recent successful
+rotation. Access tokens remain valid for 10 minutes, and the 30-second reuse
+window tolerates immediate retries without disabling rotation.
 The OAuth smoke test starts from the old persisted policy, refreshes twice, retries each
 rotation, and uses the resulting token for authenticated MCP calls.
 
@@ -150,8 +152,10 @@ scope-upgrade flow. Settings writes remain optional. Missing/invalid-token chall
 request that same minimum meal bundle rather than unrelated settings-write access.
 Invalid credentials are identified as invalid_token so hosts can attempt refresh.
 
-Previously installed packages may retain old OAuth settings. Update the existing plugin
-from the website ZIP (same identity), then approve the existing connection once, checking
-that consent includes “Stay connected using renewable access”. A server push cannot create
-a refresh token for a prior grant that never requested offline_access; user consent is
-required. Do not edit database grants or tokens to bypass that consent.
+For an existing connection added by MCP URL, keep the URL and reconnect if
+prompted. For a plugin installed from a package, use the current website ZIP
+if the package still requests the old scopes. When granting access, check
+that consent includes “Stay connected using renewable access”. An unexpired
+refresh token receives the 90-day lifetime when it next rotates. A grant
+without offline_access still requires consent before it can receive a
+refresh token.

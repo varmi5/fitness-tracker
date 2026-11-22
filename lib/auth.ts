@@ -38,6 +38,7 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
       clientRegistrationDefaultApplicationType: "infer",
       grantTypes: ["authorization_code", "refresh_token"],
       accessTokenExpiresIn: 600,
+      refreshTokenExpiresIn: 90 * 86400,
       validateRedirectUri: (uri, _registered, valid) => valid && allowedMcpCallback(uri),
     }),
   ] as const;
