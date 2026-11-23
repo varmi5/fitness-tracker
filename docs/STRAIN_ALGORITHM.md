@@ -1,7 +1,7 @@
 # FitnessTrackr — Strain, Cardio Load, Muscular Load & Walking Algorithm Specification
 
-**Algorithm Version:** `strain-v1.0-provisional` (to be implemented in Stage 4)  
-**Status:** Specification Baseline (Stage 0)
+**Algorithm Version:** `strain-v1.0-provisional`  
+**Status:** Implemented (`lib/strain-engine.ts`, `lib/training-load.ts`, `lib/recovery-insights.ts`, `app/training-view.tsx`)
 
 > **Disclaimer:** Overall Strain, Cardio Load, Muscular Load, and Recovery insights are transparent exertion and training-load estimates designed for personal trend tracking. They are **not** medically validated measures of physiological fatigue, readiness, or injury risk.
 
