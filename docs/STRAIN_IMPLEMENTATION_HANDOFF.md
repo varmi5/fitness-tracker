@@ -2,8 +2,8 @@
 
 ## 1. Current State & Stage Status
 
-- **Current Stage:** **Stage 5 — Long-Term Cardio Load & Muscular Load (Complete)**
-- **Next Stage:** **Stage 6 — Training Dashboard, Daily Strain Breakdown & Redesigned Home**
+- **Current Stage:** **Stage 8 — Full Verification & Production Readiness (Complete)**
+- **Next Stage:** **Production verification of Nov 23 Google HR (`npx tsx scripts/verify-google-hr.ts` against production DB/OAuth)**
 - **Primary Branch:** `main` (direct-to-main workflow; no feature branches or PRs)
 - **Baseline Commit Audited:** `781e529` (`Extend FitnessTrackr OAuth refresh tokens to 90 days`)
 - **Stage 0 Commit:** `3d53773`
@@ -11,18 +11,22 @@
 - **Stage 2 Commit:** `76db4cf`
 - **Stage 3 Commit:** `e672d4f`
 - **Stage 4 Commit:** `904fc2d`
+- **Stage 5 Commit:** `4263c4c`
+- **Stage 6 Commit:** `22d96f2`
+- **Stage 7 Commit:** `41d34ec`
 - **Latest Migrations Applied in Repo:** `001-auth.sql` through `018-strain-engine.sql`
 
 ---
 
-## 2. Baseline Verification Results (Stage 0)
+## 2. Final Verification Results (Stage 8)
 
 | Check | Command | Result | Notes |
 |---|---|---|---|
-| TypeScript | `npx tsc --noEmit` | **PASS (0 errors)** | Verified at `781e529` |
-| Unit & Integration Tests | `npm test` | **PASS (53 / 53)** | `tsx --test tests/*.test.ts` |
-| Production Build | `npm run build` | Verified in CI | `esbuild` SW/scripts + `next build` |
-| Smoke & UI Suites | `npm run test:smoke`, `npm run test:ui` | Verified in prior push | PGlite socket + Playwright iPhone/Desktop |
+| TypeScript | `npx tsc --noEmit` | **PASS (0 errors)** | Verified across all Stage 0–8 files |
+| Unit & Integration Tests | `npm test` | **PASS (71 / 71)** | `tsx --test tests/*.test.ts` (includes strain, training load, recovery, nutrition, auth, measurements) |
+| Production Build | `npm run build` | **PASS** | `esbuild` SW/scripts + `next build` |
+| Smoke Suite | `npm run test:smoke` | **PASS** | PGlite socket (`maxConnections: 16`) + auth, tracker, nutrition, MCP OAuth |
+| Mobile & Desktop UI | `npm run test:ui` | **PASS** | Playwright iPhone & Desktop: Home Strain, Training, More (`Measurements`/`Settings`), Walking settings, Recovery Insights, barcode scanner, toast auto-dismiss |
 
 ---
 
@@ -59,8 +63,8 @@
 | **Stage 4** | Core Strain Engine (Edwards TRIMP, Muscular Load, muscle mappings, nonlinear Overall Strain, walking threshold/cap, per-user settings, explainability, versioning) | **Complete** (`904fc2d`) |
 | **Stage 5** | Long-term Cardio Load & Muscular Load (7-day & 42-day EWMAs, muscle-group histories, progression, data-quality handling) | **Complete** (`4263c4c`) |
 | **Stage 6** | Training tab, Daily Strain Breakdown, activity/HR/walking detail views, redesigned Home cards, responsive UI tests | **Complete** (`22d96f2`) |
-| **Stage 7** | Recovery integration (sleep, RHR, HRV, completeness/confidence, separated from Strain) | **Complete** |
-| **Stage 8** | Full verification (`npm test`, `npm run build`, `npm run test:ui`, `npm run test:smoke`), security & deployment check | **Next** |
+| **Stage 7** | Recovery integration (sleep, RHR, HRV, completeness/confidence, separated from Strain) | **Complete** (`41d34ec`) |
+| **Stage 8** | Full verification (`npm test`, `npm run build`, `npm run test:ui`, `npm run test:smoke`), security & deployment check | **Complete** |
 
 ---
 
