@@ -928,16 +928,98 @@ label small { color: var(--muted); font-weight: 400; }
 .empty { padding: 1.8rem 0; text-align: center; }
 
 summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight: 580; }
+.toast-region {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(9.8rem + env(safe-area-inset-bottom));
+  z-index: 35;
+  display: flex;
+  justify-content: center;
+  padding: 0 max(.9rem, env(safe-area-inset-right)) 0 max(.9rem, env(safe-area-inset-left));
+  pointer-events: none;
+}
 .feedback {
-  position: sticky;
-  bottom: calc(10.7rem + env(safe-area-inset-bottom));
-  z-index: 15;
-  padding: .72rem .95rem;
+  pointer-events: auto;
+  width: min(100%, 34rem);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem;
+  padding: .65rem .85rem;
   border: 1px solid var(--accent-border);
   border-radius: 16px;
   background: var(--feedback-bg);
   color: var(--text);
   box-shadow: var(--shadow-md);
+  font-size: .88rem;
+  animation: appear 140ms ease-out;
+}
+.feedback.toast-error {
+  border-color: var(--danger-border);
+  color: var(--danger-fg);
+}
+.toast-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.toast-dismiss {
+  flex-shrink: 0;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+.toast-dismiss:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.scanner-panel {
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--surface-soft);
+  padding: .65rem;
+}
+.scanner-viewport {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  max-height: 240px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+}
+.scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.scanner-guide {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.scanner-guide span {
+  width: 74%;
+  height: 46%;
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.32);
+}
+.scanner-error {
+  font-size: .84rem;
+  color: var(--danger-fg);
+  padding: .4rem 0;
 }
 .check-row { display: flex; gap: .6rem; align-items: center; min-height: 44px; font-weight: 520; }
 .check-row input { min-height: auto; width: auto; accent-color: var(--accent); }
