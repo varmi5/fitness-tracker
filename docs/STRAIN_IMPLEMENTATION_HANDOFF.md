@@ -2,13 +2,14 @@
 
 ## 1. Current State & Stage Status
 
-- **Current Stage:** **Stage 2 — Google Health Heart-Rate Ingestion & Parser Fixes (Complete)**
-- **Next Stage:** **Stage 3 — Hevy Integration & Workout Matching**
+- **Current Stage:** **Stage 3 — Hevy Integration & Workout Matching (Complete)**
+- **Next Stage:** **Stage 4 — Core Strain Engine (TRIMP, Muscular Load, Composite Strain & Walking)**
 - **Primary Branch:** `main` (direct-to-main workflow; no feature branches or PRs)
 - **Baseline Commit Audited:** `781e529` (`Extend FitnessTrackr OAuth refresh tokens to 90 days`)
 - **Stage 0 Commit:** `3d53773`
 - **Stage 1 Commits:** `40e2f58`, `7aae4ab`
-- **Latest Migrations Applied in Repo:** `001-auth.sql` through `016-heart-rate-and-diagnostics.sql`
+- **Stage 2 Commit:** `76db4cf`
+- **Latest Migrations Applied in Repo:** `001-auth.sql` through `017-hevy-workouts.sql`
 
 ---
 
@@ -51,9 +52,9 @@
 |---|---|---|
 | **Stage 0** | Audit codebase, verify baseline tests, create `STRAIN_IMPLEMENTATION_HANDOFF.md` & `STRAIN_ALGORITHM.md` | **Complete** (`3d53773`) |
 | **Stage 1** | Fix sticky food-logging toast notifications + implement live camera barcode scanning + regression tests | **Complete** (`40e2f58`, `7aae4ab`) |
-| **Stage 2** | Google Health timestamped HR & step-interval ingestion, fix `averageHeartRateBeatsPerMinute` & recovery/error diagnostics, verify Nov 23 workout | **Complete** |
-| **Stage 3** | Hevy integration (OAuth if supported for Free, or documented CSV/JSON export/import + sync workflow), workout matching & HR association | **Next** |
-| **Stage 4** | Core Strain Engine (Edwards TRIMP, Muscular Load, muscle mappings, nonlinear Overall Strain, walking threshold/cap, per-user settings, explainability, versioning) | Pending |
+| **Stage 2** | Google Health timestamped HR & step-interval ingestion, fix `averageHeartRateBeatsPerMinute` & recovery/error diagnostics, verify Nov 23 workout | **Complete** (`76db4cf`) |
+| **Stage 3** | Hevy integration (OAuth if supported for Free, or documented CSV/JSON export/import + sync workflow), workout matching & HR association | **Complete** |
+| **Stage 4** | Core Strain Engine (Edwards TRIMP, Muscular Load, muscle mappings, nonlinear Overall Strain, walking threshold/cap, per-user settings, explainability, versioning) | **Next** |
 | **Stage 5** | Long-term Cardio Load & Muscular Load (7-day & 42-day EWMAs, muscle-group histories, progression, data-quality handling) | Pending |
 | **Stage 6** | Training tab, Daily Strain Breakdown, activity/HR/walking detail views, redesigned Home cards, responsive UI tests | Pending |
 | **Stage 7** | Recovery integration (sleep, RHR, HRV, completeness/confidence, separated from Strain) | Pending |
