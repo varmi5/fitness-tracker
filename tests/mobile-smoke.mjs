@@ -232,14 +232,14 @@ try {
     await page.getByRole("button", { name: "Barcode", exact: true }).click();
     await page.evaluate(() => {
       window.__stoppedCameraTracks = 0;
-      const fakeStream = {
-        getTracks: () => [{ stop: () => { window.__stoppedCameraTracks += 1; } }],
-      };
+      const fakeStream = typeof MediaStream !== "undefined" ? new MediaStream() : {};
+      fakeStream.getTracks = () => [{ stop: () => { window.__stoppedCameraTracks += 1; } }];
       Object.defineProperty(navigator, "mediaDevices", {
         configurable: true,
         value: { getUserMedia: async () => fakeStream },
       });
       HTMLMediaElement.prototype.play = async () => undefined;
+      Object.defineProperty(HTMLMediaElement.prototype, "readyState", { configurable: true, get: () => 2 });
       window.BarcodeDetector = class {
         static async getSupportedFormats() { return ["ean_13"]; }
         async detect() { return [{ rawValue: "5000112637922" }]; }
@@ -271,7 +271,7 @@ try {
     await page.getByRole("button", { name: "Scan", exact: true }).click();
     await page.getByText("Scanned Zero Drink").waitFor();
     assert.equal(await page.evaluate(() => window.__stoppedCameraTracks >= 1), true, "Camera stream tracks must stop after scan");
-    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByRole("button", { name: "Close composer", exact: true }).click();
 
     // Verify success toast auto-dismisses after ~3s
     await page.getByRole("navigation").getByRole("button", { name: "Settings", exact: true }).click();
