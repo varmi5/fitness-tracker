@@ -86,7 +86,11 @@ export async function POST(request: Request) {
     }
 
     if (action.day) {
-      return json({ strain: await strain.computeDay(action.day) });
+      const [computedStrain, recoveryInsights] = await Promise.all([
+        strain.computeDay(action.day),
+        getRecoveryInsightsForUser(db, session.user.id, action.day),
+      ]);
+      return json({ strain: computedStrain, recoveryInsights });
     }
     if (action.from && action.to) {
       historyInput.parse({ from: action.from, to: action.to });
