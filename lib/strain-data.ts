@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import type { z } from "zod";
 import type { AuthDatabase } from "./auth";
+import { findMatchingGoogleWorkout } from "./hevy";
 import { MUSCLE_GROUPS, type MuscleGroup } from "./muscle-map";
 import { dayRange } from "./nutrition-model";
 import {
@@ -113,6 +114,46 @@ export function overlapStepsForWindows(
     }
   }
   return excluded;
+}
+
+const STRENGTH_KEYWORDS =
+  /\b(strength|weightlifting|weight[_\s-]?training|weights|resistance|calisthenics|powerlifting|bodybuilding|crossfit|gym|hevy|barbell|dumbbell|kettlebell|push\b|pull\b|legs?\b|upper\b|lower\b|full[\s-]?body|chest\b|back\b|shoulders?\b|arms?\b|hypertrophy)\b/i;
+
+export function isStrengthGoogleWorkout(title: string, exerciseType: string): boolean {
+  return STRENGTH_KEYWORDS.test(exerciseType) || STRENGTH_KEYWORDS.test(title);
+}
+
+export function estimateMuscularFromGoogleStrength(
+  title: string,
+  durationSeconds: number | null,
+): { mRaw: number; muscleLoads: Record<MuscleGroup, number>; estimatedSets: number } {
+  const mins = Math.max(12, Math.min(150, durationSeconds && durationSeconds > 0 ? durationSeconds / 60 : 45));
+  // ~1 working set per 4 minutes at provisional default effort (0.85 per set)
+  const estimatedSets = Math.max(3, Math.round(mins / 4));
+  const mRaw = Math.round(estimatedSets * 0.85 * 100) / 100;
+
+  const muscleLoads = Object.fromEntries(MUSCLE_GROUPS.map((m) => [m, 0])) as Record<MuscleGroup, number>;
+  const t = title.toLowerCase();
+
+  let targetMuscles: MuscleGroup[];
+  if (/\b(push|chest)\b/.test(t)) {
+    targetMuscles = ["Chest", "Shoulders", "Triceps"];
+  } else if (/\b(pull|back)\b/.test(t)) {
+    targetMuscles = ["Back", "Biceps", "Shoulders"];
+  } else if (/\b(legs?|lower|squat|glute)\b/.test(t)) {
+    targetMuscles = ["Quads", "Hamstrings", "Glutes", "Calves"];
+  } else if (/\b(upper|arm|shoulder)\b/.test(t)) {
+    targetMuscles = ["Chest", "Back", "Shoulders", "Biceps", "Triceps"];
+  } else {
+    targetMuscles = ["Chest", "Back", "Shoulders", "Quads", "Hamstrings", "Glutes", "Core"];
+  }
+
+  const perMuscle = Math.round((mRaw / targetMuscles.length) * 100) / 100;
+  for (const m of targetMuscles) {
+    muscleLoads[m] = perMuscle;
+  }
+
+  return { mRaw, muscleLoads, estimatedSets };
 }
 
 export function strainData(db: AuthDatabase, userId: string) {
@@ -236,7 +277,15 @@ export function strainData(db: AuthDatabase, userId: string) {
 
     for (const hw of hevyRows) {
       const sets = setsByHevy.get(hw.hevyId) ?? [];
-      const matchedG = hw.matchedGoogleSessionId ? googleById.get(hw.matchedGoogleSessionId) : undefined;
+      const fallbackMatch = findMatchingGoogleWorkout(
+        hw.startTime.toISOString(),
+        hw.endTime.toISOString(),
+        googleWorkoutRows,
+      );
+      const matchedG =
+        (hw.matchedGoogleSessionId ? googleById.get(hw.matchedGoogleSessionId) : undefined) ??
+        (fallbackMatch ? googleById.get(fallbackMatch.sessionId) : undefined);
+      if (matchedG) matchedGoogleIds.add(matchedG.sessionId);
       const startMs = hw.startTime.getTime();
       const endMs = hw.endTime.getTime();
       workoutWindows.push({ startTime: hw.startTime, endTime: hw.endTime });
@@ -327,22 +376,45 @@ export function strainData(db: AuthDatabase, userId: string) {
           ? Math.round((windowHr.reduce((a, b) => a + b.bpm, 0) / windowHr.length) * 10) / 10
           : gw.avgHrBpm;
 
+      const isStrength = isStrengthGoogleWorkout(gw.title, gw.exerciseType);
+      const durSec =
+        gw.durationSeconds ?? (endMs > startMs ? Math.round((endMs - startMs) / 1000) : null);
+      const strengthEst = isStrength ? estimateMuscularFromGoogleStrength(gw.title, durSec) : null;
+      if (strengthEst) {
+        totalMRaw += strengthEst.mRaw;
+        for (const g of MUSCLE_GROUPS) totalMuscleLoads[g] += strengthEst.muscleLoads[g];
+      }
+
+      const gwNotes = [trimp.note];
+      if (strengthEst) {
+        gwNotes.push(
+          `Provisional muscular load (${strengthEst.mRaw} pts, ~${strengthEst.estimatedSets} working sets) estimated from Google Health strength session duration. Sync Hevy for exact set-by-set muscular load.`,
+        );
+      }
+
       activities.push({
         id: `google:${gw.sessionId}`,
-        kind: "cardio",
+        kind: isStrength ? "strength" : "cardio",
         title: gw.title,
-        source: "Google Health",
+        source: isStrength ? "Google Health (Strength)" : "Google Health",
         startTime: gw.startTime?.toISOString() ?? null,
         endTime: gw.endTime?.toISOString() ?? null,
-        durationSeconds: gw.durationSeconds,
+        durationSeconds: durSec,
         distanceMeters: gw.distanceMeters,
         caloriesKcal: gw.caloriesKcal,
         avgHrBpm: avgHr,
         cRaw: trimp.cRaw,
-        mRaw: 0,
+        mRaw: strengthEst ? strengthEst.mRaw : 0,
         overallPointsContribution: 0,
-        status: trimp.status === "unavailable" ? "incomplete" : trimp.status === "estimated_azm" ? "partial" : "complete",
-        notes: [trimp.note],
+        status:
+          trimp.status === "unavailable"
+            ? strengthEst
+              ? "partial"
+              : "incomplete"
+            : trimp.status === "estimated_azm" || strengthEst
+              ? "partial"
+              : "complete",
+        notes: gwNotes,
         trimpZones: trimp.zones,
         hrSeries: windowHr,
       });
@@ -500,17 +572,53 @@ export function strainData(db: AuthDatabase, userId: string) {
   }
 
   async function history(from: string, to: string): Promise<DailyStrainView[]> {
-    const rows = await db
-      .select()
-      .from(dailyStrain)
-      .where(and(eq(dailyStrain.userId, userId), gte(dailyStrain.day, from), lte(dailyStrain.day, to)))
-      .orderBy(asc(dailyStrain.day));
+    const [rows, hevyDays, googleDays] = await Promise.all([
+      db
+        .select()
+        .from(dailyStrain)
+        .where(and(eq(dailyStrain.userId, userId), gte(dailyStrain.day, from), lte(dailyStrain.day, to)))
+        .orderBy(asc(dailyStrain.day)),
+      db
+        .select({ day: hevyWorkout.day, syncedAt: hevyWorkout.syncedAt })
+        .from(hevyWorkout)
+        .where(and(eq(hevyWorkout.userId, userId), gte(hevyWorkout.day, from), lte(hevyWorkout.day, to))),
+      db
+        .select({
+          day: dailyWorkout.day,
+          syncedAt: dailyWorkout.syncedAt,
+          title: dailyWorkout.title,
+          exerciseType: dailyWorkout.exerciseType,
+        })
+        .from(dailyWorkout)
+        .where(and(eq(dailyWorkout.userId, userId), gte(dailyWorkout.day, from), lte(dailyWorkout.day, to))),
+    ]);
+
     const byDay = new Map(rows.map((r) => [r.day, r]));
+    const latestSourceSyncByDay = new Map<string, number>();
+    const hasStrengthByDay = new Set<string>();
+
+    for (const h of hevyDays) {
+      hasStrengthByDay.add(h.day);
+      const t = h.syncedAt.getTime();
+      if (t > (latestSourceSyncByDay.get(h.day) ?? 0)) latestSourceSyncByDay.set(h.day, t);
+    }
+    for (const g of googleDays) {
+      if (isStrengthGoogleWorkout(g.title, g.exerciseType)) hasStrengthByDay.add(g.day);
+      const t = g.syncedAt.getTime();
+      if (t > (latestSourceSyncByDay.get(g.day) ?? 0)) latestSourceSyncByDay.set(g.day, t);
+    }
+
     const settings = await getSettings();
     const out: DailyStrainView[] = [];
     for (const d of dayRange(from, to)) {
       const existing = byDay.get(d);
-      if (existing) {
+      const latestSync = latestSourceSyncByDay.get(d) ?? 0;
+      const isStale =
+        !existing ||
+        latestSync > existing.computedAt.getTime() ||
+        (hasStrengthByDay.has(d) && existing.mRaw === 0);
+
+      if (!isStale && existing) {
         out.push({
           day: existing.day,
           algorithmVersion: existing.algorithmVersion,

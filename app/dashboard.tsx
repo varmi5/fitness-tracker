@@ -159,8 +159,16 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     }
 
     const params = new URLSearchParams(window.location.search);
-    const reqTab = params.get("tab") as AppTab | null;
-    if (reqTab && tabs.some((t) => t.title === reqTab)) setTab(reqTab);
+    const reqTab = params.get("tab");
+    if (reqTab === "Settings") {
+      setTab("More");
+      setMoreSection("Settings");
+    } else if (reqTab === "Measurements") {
+      setTab("More");
+      setMoreSection("Measurements");
+    } else if (reqTab && tabs.some((t) => t.title === reqTab)) {
+      setTab(reqTab as AppTab);
+    }
     const googleState = params.get("google");
     if (googleState === "connected") {
       showToast(
@@ -173,6 +181,20 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     } else if (googleState === "error") {
       const reason = params.get("reason") ?? "connection failed";
       showToast(`Google Health: ${reason}`, "error");
+      window.history.replaceState({}, "", "/");
+    }
+    const hevyState = params.get("hevy");
+    if (hevyState === "connected") {
+      showToast(
+        initial.hevy.status === "sync_failed"
+          ? "Hevy connected. Tap Sync Hevy to refresh your workout history."
+          : "Hevy connected and workouts synced.",
+        initial.hevy.status === "sync_failed" ? "info" : "success",
+      );
+      window.history.replaceState({}, "", "/");
+    } else if (hevyState === "error") {
+      const reason = params.get("reason") ?? "connection failed";
+      showToast(`Hevy: ${reason}`, "error");
       window.history.replaceState({}, "", "/");
     }
   }, []);
@@ -782,6 +804,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             recoveryInsights={trainingRecovery}
             strainSettings={strainSettings}
             hevy={hevy}
+            google={google}
             theme={theme}
             busy={busy}
             loading={trainingLoading}
