@@ -3,6 +3,7 @@ import { historyInput } from "../../../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
 import { strainData } from "../../../lib/strain-data";
 import { trainingPreferenceInput } from "../../../lib/strain-engine";
+import { getTrainingLoadSummary } from "../../../lib/training-load";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,10 @@ export async function GET(request: Request) {
   const query = new URL(request.url).searchParams;
 
   try {
+    if (query.get("loads") === "1") {
+      const range = historyInput.parse({ from: query.get("from"), to: query.get("to") });
+      return json(await getTrainingLoadSummary(db, session.user.id, range.from, range.to));
+    }
     if (query.has("day")) {
       const day = z.iso.date().parse(query.get("day"));
       const force = query.get("recompute") === "1";
