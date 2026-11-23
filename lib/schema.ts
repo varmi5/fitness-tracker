@@ -255,6 +255,33 @@ export const dailyWorkout = pgTable("daily_workout", {
   index("daily_workout_user_day_idx").on(t.userId, t.day),
 ]);
 
+export const heartRateSample = pgTable("heart_rate_sample", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  source: text().notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull(),
+  bpm: doublePrecision().notNull(),
+  day: date().notNull(),
+  dataSource: text("data_source").notNull().default(""),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.source, t.recordedAt] }),
+  index("heart_rate_sample_user_day_idx").on(t.userId, t.day, t.recordedAt),
+]);
+
+export const stepInterval = pgTable("step_interval", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  source: text().notNull(),
+  startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+  endTime: timestamp("end_time", { withTimezone: true }).notNull(),
+  steps: integer().notNull(),
+  day: date().notNull(),
+  dataSource: text("data_source").notNull().default(""),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.source, t.startTime, t.endTime] }),
+  index("step_interval_user_day_idx").on(t.userId, t.day, t.startTime),
+]);
+
 export const healthIntegration = pgTable("health_integration", {
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   provider: text().notNull(),
@@ -265,6 +292,7 @@ export const healthIntegration = pgTable("health_integration", {
   status: text().notNull().default("connected"),
   lastSync: timestamp("last_sync", { withTimezone: true }),
   lastError: text("last_error"),
+  diagnosticsJson: jsonb("diagnostics_json").notNull().default({}),
 }, (t) => [primaryKey({ columns: [t.userId, t.provider] })]);
 
 export const mcpAudit = pgTable("mcp_audit", {
