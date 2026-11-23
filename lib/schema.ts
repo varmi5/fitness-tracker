@@ -323,6 +323,42 @@ export const hevySet = pgTable("hevy_set", {
   index("hevy_set_workout_idx").on(t.userId, t.hevyId, t.exerciseIndex, t.setIndex),
 ]);
 
+export const trainingPreference = pgTable("training_preference", {
+  userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
+  maxHrBpm: integer("max_hr_bpm").notNull().default(190),
+  age: integer(),
+  maxHrIsEstimated: boolean("max_hr_is_estimated").notNull().default(true),
+  walkingEnabled: boolean("walking_enabled").notNull().default(true),
+  walkingStepThreshold: integer("walking_step_threshold").notNull().default(10500),
+  walkingSensitivity: text("walking_sensitivity").notNull().default("normal"),
+  walkingMaxPoints: doublePrecision("walking_max_points").notNull().default(5),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const dailyStrain = pgTable("daily_strain", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  day: date().notNull(),
+  algorithmVersion: text("algorithm_version").notNull(),
+  overallStrain: doublePrecision("overall_strain"),
+  cardioStrain: doublePrecision("cardio_strain"),
+  muscularStrain: doublePrecision("muscular_strain"),
+  cRaw: doublePrecision("c_raw").notNull().default(0),
+  mRaw: doublePrecision("m_raw").notNull().default(0),
+  walkingPoints: doublePrecision("walking_points").notNull().default(0),
+  totalSteps: integer("total_steps"),
+  excludedWorkoutSteps: integer("excluded_workout_steps"),
+  eligibleSteps: integer("eligible_steps"),
+  excessSteps: integer("excess_steps"),
+  confidence: text().notNull().default("incomplete"),
+  muscleLoadsJson: jsonb("muscle_loads_json").notNull().default({}),
+  activitiesJson: jsonb("activities_json").notNull().default([]),
+  settingsSnapshotJson: jsonb("settings_snapshot_json").notNull().default({}),
+  computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.day] }),
+  index("daily_strain_user_day_idx").on(t.userId, t.day),
+]);
+
 export const healthIntegration = pgTable("health_integration", {
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   provider: text().notNull(),
