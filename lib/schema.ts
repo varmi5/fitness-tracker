@@ -282,6 +282,47 @@ export const stepInterval = pgTable("step_interval", {
   index("step_interval_user_day_idx").on(t.userId, t.day, t.startTime),
 ]);
 
+export const hevyWorkout = pgTable("hevy_workout", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  hevyId: text("hevy_id").notNull(),
+  day: date().notNull(),
+  title: text().notNull(),
+  description: text().notNull().default(""),
+  startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+  endTime: timestamp("end_time", { withTimezone: true }).notNull(),
+  durationSeconds: integer("duration_seconds"),
+  source: text().notNull().default("hevy_csv"),
+  matchedGoogleSessionId: text("matched_google_session_id"),
+  avgHrBpm: doublePrecision("avg_hr_bpm"),
+  hrSampleCount: integer("hr_sample_count").notNull().default(0),
+  hrCoveragePct: integer("hr_coverage_pct"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.hevyId] }),
+  index("hevy_workout_user_day_idx").on(t.userId, t.day, t.startTime),
+]);
+
+export const hevySet = pgTable("hevy_set", {
+  id: text().primaryKey(),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  hevyId: text("hevy_id").notNull(),
+  exerciseIndex: integer("exercise_index").notNull(),
+  exerciseTitle: text("exercise_title").notNull(),
+  exerciseTemplateId: text("exercise_template_id"),
+  supersetId: integer("superset_id"),
+  setIndex: integer("set_index").notNull(),
+  setType: text("set_type").notNull().default("normal"),
+  weightKg: doublePrecision("weight_kg"),
+  reps: integer(),
+  distanceMeters: doublePrecision("distance_meters"),
+  durationSeconds: integer("duration_seconds"),
+  rpe: doublePrecision(),
+  notes: text().notNull().default(""),
+}, (t) => [
+  index("hevy_set_workout_idx").on(t.userId, t.hevyId, t.exerciseIndex, t.setIndex),
+]);
+
 export const healthIntegration = pgTable("health_integration", {
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   provider: text().notNull(),
