@@ -84,10 +84,30 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   }, [google.connected, google.mealSync?.pending, google.mealSync?.failed]);
   const [audit, setAudit] = useState(initial.audit);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [toast, setToast] = useState<{ id: number; text: string; kind: "success" | "error" | "info" } | null>(null);
+  const toastSeq = useRef(0);
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerDay, setComposerDay] = useState(initialCalendarToday);
   const [editingMeal, setEditingMeal] = useState<MealRecord | null>(null);
+
+  function showToast(text: string, kind?: "success" | "error" | "info") {
+    if (!text) {
+      setToast(null);
+      return;
+    }
+    const resolvedKind =
+      kind ?? (/\b(could not|failed|error|unable|invalid|denied|rejected|unavailable)\b/i.test(text) ? "error" : "success");
+    toastSeq.current += 1;
+    setToast({ id: toastSeq.current, text, kind: resolvedKind });
+  }
+
+  useEffect(() => {
+    if (!toast || toast.kind === "error") return;
+    const timer = window.setTimeout(() => {
+      setToast((current) => (current?.id === toast.id ? null : current));
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   function applyTheme(next: ThemeMode) {
     setThemeState(next);
@@ -120,11 +140,16 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     if (reqTab && tabs.some((t) => t.title === reqTab)) setTab(reqTab);
     const googleState = params.get("google");
     if (googleState === "connected") {
-      setMessage(initial.google.status === "sync_failed" ? "Google Health connected. The first sync failed; try Sync again in Settings." : "Google Health connected.");
+      showToast(
+        initial.google.status === "sync_failed"
+          ? "Google Health connected. The first sync failed; try Sync again in Settings."
+          : "Google Health connected.",
+        initial.google.status === "sync_failed" ? "info" : "success",
+      );
       window.history.replaceState({}, "", "/");
     } else if (googleState === "error") {
       const reason = params.get("reason") ?? "connection failed";
-      setMessage(`Google Health: ${reason}`);
+      showToast(`Google Health: ${reason}`, "error");
       window.history.replaceState({}, "", "/");
     }
   }, []);
@@ -178,7 +203,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     void (async () => {
       await refreshAccountAndMeta();
       await refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current);
-    })().catch(() => setMessage("Could not refresh the diary. Try again."));
+    })().catch(() => showToast("Could not refresh the diary. Try again.", "error"));
   }, [today]);
   useEffect(() => () => {
     dayRequest.current?.abort();
@@ -186,7 +211,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   }, []);
 
   function navigate(next: AppTab) {
-    setMessage("");
+    setToast(null);
     setTab(next);
     window.scrollTo({ top: 0, behavior: "instant" });
   }
@@ -317,7 +342,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const value = await res.json();
       if (homeDayRef.current === clamped) setHomeDaily(value);
     } catch (error) {
-      if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "Could not load that date.");
+      if (!controller.signal.aborted) showToast(error instanceof Error ? error.message : "Could not load that date.", "error");
     }
   }
 
@@ -339,7 +364,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const value = await res.json();
       if (selectedDayRef.current === day) setSelectedDaily(value);
     } catch (error) {
-      if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "Could not load the diary.");
+      if (!controller.signal.aborted) showToast(error instanceof Error ? error.message : "Could not load the diary.", "error");
     } finally {
       if (selectedDayRef.current === day) setDayLoading(false);
     }
@@ -347,7 +372,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   async function saveTracker(action: object, successMessage: string) {
     setBusy(true);
-    setMessage("");
+    setToast(null);
     try {
       const response = await fetch("/api/tracker", {
         method: "POST",
@@ -363,9 +388,9 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       setTracker(payload);
       await refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current);
       void refreshSyncToken().catch(() => null);
-      setMessage(successMessage);
+      showToast(successMessage, "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not save.");
+      showToast(error instanceof Error ? error.message : "Could not save.", "error");
     } finally {
       setBusy(false);
     }
@@ -375,7 +400,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     if (actionLock.current) return false;
     actionLock.current = true;
     setBusy(true);
-    setMessage("");
+    setToast(null);
     try {
       const response = await fetch("/api/nutrition", {
         method: "POST",
@@ -415,13 +440,13 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         if (payload.weightsSynced) parts.push(`${payload.weightsSynced} weight reading(s)`);
         if (payload.mealsImported) parts.push(`${payload.mealsImported} meal(s)`);
         if (payload.heightUpdated) parts.push("height profile");
-        setMessage(parts.length ? `Imported ${parts.join(", ")}.` : successMessage);
+        showToast(parts.length ? `Imported ${parts.join(", ")}.` : successMessage, "success");
         return true;
       }
-      setMessage(refreshed ? successMessage : `${successMessage} Refresh the page to see the updated totals.`);
+      showToast(refreshed ? successMessage : `${successMessage} Refresh the page to see the updated totals.`, "success");
       return true;
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not save.");
+      showToast(error instanceof Error ? error.message : "Could not save.", "error");
       return false;
     } finally {
       actionLock.current = false;
@@ -431,7 +456,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   async function syncGoogle(days = 14) {
     setBusy(true);
-    setMessage("");
+    setToast(null);
     try {
       const from = addDays(today, 1 - days);
       const res = await fetch("/api/integrations/google/sync", {
@@ -446,9 +471,9 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       await Promise.all([refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current), refreshTracker()]);
       void refreshSyncToken().catch(() => null);
       const sleepNote = payload.syncedSleepDays ? ` & ${payload.syncedSleepDays} sleep session(s)` : "";
-      setMessage(`Synced ${payload.syncedDays} day(s)${sleepNote} from Google Health.`);
+      showToast(`Synced ${payload.syncedDays} day(s)${sleepNote} from Google Health.`, "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Google sync failed.");
+      showToast(error instanceof Error ? error.message : "Google sync failed.", "error");
     } finally {
       setBusy(false);
     }
@@ -456,7 +481,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   async function pushGoogle(days = 14) {
     setBusy(true);
-    setMessage("");
+    setToast(null);
     try {
       let cursor: string | null = null;
       let queued = 0;
@@ -473,9 +498,9 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         cursor = payload.nextCursor ?? null;
       } while (cursor);
       void refreshSyncToken().catch(() => null);
-      setMessage(`Sync requested for ${queued} meal(s). See Google sync status.`);
+      showToast(`Sync requested for ${queued} meal(s). See Google sync status.`, "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Google push failed.");
+      showToast(error instanceof Error ? error.message : "Google push failed.", "error");
     } finally {
       setBusy(false);
     }
@@ -484,7 +509,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   async function disconnectGoogle() {
     if (!window.confirm("Disconnect Google Health and delete all synced Google expenditure and sleep data?")) return;
     setBusy(true);
-    setMessage("");
+    setToast(null);
     try {
       const res = await fetch("/api/integrations/google/disconnect", { method: "POST" });
       const payload = await res.json();
@@ -493,9 +518,9 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       await refreshAccountAndMeta();
       await Promise.all([refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current), refreshTracker()]);
       void refreshSyncToken().catch(() => null);
-      setMessage("Google Health disconnected and synced data removed.");
+      showToast("Google Health disconnected and synced data removed.", "success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not disconnect.");
+      showToast(error instanceof Error ? error.message : "Could not disconnect.", "error");
     } finally {
       setBusy(false);
     }
@@ -596,16 +621,33 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             onSyncGoogle={syncGoogle}
             onPushGoogle={pushGoogle}
             onDisconnectGoogle={disconnectGoogle}
-            onMessage={setMessage}
+            onMessage={(msg) => showToast(msg)}
           />
         )}
-
-        {!!message && (
-          <div className="feedback" role="status">
-            {message}
-          </div>
-        )}
       </div>
+
+      {toast && (
+        <div
+          className="toast-region"
+          aria-live={toast.kind === "error" ? "assertive" : "polite"}
+          aria-atomic="true"
+        >
+          <div
+            className={`feedback toast-${toast.kind}`}
+            role={toast.kind === "error" ? "alert" : "status"}
+          >
+            <span className="toast-text">{toast.text}</span>
+            <button
+              type="button"
+              className="toast-dismiss"
+              aria-label="Dismiss notification"
+              onClick={() => setToast(null)}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
 
       {composerOpen && (
         <MealComposer

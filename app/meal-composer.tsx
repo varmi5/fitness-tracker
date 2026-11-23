@@ -2,8 +2,14 @@
 
 import { foodEmoji } from "../lib/food-emoji";
 
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
-import { Plus, Search, Star, Trash2, X } from "lucide-react";
+import { Camera, Plus, Search, Star, Trash2, X } from "lucide-react";
+
+const BarcodeScanner = dynamic(() => import("./barcode-scanner").then((m) => m.BarcodeScanner), {
+  ssr: false,
+  loading: () => <p className="empty">Loading camera scanner…</p>,
+});
 import { portionBasis, scalePortion, type PortionBasis } from "../lib/food-portion";
 import { localTime } from "../lib/nutrition-model";
 import { CustomFoodForm } from "./custom-food-form";
@@ -146,6 +152,7 @@ export function MealComposer({
   const syncViewportRef = useRef<() => void>(() => {});
   const working = busy || submitting;
   const [barcode, setBarcode] = useState("");
+  const [scannerOpen, setScannerOpen] = useState(false);
   const [barcodeDefinition, setBarcodeDefinition] = useState<FoodDefinition | null>(null);
   const [barcodeProduct, setBarcodeProduct] = useState<BarcodeProduct | null>(null);
   const [barcodeGrams, setBarcodeGrams] = useState("100");
@@ -398,16 +405,18 @@ export function MealComposer({
     if (food.cookingMethod && !cookingMethod.trim()) setCookingMethod(food.cookingMethod);
   }
 
-  async function lookupBarcode() {
+  async function lookupBarcode(overrideCode?: string) {
+    const codeToLookup = (overrideCode ?? barcode).trim();
+    if (!codeToLookup) return;
     setError("");
     setBarcodeProduct(null);
     setLookupBusy(true);
     try {
-      const res = await fetch(`/api/foods?barcode=${encodeURIComponent(barcode.trim())}`);
+      const res = await fetch(`/api/foods?barcode=${encodeURIComponent(codeToLookup)}`);
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Barcode lookup failed.");
       const food: FoodDefinition = payload.food; setBarcodeDefinition(food);
-      setBarcodeProduct({ barcode: barcode.trim(), name: food.name, brand: food.brand, servingSizeLabel: food.portions.find((p) => p.id === "label-serving")?.label ?? null,
+      setBarcodeProduct({ barcode: codeToLookup, name: food.name, brand: food.brand, servingSizeLabel: food.portions.find((p) => p.id === "label-serving")?.label ?? null,
         basisAmount: food.basisAmount, basisUnit: food.basisUnit as "g" | "ml", calories: food.calories ?? null, proteinG: food.proteinG ?? null, carbsG: food.carbsG ?? null, fatG: food.fatG ?? null, fibreG: food.fibreG ?? null, source: "Open Food Facts" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Barcode lookup failed.");
@@ -771,7 +780,26 @@ export function MealComposer({
                       <button type="button" className="secondary compact" disabled={lookupBusy || working || !/^\d{8,14}$/.test(barcode.trim())} onClick={() => void lookupBarcode()}>
                         <Search size={15} /> {lookupBusy ? "Looking up…" : "Lookup"}
                       </button>
+                      <button
+                        type="button"
+                        className="secondary compact"
+                        disabled={working}
+                        aria-pressed={scannerOpen}
+                        onClick={() => setScannerOpen((open) => !open)}
+                      >
+                        <Camera size={15} /> {scannerOpen ? "Hide camera" : "Scan"}
+                      </button>
                     </div>
+                    {scannerOpen && (
+                      <BarcodeScanner
+                        onDetected={(code) => {
+                          setBarcode(code);
+                          setScannerOpen(false);
+                          void lookupBarcode(code);
+                        }}
+                        onClose={() => setScannerOpen(false)}
+                      />
+                    )}
                     {barcodeProduct && (
                       <div style={{ display: "grid", gap: ".5rem", borderTop: "1px solid var(--border)", paddingTop: ".55rem" }}>
                         <strong>{barcodeProduct.name}</strong>

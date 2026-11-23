@@ -227,7 +227,61 @@ try {
     await page.evaluate(() => window.dispatchEvent(new Event("pageshow")));
     await page.locator(".meal-card").filter({ hasText: `${name} auto-synced bowl` }).waitFor();
 
-    console.log(`${name}: food suggestions, input sizing, modal bounds, portion scaling, failed-save recovery, inline autocomplete, keyboard viewport, Bevel steppers, non-Fitbit hiding, settings ordering, auto-refresh and tab overflow passed.`);
+    // Stage 1 regression: toast auto-dismiss (~3s), manual dismiss, and live camera barcode scanner
+    await fab.click();
+    await page.getByRole("button", { name: "Barcode", exact: true }).click();
+    await page.evaluate(() => {
+      window.__stoppedCameraTracks = 0;
+      const fakeStream = {
+        getTracks: () => [{ stop: () => { window.__stoppedCameraTracks += 1; } }],
+      };
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: { getUserMedia: async () => fakeStream },
+      });
+      HTMLMediaElement.prototype.play = async () => undefined;
+      window.BarcodeDetector = class {
+        static async getSupportedFormats() { return ["ean_13"]; }
+        async detect() { return [{ rawValue: "5000112637922" }]; }
+      };
+    });
+    await page.route("**/api/foods?barcode=5000112637922", async (route) => {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          food: {
+            id: "off:5000112637922",
+            name: "Scanned Zero Drink",
+            brand: "Test",
+            foodType: "drink",
+            basisAmount: 100,
+            basisUnit: "ml",
+            calories: 1,
+            proteinG: 0,
+            carbsG: 0,
+            fatG: 0,
+            fibreG: 0,
+            portions: [{ id: "ml", label: "ml", unit: "ml", baseAmount: 1, defaultAmount: 330, estimated: false }],
+            defaultPortionId: "ml",
+            sourceName: "Open Food Facts",
+          },
+        }),
+      });
+    });
+    await page.getByRole("button", { name: "Scan", exact: true }).click();
+    await page.getByText("Scanned Zero Drink").waitFor();
+    assert.equal(await page.evaluate(() => window.__stoppedCameraTracks >= 1), true, "Camera stream tracks must stop after scan");
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+
+    // Verify success toast auto-dismisses after ~3s
+    await page.getByRole("navigation").getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Save preferences", exact: true }).click();
+    const toast = page.locator(".feedback");
+    await toast.waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "Dismiss notification", exact: true }).waitFor();
+    await toast.waitFor({ state: "hidden", timeout: 5000 });
+
+    console.log(`${name}: food suggestions, input sizing, modal bounds, portion scaling, failed-save recovery, inline autocomplete, keyboard viewport, Bevel steppers, non-Fitbit hiding, settings ordering, auto-refresh, toast auto-dismiss, barcode scanner and tab overflow passed.`);
     await browser.close(); browser = undefined;
   }
 } finally {
