@@ -13,7 +13,9 @@ import {
   fmtRelativeSync,
   type AuditEntry,
   type GoogleIntegrationStatus,
+  type HevyIntegrationStatus,
   type NutritionSettings,
+  type StrainSettings,
   type ThemeMode,
   type TrackerSnapshot,
 } from "./types";
@@ -23,6 +25,8 @@ interface SettingsViewProps {
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
   google: GoogleIntegrationStatus;
+  hevy?: HevyIntegrationStatus;
+  strainSettings?: StrainSettings;
   audit: AuditEntry[];
   mcpEnabled: boolean;
   theme: ThemeMode;
@@ -31,6 +35,10 @@ interface SettingsViewProps {
   onToggleTheme: () => void;
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
   onNutritionAction: (action: object, successMessage: string) => Promise<boolean>;
+  onSaveStrainSettings?: (data: Partial<StrainSettings>) => Promise<boolean>;
+  onImportHevy?: (rawText: string) => Promise<boolean>;
+  onSyncHevy?: () => Promise<void>;
+  onDisconnectHevy?: () => Promise<void>;
   onSyncGoogle: (days?: number) => Promise<void>;
   onPushGoogle: (days?: number) => Promise<void>;
   onDisconnectGoogle: () => Promise<void>;
@@ -49,6 +57,8 @@ export function SettingsView({
   tracker,
   settings,
   google,
+  hevy,
+  strainSettings,
   audit,
   mcpEnabled,
   theme,
@@ -57,6 +67,10 @@ export function SettingsView({
   onToggleTheme,
   onSaveTracker,
   onNutritionAction,
+  onSaveStrainSettings,
+  onImportHevy,
+  onSyncHevy,
+  onDisconnectHevy,
   onSyncGoogle,
   onPushGoogle,
   onDisconnectGoogle,
@@ -73,6 +87,22 @@ export function SettingsView({
   );
   const [twoWaySync, setTwoWaySync] = useState(Boolean(settings.googleTwoWaySync));
   const [bulkMode, setBulkMode] = useState(Boolean(settings.bulkMode));
+
+  const [walkingEnabled, setWalkingEnabled] = useState(strainSettings?.walkingEnabled ?? true);
+  const [walkingStepThreshold, setWalkingStepThreshold] = useState(
+    String(strainSettings?.walkingStepThreshold ?? 10500),
+  );
+  const [walkingSensitivity, setWalkingSensitivity] = useState<"low" | "normal" | "high">(
+    strainSettings?.walkingSensitivity ?? "normal",
+  );
+  const [walkingMaxPoints, setWalkingMaxPoints] = useState(
+    String(strainSettings?.walkingMaxPoints ?? 5),
+  );
+  const [maxHrBpm, setMaxHrBpm] = useState(
+    strainSettings?.maxHrBpm != null ? String(strainSettings.maxHrBpm) : "",
+  );
+  const [hrAge, setHrAge] = useState(strainSettings?.age != null ? String(strainSettings.age) : "");
+  const [hevyRawText, setHevyRawText] = useState("");
 
   useEffect(() => {
     const nextMode: TrackingMode =
@@ -91,6 +121,16 @@ export function SettingsView({
     settings.bulkMode,
     settings.targetToday,
   ]);
+
+  useEffect(() => {
+    if (!strainSettings) return;
+    setWalkingEnabled(strainSettings.walkingEnabled);
+    setWalkingStepThreshold(String(strainSettings.walkingStepThreshold));
+    setWalkingSensitivity(strainSettings.walkingSensitivity);
+    setWalkingMaxPoints(String(strainSettings.walkingMaxPoints));
+    setMaxHrBpm(strainSettings.maxHrBpm != null ? String(strainSettings.maxHrBpm) : "");
+    setHrAge(strainSettings.age != null ? String(strainSettings.age) : "");
+  }, [strainSettings]);
 
   const [manualDay, setManualDay] = useState(today);
   const [manualTotal, setManualTotal] = useState("");
@@ -552,6 +592,215 @@ export function SettingsView({
           </label>
           <Button variant="secondary" disabled={busy} type="submit">Import saved health data</Button>
         </form>
+      </section>
+
+      {/* Training & Strain -> Walking Contribution & HR Zones */}
+      <section className="card" id="strain-walking-settings">
+        <div className="split-row">
+          <div>
+            <h2>Training &amp; Strain · Walking Contribution</h2>
+            <p style={{ fontSize: ".8rem" }}>
+              Configure how extra non-workout daily steps contribute to your 0–100 Overall Strain score and how heart-rate zones are calibrated.
+            </p>
+          </div>
+          <span className={`pill ${walkingEnabled ? "teal-soft" : ""}`}>
+            {walkingEnabled ? "Walking enabled" : "Walking off"}
+          </span>
+        </div>
+
+        <form
+          style={{ display: "grid", gap: ".75rem", marginTop: ".75rem" }}
+          onSubmit={async (e: FormEvent) => {
+            e.preventDefault();
+            if (!onSaveStrainSettings) return;
+            await onSaveStrainSettings({
+              walkingEnabled,
+              walkingStepThreshold: Math.max(0, Math.min(25000, Number(walkingStepThreshold) || 10500)),
+              walkingSensitivity,
+              walkingMaxPoints: Math.max(0, Math.min(15, Number(walkingMaxPoints) || 5)),
+              maxHrBpm: maxHrBpm.trim() ? Number(maxHrBpm) : null,
+              age: hrAge.trim() ? Number(hrAge) : null,
+            });
+          }}
+        >
+          <label className="check-row" style={{ display: "flex", alignItems: "center", gap: ".5rem" }}>
+            <input
+              type="checkbox"
+              checked={walkingEnabled}
+              onChange={(e) => setWalkingEnabled(e.target.checked)}
+            />
+            <span>Include eligible non-workout walking in Overall Strain</span>
+          </label>
+
+          <div className="field-grid">
+            <label>
+              Daily Step Threshold ({Number(walkingStepThreshold || 0).toLocaleString()} steps)
+              <input
+                type="range"
+                min={0}
+                max={25000}
+                step={500}
+                value={walkingStepThreshold}
+                onChange={(e) => setWalkingStepThreshold(e.target.value)}
+              />
+              <input
+                type="number"
+                min={0}
+                max={25000}
+                step={500}
+                value={walkingStepThreshold}
+                onChange={(e) => setWalkingStepThreshold(e.target.value)}
+                aria-label="Daily step threshold"
+              />
+            </label>
+
+            <label>
+              Walking Sensitivity
+              <select
+                value={walkingSensitivity}
+                onChange={(e) => setWalkingSensitivity(e.target.value as "low" | "normal" | "high")}
+              >
+                <option value="low">Low</option>
+                <option value="normal">Normal (Default)</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+
+            <label>
+              Max Walking Points Cap (0–15)
+              <input
+                type="number"
+                min={0}
+                max={15}
+                step={0.5}
+                value={walkingMaxPoints}
+                onChange={(e) => setWalkingMaxPoints(e.target.value)}
+              />
+            </label>
+
+            <label>
+              Known Max HR (bpm, optional)
+              <input
+                type="number"
+                min={120}
+                max={230}
+                placeholder="e.g. 192"
+                value={maxHrBpm}
+                onChange={(e) => setMaxHrBpm(e.target.value)}
+              />
+            </label>
+
+            <label>
+              Age (for HR zone estimate if Max HR unset)
+              <input
+                type="number"
+                min={13}
+                max={100}
+                placeholder="e.g. 28"
+                value={hrAge}
+                onChange={(e) => setHrAge(e.target.value)}
+              />
+            </label>
+          </div>
+
+          <p className="muted" style={{ fontSize: ".78rem", margin: 0 }}>
+            Only non-workout steps above your daily threshold contribute (capped at {walkingMaxPoints || 5} pts). Steps recorded during logged workouts are excluded when interval data is available so exercise is never double-counted. If Max HR is blank, zones use an{" "}
+            <strong>Age-based estimate (220 − age)</strong> or a 190 bpm default.
+          </p>
+
+          <div className="button-row">
+            <Button type="submit" disabled={busy || !onSaveStrainSettings}>
+              Save strain &amp; walking settings
+            </Button>
+          </div>
+        </form>
+      </section>
+
+      {/* Hevy Strength Training Integration */}
+      <section className="card" id="hevy-settings">
+        <div className="split-row">
+          <div>
+            <h2>Hevy Strength Integration</h2>
+            <p style={{ fontSize: ".8rem" }}>
+              Syncs resistance workouts (exercises, sets, reps, weights, RPE, set types) and pairs them with Google Health wearable HR by timestamp.
+            </p>
+          </div>
+          <span className={`pill ${hevy?.connected ? "teal-soft" : ""}`}>
+            {hevy?.connected
+              ? "OAuth Connected"
+              : hevy?.oauthAvailable
+                ? "Ready to link"
+                : "CSV / JSON Import"}
+          </span>
+        </div>
+
+        <div style={{ marginTop: ".75rem", display: "grid", gap: ".65rem" }}>
+          <div className="muted" style={{ fontSize: ".82rem" }}>
+            Workouts stored: <strong style={{ color: "var(--text)" }}>{hevy?.workoutCount ?? 0}</strong>
+            {hevy?.lastSync && (
+              <>
+                {" "}· Last sync: <strong style={{ color: "var(--text)" }}>{fmtRelativeSync(hevy.lastSync)}</strong>
+              </>
+            )}
+          </div>
+
+          <div className="button-row">
+            {hevy?.oauthAvailable && !hevy.connected && (
+              <a className="button" href="/api/integrations/hevy/connect">
+                Connect Hevy OAuth
+              </a>
+            )}
+            {hevy?.connected && onSyncHevy && (
+              <button type="button" className="secondary compact" disabled={busy} onClick={() => onSyncHevy()}>
+                <RefreshCw size={14} /> Sync Hevy
+              </button>
+            )}
+            {hevy?.connected && onDisconnectHevy && (
+              <button type="button" className="secondary compact" disabled={busy} onClick={() => onDisconnectHevy()}>
+                Disconnect Hevy
+              </button>
+            )}
+          </div>
+
+          {onImportHevy && (
+            <details>
+              <summary style={{ cursor: "pointer", fontSize: ".84rem", fontWeight: 500 }}>
+                Import Hevy CSV or JSON export (works on Hevy Free)
+              </summary>
+              <div style={{ display: "grid", gap: ".55rem", marginTop: ".6rem" }}>
+                <input
+                  type="file"
+                  accept=".csv,.json,text/csv,application/json"
+                  onChange={async (e: ChangeEvent<HTMLInputElement>) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const text = await file.text();
+                    setHevyRawText(text);
+                    await onImportHevy(text);
+                    e.target.value = "";
+                  }}
+                />
+                <textarea
+                  rows={3}
+                  placeholder="Or paste Hevy CSV / JSON export here…"
+                  value={hevyRawText}
+                  onChange={(e) => setHevyRawText(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="secondary compact"
+                  disabled={busy || !hevyRawText.trim()}
+                  onClick={async () => {
+                    const ok = await onImportHevy(hevyRawText);
+                    if (ok) setHevyRawText("");
+                  }}
+                >
+                  <Upload size={14} /> Import pasted Hevy data
+                </button>
+              </div>
+            </details>
+          )}
+        </div>
       </section>
 
       <ReminderSettings />

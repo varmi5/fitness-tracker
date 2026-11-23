@@ -1,8 +1,10 @@
 import { headers } from "next/headers";
 import { googleStatus } from "../lib/google-health";
+import { hevyStatus } from "../lib/hevy";
 import { nutritionData } from "../lib/nutrition-data";
 import { localDay } from "../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../lib/runtime";
+import { strainData } from "../lib/strain-data";
 import { trackerData } from "../lib/tracker-data";
 import { Dashboard } from "./dashboard";
 import { Login } from "./login";
@@ -25,16 +27,23 @@ export default async function Home() {
   const db = getDatabase();
   const userId = session.user.id;
   const nutrition = nutritionData(db, userId);
+  const strainSvc = strainData(db, userId);
 
   const tracker = await trackerData(db, userId).snapshot();
-  const [google, audit, syncToken] = await Promise.all([
+  const [google, hevy, audit] = await Promise.all([
     googleStatus(db, userId),
+    hevyStatus(db, userId),
     nutrition.recentAudit(15),
+  ]);
+  const [syncToken, strainSettings, nutritionSettings] = await Promise.all([
     nutrition.syncToken(),
+    strainSvc.getSettings(),
+    nutrition.settings(),
   ]);
 
-  const prefToday = localDay(new Date(), (await nutrition.settings()).timezone);
+  const prefToday = localDay(new Date(), nutritionSettings.timezone);
   const home = await nutrition.homeSnapshot(prefToday, { canReadSleep: google.canReadSleep });
+  const strain = await strainSvc.computeDay(prefToday, strainSettings);
 
   return (
     <Dashboard
@@ -48,6 +57,9 @@ export default async function Home() {
         daily: home.daily,
         history30: home.history30,
         google,
+        hevy,
+        strain,
+        strainSettings,
         audit,
         mcpEnabled: Boolean(config.mcpEnabled),
         syncToken,

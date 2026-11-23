@@ -169,10 +169,16 @@ try {
       await modal.getByRole("button", { name: "Close composer" }).click();
     }
 
-    for (const tab of ["Home", "Nutrition", "Measurements", "Settings"]) {
+    for (const tab of ["Home", "Training", "Nutrition", "More"]) {
       await page.getByRole("navigation").getByRole("button", { name: tab, exact: true }).click();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
-      if (tab === "Settings") {
+      if (tab === "Training") {
+        await page.getByRole("heading", { name: "Training & Strain", exact: true }).waitFor();
+        await page.getByText(/Cardio Load|Daily Walking/).first().waitFor();
+      }
+      if (tab === "More") {
+        await page.getByRole("tab", { name: "Measurements", exact: true }).waitFor();
+        await page.getByRole("tab", { name: "Settings", exact: true }).click();
         const manualHeading = page.getByRole("heading", { name: "Manual Daily Expenditure (TDEE)", exact: true });
         const sourceSelect = page.getByLabel("Preferred expenditure source");
         await manualHeading.waitFor();
@@ -184,6 +190,15 @@ try {
         assert.deepEqual(optionTexts, ["Manual TDEE entry", "Google Health (Fitbit Air)"]);
         const settingsText = await page.locator("main").innerText();
         assert.equal(settingsText.includes("Apple Health"), false, "Settings must not reference Apple Health");
+
+        // Stage 6: Training & Strain -> Walking Contribution settings
+        await page.getByRole("heading", { name: /Walking Contribution/ }).waitFor();
+        const stepThresholdInput = page.getByRole("spinbutton", { name: "Daily step threshold" });
+        await stepThresholdInput.fill("11000");
+        await page.getByRole("button", { name: "Save strain & walking settings", exact: true }).click();
+        await page.getByText("Strain & walking settings saved.").waitFor();
+        await page.locator(".toast-dismiss").click();
+
         const syncButton = page.getByRole("button", { name: "Sync Now", exact: true });
         await syncButton.waitFor();
         const status = { available: true, connected: true, status: "connected", accountLabel: "synthetic@example.test", canWriteNutrition: true, mealSync: { pending: 0, failed: 1, verified: 2, lastVerifiedAt: "2026-11-17T12:00:00Z", lastError: "Google meal creation returned HTTP 400; check serving.food_measurement_unit." } };
@@ -206,6 +221,11 @@ try {
         if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/${name}-google-sync.png` });
       }
     }
+
+    // Stage 6: Tapping Overall Strain on Home opens Training
+    await page.getByRole("navigation").getByRole("button", { name: "Home", exact: true }).click();
+    await page.getByRole("button", { name: "Overall Strain summary", exact: true }).click();
+    await page.getByRole("heading", { name: "Training & Strain", exact: true }).waitFor();
 
     await page.getByRole("navigation").getByRole("button", { name: "Nutrition", exact: true }).click();
     const londonToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date());
@@ -274,7 +294,8 @@ try {
     await page.getByRole("button", { name: "Close composer", exact: true }).click();
 
     // Verify success toast auto-dismisses after ~3s
-    await page.getByRole("navigation").getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation").getByRole("button", { name: "More", exact: true }).click();
+    await page.getByRole("tab", { name: "Settings", exact: true }).click();
     await page.getByRole("button", { name: "Save preferences", exact: true }).click();
     const toast = page.locator(".feedback");
     await toast.waitFor({ state: "visible" });

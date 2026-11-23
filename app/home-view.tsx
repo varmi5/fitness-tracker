@@ -25,6 +25,7 @@ import {
   mealMethodSummary,
   METHOD_LABELS,
   type AppTab,
+  type DailyStrainView,
   type GoogleIntegrationStatus,
   type NutritionHistory,
   type NutritionSettings,
@@ -42,10 +43,12 @@ interface HomeViewProps {
   tracker: TrackerSnapshot;
   google: GoogleIntegrationStatus;
   settings: NutritionSettings;
+  strain?: DailyStrainView;
   theme: ThemeMode;
   busy: boolean;
   onToggleTheme: () => void;
   onSelectHomeDay: (day: string) => void;
+  onOpenTraining?: (day: string) => void;
   onLogMeal: () => void;
   onEditMeal: (meal: MealRecord) => void;
   onSyncGoogle: () => void;
@@ -86,8 +89,10 @@ export function HomeView({
   tracker,
   google,
   settings,
+  strain,
   busy,
   onSelectHomeDay,
+  onOpenTraining,
   onLogMeal,
   onEditMeal,
   onSyncGoogle,
@@ -214,6 +219,52 @@ export function HomeView({
           </div>
         </div>
       </div>
+
+      {/* Tappable Overall Strain Hero Summary Card */}
+      {strain && (
+        <button
+          type="button"
+          className="card"
+          aria-label="Overall Strain summary"
+          onClick={() => (onOpenTraining ? onOpenTraining(viewDay) : onNavigate("Training"))}
+          style={{
+            width: "100%",
+            textAlign: "left",
+            cursor: "pointer",
+            display: "grid",
+            gap: ".75rem",
+          }}
+        >
+          <div className="split-row">
+            <span className="eyebrow" style={{ display: "inline-flex", alignItems: "center", gap: ".4rem" }}>
+              <FitbitPulseIcon size={15} />
+              Overall Strain
+            </span>
+            <span className="pill">
+              {strain.confidence} · View breakdown →
+            </span>
+          </div>
+          <div className="split-row" style={{ alignItems: "baseline" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: ".35rem" }}>
+              <strong className="num" style={{ fontSize: "2rem", lineHeight: 1 }}>
+                {Math.round(strain.overallStrain)}
+              </strong>
+              <span className="muted" style={{ fontSize: ".9rem" }}>/ 100</span>
+            </div>
+            <div className="muted" style={{ fontSize: ".82rem", display: "flex", gap: ".85rem", flexWrap: "wrap" }}>
+              <span>
+                Cardio <strong className="num">{Math.round(strain.cardioStrain)}</strong>
+              </span>
+              <span>
+                Muscular <strong className="num">{Math.round(strain.muscularStrain)}</strong>
+              </span>
+              <span>
+                Walking <strong className="num">+{strain.walkingPoints.toFixed(1)}</strong>
+              </span>
+            </div>
+          </div>
+        </button>
+      )}
 
       {/* Bevel Segmented Calorie Hero Card */}
       <section className="card card-hero" aria-label="Daily calorie summary">
@@ -401,12 +452,12 @@ export function HomeView({
                   )}
                 </>
               ) : (
-                <button type="button" className="secondary compact" onClick={() => onNavigate("Settings")}>
+                <button type="button" className="secondary compact" onClick={() => onNavigate("More")}>
                   Connect Fitbit
                 </button>
               )
             ) : (
-              <button type="button" className="secondary compact" onClick={() => onNavigate("Settings")}>
+              <button type="button" className="secondary compact" onClick={() => onNavigate("More")}>
                 {daily.energy?.totalKcal != null ? "Edit TDEE" : "Add TDEE"}
               </button>
             )}
