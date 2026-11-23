@@ -8,12 +8,15 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { drizzle } from "drizzle-orm/pglite";
 import {
+  analyzeHeartRateCoverage,
   buildGoogleNutritionLogDataPoint,
   buildGoogleWeightDataPoint,
   disconnectGoogle,
+  parseGoogleHeartRate,
   parseGoogleRecovery,
   parseGoogleRollup,
   parseGoogleSleep,
+  parseGoogleStepIntervals,
   parseGoogleWorkouts,
   parseSavedHealthImport,
   pushMealToGoogle,
@@ -988,3 +991,183 @@ test("health MCP exposes only the user's synced sleep, vitals and workouts in ma
     assert.ok(data.sleep[0].syncedAt);assert.equal(JSON.stringify(data).includes("Private run"),false);
   } finally { await Promise.all([client.close(),server.close()]); }
 });
+
+test("Stage 2: parseGoogleWorkouts reads metricsSummary.averageHeartRateBeatsPerMinute and HR/step parsers handle pagination & gaps", () => {
+  const workoutRes = parseGoogleWorkouts({
+    dataPoints: [
+      {
+        name: "users/me/dataTypes/exercise/dataPoints/hevy-nov23",
+        exercise: {
+          displayName: "Upper A",
+          exerciseType: "EXERCISE_TYPE_WEIGHTLIFTING",
+          interval: {
+            startTime: "2026-11-23T13:42:00Z",
+            endTime: "2026-11-23T15:02:00Z",
+          },
+          metricsSummary: {
+            averageHeartRateBeatsPerMinute: 124.5,
+            caloriesExpended: { kcal: 340 },
+          },
+        },
+      },
+    ],
+  }, "Europe/London");
+  assert.equal(workoutRes.workouts.length, 1);
+  assert.equal(workoutRes.workouts[0].avgHrBpm, 124.5);
+  assert.equal(workoutRes.workouts[0].durationSeconds, 4800);
+
+  const hrParsed = parseGoogleHeartRate({
+    reconciledDataPoints: [
+      {
+        heartRate: { beatsPerMinute: 112, sampleTime: { physicalTime: "2026-11-23T13:43:00Z" } },
+        dataSource: { device: { type: "WATCH" } },
+      },
+      {
+        heartRate: { beatsPerMinute: 132, sampleTime: { physicalTime: "2026-11-23T13:44:00Z" } },
+        dataSource: { device: { type: "WATCH" } },
+      },
+      {
+        heartRate: { beatsPerMinute: 140, sampleTime: { physicalTime: "2026-11-23T13:52:00Z" } },
+        dataSource: { device: { type: "WATCH" } },
+      },
+    ],
+    nextPageToken: "pg-2",
+  }, "Europe/London", "google-wearables");
+  assert.equal(hrParsed.nextPageToken, "pg-2");
+  assert.equal(hrParsed.samples.length, 3);
+  assert.equal(hrParsed.samples[0].day, "2026-11-23");
+
+  const coverage = analyzeHeartRateCoverage(hrParsed.samples, "2026-11-23T13:42:00Z", "2026-11-23T15:02:00Z");
+  assert.equal(coverage.sampleCount, 3);
+  assert.equal(coverage.minBpm, 112);
+  assert.equal(coverage.maxBpm, 140);
+  assert.equal(coverage.gapCount, 1);
+  assert.equal(coverage.maxGapSeconds, 480);
+
+  const stepsParsed = parseGoogleStepIntervals({
+    dataPoints: [
+      {
+        steps: {
+          count: 420,
+          interval: { startTime: "2026-11-23T13:45:00Z", endTime: "2026-11-23T14:00:00Z" },
+        },
+      },
+    ],
+  }, "Europe/London", "all-sources");
+  assert.equal(stepsParsed.intervals.length, 1);
+  assert.equal(stepsParsed.intervals[0].steps, 420);
+});
+
+test("Stage 2: syncGoogle paginates HR samples, backfills workout avgHrBpm, records diagnostics, and cleans up on disconnect", async () => {
+  process.env.FITNESS_INTEGRATION_KEY = randomBytes(32).toString("hex");
+  const originalFetch = globalThis.fetch;
+  const userId = "HR-SYNC-1";
+  await db.insert(schema.user).values({ id: userId, name: userId, email: "hr@example.test", createdAt: new Date(), updatedAt: new Date() });
+  await nutritionData(db, userId).setPreferences({ timezone: "Europe/London", trackingMode: "fitbit", preferredEnergySource: "google" });
+  await db.insert(schema.healthIntegration).values({
+    userId,
+    provider: "google",
+    status: "connected",
+    credential: seal(
+      {
+        accessToken: "hr-tok",
+        refreshToken: "hr-ref",
+        expiresAt: Date.now() + 3600_000,
+        scopes: [
+          "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly",
+          "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
+        ],
+      },
+      userId,
+    ),
+  });
+
+  const seenUrls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    seenUrls.push(url);
+    if (url.includes("/dataTypes/heart-rate/dataPoints:reconcile")) {
+      if (url.includes("pageToken=page-2")) {
+        return new Response(
+          JSON.stringify({
+            dataPoints: [
+              { heartRate: { beatsPerMinute: 130, sampleTime: { physicalTime: "2026-11-23T14:10:00Z" } } },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          dataPoints: [
+            { heartRate: { beatsPerMinute: 120, sampleTime: { physicalTime: "2026-11-23T13:50:00Z" } } },
+          ],
+          nextPageToken: "page-2",
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.includes("/dataTypes/steps/dataPoints:reconcile")) {
+      return new Response(
+        JSON.stringify({
+          dataPoints: [
+            { steps: { count: 250, interval: { startTime: "2026-11-23T13:50:00Z", endTime: "2026-11-23T14:05:00Z" } } },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.includes("/dataTypes/exercise/dataPoints:reconcile")) {
+      return new Response(
+        JSON.stringify({
+          dataPoints: [
+            {
+              name: "users/me/dataTypes/exercise/dataPoints/hevy-no-hr",
+              exercise: {
+                displayName: "Upper A",
+                exerciseType: "EXERCISE_TYPE_WEIGHTLIFTING",
+                interval: { startTime: "2026-11-23T13:42:00Z", endTime: "2026-11-23T15:02:00Z" },
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.includes("/dataTypes/body-fat/")) {
+      return new Response("Forbidden", { status: 403 });
+    }
+    if (url.includes("dailyRollUp")) {
+      return new Response(JSON.stringify({ rollupDataPoints: [] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ dataPoints: [] }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const res = await syncGoogle(db, userId, "2026-11-23", "2026-11-23");
+    assert.equal(res.syncedHeartRateSamples, 2);
+    assert.equal(res.syncedStepIntervals, 1);
+    assert.equal(res.diagnostics["heart-rate"].status, "ok");
+    assert.equal(res.diagnostics["heart-rate"].count, 2);
+    assert.equal(res.diagnostics["recovery:body-fat"].status, "error");
+    assert.ok(seenUrls.some((u) => u.includes("body_fat.sample_time")));
+
+    const workouts = await db.select().from(schema.dailyWorkout).where(eq(schema.dailyWorkout.userId, userId));
+    assert.equal(workouts.length, 1);
+    assert.equal(workouts[0].avgHrBpm, 125); // Backfilled from 120 and 130 BPM samples
+
+    const hrRows = await db.select().from(schema.heartRateSample).where(eq(schema.heartRateSample.userId, userId));
+    assert.equal(hrRows.length, 2);
+
+    const stepRows = await db.select().from(schema.stepInterval).where(eq(schema.stepInterval.userId, userId));
+    assert.equal(stepRows.length, 1);
+
+    await disconnectGoogle(db, userId);
+    assert.equal((await db.select().from(schema.heartRateSample).where(eq(schema.heartRateSample.userId, userId))).length, 0);
+    assert.equal((await db.select().from(schema.stepInterval).where(eq(schema.stepInterval.userId, userId))).length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.FITNESS_INTEGRATION_KEY;
+  }
+});
+

@@ -22,9 +22,11 @@ import {
   dailyWorkout,
   googleMealSync,
   healthIntegration,
+  heartRateSample,
   meal,
   nutritionPreference,
   profile,
+  stepInterval,
 } from "./schema";
 
 const googleAPI = "https://health.googleapis.com/v4/users/me";
@@ -507,7 +509,10 @@ async function fetchRecoveryMetric(
 ) {
   let pageToken: string | undefined;
   const rows = new Map<string, number>();
-  const filter = `date >= "${from}" AND date < "${endExclusive}"`;
+  const filter =
+    type === "body-fat"
+      ? `body_fat.sample_time >= "${from}T00:00:00Z" AND body_fat.sample_time < "${endExclusive}T00:00:00Z"`
+      : `date >= "${from}" AND date < "${endExclusive}"`;
 
   for (let page = 0; page < 10; page++) {
     const url = new URL(`${googleAPI}/dataTypes/${type}/dataPoints:reconcile`);
@@ -700,6 +705,8 @@ export function parseGoogleWorkouts(payload: unknown, timezone = DEFAULT_TIMEZON
         : null;
 
     const rawHr =
+      metrics.averageHeartRateBeatsPerMinute ??
+      ex.averageHeartRateBeatsPerMinute ??
       (metrics.averageHeartRate as { beatsPerMinute?: number } | undefined)?.beatsPerMinute ??
       (metrics.heartRate as { beatsPerMinuteAvg?: number; beatsPerMinute?: number } | undefined)?.beatsPerMinuteAvg ??
       (metrics.heartRate as { beatsPerMinute?: number } | undefined)?.beatsPerMinute ??
@@ -792,6 +799,302 @@ export async function fetchExerciseSessions(
     if (!pageToken) return [...bySession.values()];
   }
   return [...bySession.values()];
+}
+
+export interface ParsedHeartRateSample {
+  recordedAt: string;
+  bpm: number;
+  day: string;
+  dataSource: string;
+}
+
+export interface ParsedStepInterval {
+  startTime: string;
+  endTime: string;
+  steps: number;
+  day: string;
+  dataSource: string;
+}
+
+export interface SyncDataTypeDiagnostic {
+  status: "ok" | "empty" | "error" | "skipped";
+  count: number;
+  sourceFamily?: string;
+  error?: string;
+}
+
+export interface HeartRateCoverageReport {
+  sampleCount: number;
+  sourceCategories: string[];
+  minBpm: number | null;
+  avgBpm: number | null;
+  maxBpm: number | null;
+  medianIntervalSeconds: number | null;
+  gapCount: number;
+  maxGapSeconds: number | null;
+  coveragePct: number | null;
+}
+
+export function analyzeHeartRateCoverage(
+  samples: { recordedAt: string; bpm: number; dataSource?: string }[],
+  startIso: string,
+  endIso: string,
+  gapThresholdSeconds = 180,
+): HeartRateCoverageReport {
+  const startMs = new Date(startIso).getTime();
+  const endMs = new Date(endIso).getTime();
+  const windowSamples = samples
+    .map((s) => ({ ms: new Date(s.recordedAt).getTime(), bpm: s.bpm, dataSource: s.dataSource ?? "" }))
+    .filter((s) => Number.isFinite(s.ms) && s.ms >= startMs && s.ms <= endMs && Number.isFinite(s.bpm))
+    .sort((a, b) => a.ms - b.ms);
+
+  if (windowSamples.length === 0) {
+    return {
+      sampleCount: 0,
+      sourceCategories: [],
+      minBpm: null,
+      avgBpm: null,
+      maxBpm: null,
+      medianIntervalSeconds: null,
+      gapCount: 0,
+      maxGapSeconds: null,
+      coveragePct: 0,
+    };
+  }
+
+  const bpms = windowSamples.map((s) => s.bpm);
+  const minBpm = Math.round(Math.min(...bpms) * 10) / 10;
+  const maxBpm = Math.round(Math.max(...bpms) * 10) / 10;
+  const avgBpm = Math.round((bpms.reduce((a, b) => a + b, 0) / bpms.length) * 10) / 10;
+  const sourceCategories = [...new Set(windowSamples.map((s) => s.dataSource).filter(Boolean))];
+
+  const deltas: number[] = [];
+  let gapCount = 0;
+  let maxGapSeconds = 0;
+  let coveredMs = 0;
+  const totalMs = Math.max(1, endMs - startMs);
+
+  for (let i = 1; i < windowSamples.length; i++) {
+    const dtSec = Math.round((windowSamples[i].ms - windowSamples[i - 1].ms) / 1000);
+    if (dtSec > 0) {
+      deltas.push(dtSec);
+      if (dtSec > gapThresholdSeconds) {
+        gapCount += 1;
+        if (dtSec > maxGapSeconds) maxGapSeconds = dtSec;
+      } else {
+        coveredMs += windowSamples[i].ms - windowSamples[i - 1].ms;
+      }
+    }
+  }
+
+  const sortedDeltas = [...deltas].sort((a, b) => a - b);
+  const medianIntervalSeconds = sortedDeltas.length
+    ? sortedDeltas[Math.floor(sortedDeltas.length / 2)]
+    : null;
+  const coveragePct = windowSamples.length >= 2
+    ? Math.min(100, Math.round((coveredMs / totalMs) * 100))
+    : null;
+
+  return {
+    sampleCount: windowSamples.length,
+    sourceCategories,
+    minBpm,
+    avgBpm,
+    maxBpm,
+    medianIntervalSeconds,
+    gapCount,
+    maxGapSeconds: gapCount > 0 ? maxGapSeconds : null,
+    coveragePct,
+  };
+}
+
+export function parseGoogleHeartRate(
+  payload: unknown,
+  timezone = DEFAULT_TIMEZONE,
+  dataSourceLabel = "google-wearables",
+): { samples: ParsedHeartRateSample[]; nextPageToken?: string } {
+  const envelope = z
+    .object({
+      dataPoints: z.array(z.unknown()).default([]),
+      reconciledDataPoints: z.array(z.unknown()).default([]),
+      nextPageToken: z.string().optional(),
+    })
+    .parse(payload);
+
+  const byTimestamp = new Map<string, ParsedHeartRateSample>();
+  const points = [...envelope.reconciledDataPoints, ...envelope.dataPoints];
+
+  for (const raw of points) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const hrObj = (item.heartRate && typeof item.heartRate === "object" ? item.heartRate : item) as Record<string, unknown>;
+
+    const rawTime =
+      (hrObj.sampleTime as { physicalTime?: string } | undefined)?.physicalTime ??
+      (item.sampleTime as { physicalTime?: string } | undefined)?.physicalTime ??
+      (typeof hrObj.sampleTime === "string" ? hrObj.sampleTime : undefined) ??
+      (typeof item.sampleTime === "string" ? item.sampleTime : undefined) ??
+      (hrObj.interval as { startTime?: string } | undefined)?.startTime ??
+      (item.interval as { startTime?: string } | undefined)?.startTime ??
+      (typeof item.startTime === "string" ? item.startTime : undefined);
+
+    if (!rawTime || Number.isNaN(new Date(rawTime).getTime())) continue;
+    const recordedAt = new Date(rawTime).toISOString();
+
+    const rawBpm = hrObj.beatsPerMinute ?? hrObj.bpm ?? item.beatsPerMinute ?? item.bpm ?? item.value;
+    const bpm = typeof rawBpm === "string" ? Number(rawBpm) : typeof rawBpm === "number" ? rawBpm : NaN;
+    if (!Number.isFinite(bpm) || bpm < 20 || bpm > 260) continue;
+
+    const dsMeta = (item.dataSource as { recordingMethod?: string; device?: { type?: string } } | undefined);
+    const provenance = dsMeta?.device?.type || dsMeta?.recordingMethod || dataSourceLabel;
+
+    byTimestamp.set(recordedAt, {
+      recordedAt,
+      bpm: Math.round(bpm * 10) / 10,
+      day: localDay(recordedAt, timezone),
+      dataSource: String(provenance).slice(0, 80),
+    });
+  }
+
+  return { samples: [...byTimestamp.values()], nextPageToken: envelope.nextPageToken };
+}
+
+export async function fetchHeartRateSamples(
+  grant: Tokens,
+  from: string,
+  endExclusive: string,
+  timezone = DEFAULT_TIMEZONE,
+): Promise<{ samples: ParsedHeartRateSample[]; sourceFamily: string; pages: number }> {
+  const filter = `heart_rate.sample_time >= "${from}T00:00:00Z" AND heart_rate.sample_time < "${endExclusive}T00:00:00Z"`;
+
+  const fetchFamily = async (family: "google-wearables" | "all-sources") => {
+    let pageToken: string | undefined;
+    let pages = 0;
+    const merged = new Map<string, ParsedHeartRateSample>();
+
+    for (let page = 0; page < 20; page++) {
+      pages += 1;
+      const url = new URL(`${googleAPI}/dataTypes/heart-rate/dataPoints:reconcile`);
+      url.searchParams.set("filter", filter);
+      url.searchParams.set("pageSize", "10000");
+      url.searchParams.set("dataSourceFamily", `users/me/dataSourceFamilies/${family}`);
+      if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${grant.accessToken}` },
+        signal: AbortSignal.timeout(9000),
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new NutritionError(`Google Health heart-rate request failed (${response.status}).`, 502);
+      }
+      const parsed = parseGoogleHeartRate(await response.json(), timezone, family);
+      for (const s of parsed.samples) {
+        if (s.day < from || s.day >= endExclusive) continue;
+        merged.set(s.recordedAt, s);
+      }
+      pageToken = parsed.nextPageToken;
+      if (!pageToken) break;
+    }
+    return { samples: [...merged.values()], pages };
+  };
+
+  const wearableResult = await fetchFamily("google-wearables");
+  if (wearableResult.samples.length > 0) {
+    return { ...wearableResult, sourceFamily: "google-wearables" };
+  }
+  const allResult = await fetchFamily("all-sources");
+  return { ...allResult, sourceFamily: "all-sources" };
+}
+
+export function parseGoogleStepIntervals(
+  payload: unknown,
+  timezone = DEFAULT_TIMEZONE,
+  dataSourceLabel = "all-sources",
+): { intervals: ParsedStepInterval[]; nextPageToken?: string } {
+  const envelope = z
+    .object({
+      dataPoints: z.array(z.unknown()).default([]),
+      reconciledDataPoints: z.array(z.unknown()).default([]),
+      nextPageToken: z.string().optional(),
+    })
+    .parse(payload);
+
+  const byWindow = new Map<string, ParsedStepInterval>();
+  const points = [...envelope.reconciledDataPoints, ...envelope.dataPoints];
+
+  for (const raw of points) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const stepObj = (item.steps && typeof item.steps === "object" ? item.steps : item) as Record<string, unknown>;
+    const interval = (
+      stepObj.interval && typeof stepObj.interval === "object"
+        ? stepObj.interval
+        : item.interval && typeof item.interval === "object"
+          ? item.interval
+          : {}
+    ) as Record<string, unknown>;
+
+    const startRaw = typeof interval.startTime === "string" ? interval.startTime : null;
+    const endRaw = typeof interval.endTime === "string" ? interval.endTime : null;
+    if (!startRaw || !endRaw || Number.isNaN(new Date(startRaw).getTime()) || Number.isNaN(new Date(endRaw).getTime())) {
+      continue;
+    }
+    const startTime = new Date(startRaw).toISOString();
+    const endTime = new Date(endRaw).toISOString();
+    if (endTime <= startTime) continue;
+
+    const rawCount = stepObj.count ?? stepObj.steps ?? item.count ?? item.value;
+    const count = typeof rawCount === "string" ? Number(rawCount) : typeof rawCount === "number" ? rawCount : NaN;
+    if (!Number.isFinite(count) || count < 0 || count > 250000) continue;
+
+    const rounded = Math.round(count);
+    byWindow.set(`${startTime}|${endTime}`, {
+      startTime,
+      endTime,
+      steps: rounded,
+      day: localDay(startTime, timezone),
+      dataSource: dataSourceLabel,
+    });
+  }
+
+  return { intervals: [...byWindow.values()], nextPageToken: envelope.nextPageToken };
+}
+
+export async function fetchStepIntervals(
+  grant: Tokens,
+  from: string,
+  endExclusive: string,
+  timezone = DEFAULT_TIMEZONE,
+): Promise<ParsedStepInterval[]> {
+  let pageToken: string | undefined;
+  const merged = new Map<string, ParsedStepInterval>();
+  const filter = `steps.interval.start_time >= "${from}T00:00:00Z" AND steps.interval.start_time < "${endExclusive}T00:00:00Z"`;
+
+  for (let page = 0; page < 20; page++) {
+    const url = new URL(`${googleAPI}/dataTypes/steps/dataPoints:reconcile`);
+    url.searchParams.set("filter", filter);
+    url.searchParams.set("pageSize", "10000");
+    url.searchParams.set("dataSourceFamily", "users/me/dataSourceFamilies/all-sources");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${grant.accessToken}` },
+      signal: AbortSignal.timeout(9000),
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new NutritionError(`Google Health step-intervals request failed (${response.status}).`, 502);
+    }
+    const parsed = parseGoogleStepIntervals(await response.json(), timezone, "all-sources");
+    for (const iv of parsed.intervals) {
+      if (iv.day < from || iv.day >= endExclusive) continue;
+      merged.set(`${iv.startTime}|${iv.endTime}`, iv);
+    }
+    pageToken = parsed.nextPageToken;
+    if (!pageToken) return [...merged.values()];
+  }
+  return [...merged.values()];
 }
 
 async function fetchLatestHeightCm(grant: Tokens): Promise<number | null> {
@@ -1043,6 +1346,13 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
       (name) => name !== "weight" || canMeasurements,
     );
 
+    const diagnostics: Record<string, SyncDataTypeDiagnostic> = {};
+    const recordDiag = (key: string, entry: SyncDataTypeDiagnostic) => {
+      diagnostics[key] = entry;
+    };
+    const safeMsg = (err: unknown) =>
+      (err instanceof Error ? err.message : "Request failed").slice(0, 160);
+
     // Chunk into 14-day windows to respect Google Health API total-calories max window.
     for (let start = from; start <= through; start = addDays(start, 14)) {
       const limit = addDays(start, 14);
@@ -1050,7 +1360,21 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
       const [coreResults, optionalResults] = await Promise.all([
         Promise.all(allowedCore.map((type) => fetchRollup(type, grant, start, end))),
         canActivity
-          ? Promise.all(optionalRollupTypes.map((type) => fetchRollup(type, grant, start, end).catch(() => null)))
+          ? Promise.all(
+              optionalRollupTypes.map(async (type) => {
+                try {
+                  const res = await fetchRollup(type, grant, start, end);
+                  recordDiag(`rollup:${type}`, {
+                    status: res.rows.size > 0 ? "ok" : "empty",
+                    count: (diagnostics[`rollup:${type}`]?.count ?? 0) + res.rows.size,
+                  });
+                  return res;
+                } catch (err) {
+                  recordDiag(`rollup:${type}`, { status: "error", count: 0, error: safeMsg(err) });
+                  return null;
+                }
+              }),
+            )
           : Promise.resolve([]),
       ]);
       for (const { field, rows } of coreResults) {
@@ -1063,21 +1387,75 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
     }
 
     const canSleep = grant.scopes.includes(sleepScope);
+    const canReadHr = canMeasurements || canActivity;
     const endExclusive = addDays(through, 1);
     const recoveryMetricNames = Object.keys(recoveryTypes) as RecoveryType[];
 
-    const [remoteHeightCm, sleepSessions, recoveryResults, workoutSessions] = await Promise.all([
-      fetchLatestHeightCm(grant),
-      canSleep ? fetchSleepSessions(grant, from, endExclusive, tz) : Promise.resolve(new Map<string, ParsedSleepSession>()),
-      canMeasurements
-        ? Promise.all(
-            recoveryMetricNames.map((type) =>
-              fetchRecoveryMetric(type, grant, from, endExclusive, tz).catch(() => null),
-            ),
-          )
-        : Promise.resolve([]),
-      canActivity ? fetchExerciseSessions(grant, from, endExclusive, tz).catch(() => null) : Promise.resolve(null),
-    ]);
+    const [remoteHeightCm, sleepSessions, recoveryResults, workoutSessions, hrResult, stepIntervalResult] =
+      await Promise.all([
+        fetchLatestHeightCm(grant),
+        canSleep
+          ? fetchSleepSessions(grant, from, endExclusive, tz)
+          : Promise.resolve(new Map<string, ParsedSleepSession>()),
+        canMeasurements
+          ? Promise.all(
+              recoveryMetricNames.map(async (type) => {
+                try {
+                  const res = await fetchRecoveryMetric(type, grant, from, endExclusive, tz);
+                  recordDiag(`recovery:${type}`, {
+                    status: res.rows.size > 0 ? "ok" : "empty",
+                    count: res.rows.size,
+                  });
+                  return res;
+                } catch (err) {
+                  recordDiag(`recovery:${type}`, { status: "error", count: 0, error: safeMsg(err) });
+                  return null;
+                }
+              }),
+            )
+          : Promise.resolve([]),
+        canActivity
+          ? fetchExerciseSessions(grant, from, endExclusive, tz)
+              .then((rows) => {
+                recordDiag("exercise", { status: rows.length > 0 ? "ok" : "empty", count: rows.length });
+                return rows;
+              })
+              .catch((err) => {
+                recordDiag("exercise", { status: "error", count: 0, error: safeMsg(err) });
+                return null;
+              })
+          : Promise.resolve(null),
+        canReadHr
+          ? fetchHeartRateSamples(grant, from, endExclusive, tz)
+              .then((res) => {
+                recordDiag("heart-rate", {
+                  status: res.samples.length > 0 ? "ok" : "empty",
+                  count: res.samples.length,
+                  sourceFamily: res.sourceFamily,
+                });
+                return res;
+              })
+              .catch((err) => {
+                recordDiag("heart-rate", { status: "error", count: 0, error: safeMsg(err) });
+                return null;
+              })
+          : Promise.resolve(null),
+        canActivity
+          ? fetchStepIntervals(grant, from, endExclusive, tz)
+              .then((rows) => {
+                recordDiag("step-intervals", {
+                  status: rows.length > 0 ? "ok" : "empty",
+                  count: rows.length,
+                  sourceFamily: "all-sources",
+                });
+                return rows;
+              })
+              .catch((err) => {
+                recordDiag("step-intervals", { status: "error", count: 0, error: safeMsg(err) });
+                return null;
+              })
+          : Promise.resolve(null),
+      ]);
 
     const recoveryReadings = new Map<string, Partial<Record<RecoveryField, number>>>();
     for (const res of recoveryResults) {
@@ -1086,6 +1464,14 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
         recoveryReadings.set(day, { ...recoveryReadings.get(day), [res.field]: value });
       }
     }
+
+    const hrSamples = hrResult?.samples ?? [];
+    const enrichedWorkouts =
+      workoutSessions?.map((w) => {
+        if (w.avgHrBpm != null || !w.startTime || !w.endTime || hrSamples.length === 0) return w;
+        const cov = analyzeHeartRateCoverage(hrSamples, w.startTime, w.endTime);
+        return cov.avgBpm != null ? { ...w, avgHrBpm: cov.avgBpm } : w;
+      }) ?? null;
 
     await db.transaction(async (tx) => {
       const [current] = await tx.select().from(healthIntegration).where(own(userId)).for("update");
@@ -1165,11 +1551,11 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
         }
       }
 
-      if (workoutSessions !== null) {
+      if (enrichedWorkouts !== null) {
         await tx
           .delete(dailyWorkout)
           .where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google"), gte(dailyWorkout.day, from), lte(dailyWorkout.day, through)));
-        for (const w of workoutSessions) {
+        for (const w of enrichedWorkouts) {
           const valid = workoutInput.parse({ ...w, source: "google" });
           await tx
             .insert(dailyWorkout)
@@ -1208,6 +1594,53 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
         }
       }
 
+      if (hrResult !== null) {
+        await tx
+          .delete(heartRateSample)
+          .where(and(eq(heartRateSample.userId, userId), eq(heartRateSample.source, "google"), gte(heartRateSample.day, from), lte(heartRateSample.day, through)));
+        for (let i = 0; i < hrSamples.length; i += 500) {
+          const batch = hrSamples.slice(i, i + 500);
+          await tx
+            .insert(heartRateSample)
+            .values(
+              batch.map((s) => ({
+                userId,
+                source: "google",
+                recordedAt: new Date(s.recordedAt),
+                bpm: s.bpm,
+                day: s.day,
+                dataSource: s.dataSource,
+                syncedAt: new Date(),
+              })),
+            )
+            .onConflictDoNothing();
+        }
+      }
+
+      if (stepIntervalResult !== null) {
+        await tx
+          .delete(stepInterval)
+          .where(and(eq(stepInterval.userId, userId), eq(stepInterval.source, "google"), gte(stepInterval.day, from), lte(stepInterval.day, through)));
+        for (let i = 0; i < stepIntervalResult.length; i += 500) {
+          const batch = stepIntervalResult.slice(i, i + 500);
+          await tx
+            .insert(stepInterval)
+            .values(
+              batch.map((iv) => ({
+                userId,
+                source: "google",
+                startTime: new Date(iv.startTime),
+                endTime: new Date(iv.endTime),
+                steps: iv.steps,
+                day: iv.day,
+                dataSource: iv.dataSource,
+                syncedAt: new Date(),
+              })),
+            )
+            .onConflictDoNothing();
+        }
+      }
+
       if (remoteHeightCm != null) {
         const [prof] = await tx.select({ heightCm: profile.heightCm }).from(profile).where(eq(profile.userId, userId));
         if (!prof) {
@@ -1219,7 +1652,18 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
 
       await tx
         .update(healthIntegration)
-        .set({ credential: seal(grant, userId), lastSync: new Date(), status: "connected", lastError: null })
+        .set({
+          credential: seal(grant, userId),
+          lastSync: new Date(),
+          status: "connected",
+          lastError: null,
+          diagnosticsJson: {
+            syncedAt: new Date().toISOString(),
+            from,
+            to: through,
+            dataTypes: diagnostics,
+          },
+        })
         .where(own(userId));
     });
 
@@ -1227,8 +1671,11 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
       syncedDays: readings.size,
       syncedSleepDays: sleepSessions.size,
       syncedRecoveryDays: recoveryReadings.size,
-      syncedWorkouts: (workoutSessions ?? []).length,
+      syncedWorkouts: (enrichedWorkouts ?? []).length,
+      syncedHeartRateSamples: hrSamples.length,
+      syncedStepIntervals: (stepIntervalResult ?? []).length,
       syncedHeight: remoteHeightCm != null,
+      diagnostics,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sync failed.";
@@ -2033,6 +2480,8 @@ export async function disconnectGoogle(db: AuthDatabase, userId: string) {
     await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google")));
     await tx.delete(dailyRecovery).where(and(eq(dailyRecovery.userId, userId), eq(dailyRecovery.source, "google")));
     await tx.delete(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google")));
+    await tx.delete(heartRateSample).where(and(eq(heartRateSample.userId, userId), eq(heartRateSample.source, "google")));
+    await tx.delete(stepInterval).where(and(eq(stepInterval.userId, userId), eq(stepInterval.source, "google")));
     await tx
       .insert(nutritionPreference)
       .values({
