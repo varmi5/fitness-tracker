@@ -9,9 +9,11 @@ import type {
   WorkoutRecord,
 } from "../lib/nutrition-data";
 import type { EstimationMethod } from "../lib/nutrition-model";
+import type { DailyStrainView } from "../lib/strain-data";
+import type { StrainSettings } from "../lib/strain-engine";
 import type { trackerData } from "../lib/tracker-data";
 
-export type { EnergyRecord, RecoveryRecord, SleepRecord, TrackingMode, WorkoutRecord };
+export type { DailyStrainView, EnergyRecord, RecoveryRecord, SleepRecord, StrainSettings, TrackingMode, WorkoutRecord };
 export type TrackerSnapshot = Awaited<ReturnType<ReturnType<typeof trackerData>["snapshot"]>>;
 export type NutritionSettings = Awaited<ReturnType<ReturnType<typeof nutritionData>["settings"]>> & {
   trackingMode: TrackingMode;
@@ -37,6 +39,16 @@ export interface GoogleIntegrationStatus {
   mealSync?: { pending: number; failed: number; verified?: number; lastVerifiedAt?: string | null; lastError: string | null };
 }
 
+export interface HevyIntegrationStatus {
+  oauthAvailable: boolean;
+  connected: boolean;
+  accountLabel: string | null;
+  status: string | null;
+  lastSync: string | null;
+  lastError: string | null;
+  workoutCount: number;
+}
+
 export interface InitialAppData {
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
@@ -48,12 +60,16 @@ export interface InitialAppData {
   daily: DailyNutritionView;
   history30: NutritionHistory;
   google: GoogleIntegrationStatus;
+  hevy: HevyIntegrationStatus;
+  strain: DailyStrainView;
+  strainSettings: StrainSettings;
   audit: AuditEntry[];
   mcpEnabled: boolean;
   syncToken: string;
 }
 
-export type AppTab = "Home" | "Nutrition" | "Measurements" | "Settings";
+export type AppTab = "Home" | "Training" | "Nutrition" | "More";
+export type MoreSection = "Measurements" | "Settings";
 export type ThemeMode = "light" | "dark";
 
 export const METHOD_LABELS: Record<EstimationMethod, string> = {

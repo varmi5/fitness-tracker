@@ -4,18 +4,29 @@ import dynamic from "next/dynamic";
 import { Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
+  FitbitPulseIcon,
   HomeRingIcon,
-  MeasurementsCaliperIcon,
   NutritionBowlIcon,
   SettingsSlidersIcon,
 } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
 import { addDays, localDay } from "../lib/nutrition-model";
 import { HomeView } from "./home-view";
-import type { AppTab, InitialAppData, ThemeMode } from "./types";
+import type {
+  AppTab,
+  DailyStrainView,
+  HevyIntegrationStatus,
+  InitialAppData,
+  MoreSection,
+  StrainSettings,
+  ThemeMode,
+} from "./types";
 
 const MeasurementsView = dynamic(() => import("./measurements-view").then((m) => m.MeasurementsView), {
   loading: () => <p role="status">Loading measurements…</p>,
+});
+const TrainingView = dynamic(() => import("./training-view").then((m) => m.TrainingView), {
+  loading: () => <p role="status">Loading training…</p>,
 });
 const NutritionView = dynamic(() => import("./nutrition-view").then((m) => m.NutritionView), {
   loading: () => <p role="status">Loading diary…</p>,
@@ -30,9 +41,9 @@ const MealComposer = dynamic(() => import("./meal-composer").then((m) => m.MealC
 
 const tabs: { title: AppTab; icon: typeof HomeRingIcon }[] = [
   { title: "Home", icon: HomeRingIcon },
+  { title: "Training", icon: FitbitPulseIcon },
   { title: "Nutrition", icon: NutritionBowlIcon },
-  { title: "Measurements", icon: MeasurementsCaliperIcon },
-  { title: "Settings", icon: SettingsSlidersIcon },
+  { title: "More", icon: SettingsSlidersIcon },
 ];
 
 const THEME_STORAGE_KEY = "fitnesstrackr_theme";
@@ -68,6 +79,15 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const lastToday = useRef(initialCalendarToday);
   const [selectedDay, setSelectedDay] = useState(initialActiveDay);
   const [selectedDaily, setSelectedDaily] = useState<DailyNutritionView>(initial.daily);
+  const [moreSection, setMoreSection] = useState<MoreSection>("Measurements");
+  const [homeStrain, setHomeStrain] = useState<DailyStrainView | undefined>(initial.strain);
+  const [trainingDay, setTrainingDay] = useState(initialActiveDay);
+  const trainingDayRef = useRef(initialActiveDay);
+  const [trainingStrain, setTrainingStrain] = useState<DailyStrainView | undefined>(initial.strain);
+  const [trainingLoading, setTrainingLoading] = useState(false);
+  const [strainSettings, setStrainSettings] = useState<StrainSettings | undefined>(initial.strainSettings);
+  const [hevy, setHevy] = useState<HevyIntegrationStatus | undefined>(initial.hevy);
+
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
   useEffect(() => {
@@ -333,7 +353,10 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     const controller = new AbortController();
     homeRequest.current = controller;
     try {
-      const res = await fetch(`/api/nutrition?day=${clamped}`, { signal: controller.signal, cache: "no-store" });
+      const [res, strainRes] = await Promise.all([
+        fetch(`/api/nutrition?day=${clamped}`, { signal: controller.signal, cache: "no-store" }),
+        fetch(`/api/strain?day=${clamped}`, { signal: controller.signal, cache: "no-store" }).catch(() => null),
+      ]);
       if (res.status === 401) {
         window.location.reload();
         return;
@@ -341,9 +364,163 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       if (!res.ok) throw new Error("Could not load that date.");
       const value = await res.json();
       if (homeDayRef.current === clamped) setHomeDaily(value);
+      if (strainRes?.ok) {
+        const strainJson = await strainRes.json();
+        if (homeDayRef.current === clamped && strainJson?.strain) setHomeStrain(strainJson.strain);
+      }
     } catch (error) {
       if (!controller.signal.aborted) showToast(error instanceof Error ? error.message : "Could not load that date.", "error");
     }
+  }
+
+  async function selectTrainingDay(day: string) {
+    const clamped = day > todayRef.current ? todayRef.current : day;
+    trainingDayRef.current = clamped;
+    setTrainingDay(clamped);
+    setTrainingLoading(true);
+    try {
+      const res = await fetch(`/api/strain?day=${clamped}`, { cache: "no-store" });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
+      if (!res.ok) throw new Error("Could not load strain for that date.");
+      const json = await res.json();
+      if (trainingDayRef.current === clamped && json?.strain) {
+        setTrainingStrain(json.strain);
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not load strain.", "error");
+    } finally {
+      setTrainingLoading(false);
+    }
+  }
+
+  async function recomputeStrainDay(day: string) {
+    setTrainingLoading(true);
+    try {
+      const res = await fetch("/api/strain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "recompute", day }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message ?? "Could not recompute strain.");
+      if (json?.strain) {
+        if (trainingDayRef.current === day) setTrainingStrain(json.strain);
+        if (homeDayRef.current === day) setHomeStrain(json.strain);
+      }
+      showToast("Strain recalculated.", "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not recompute strain.", "error");
+    } finally {
+      setTrainingLoading(false);
+    }
+  }
+
+  async function saveStrainSettings(data: Partial<StrainSettings>): Promise<boolean> {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/strain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "preferences",
+          data,
+          recomputeFrom: todayRef.current,
+          recomputeTo: todayRef.current,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message ?? "Could not save strain settings.");
+      if (json?.settings) setStrainSettings(json.settings);
+      if (json?.strain) {
+        if (homeDayRef.current === todayRef.current) setHomeStrain(json.strain);
+        if (trainingDayRef.current === todayRef.current) setTrainingStrain(json.strain);
+      } else {
+        await Promise.all([
+          selectTrainingDay(trainingDayRef.current),
+          homeDayRef.current !== trainingDayRef.current ? selectHomeDay(homeDayRef.current) : Promise.resolve(),
+        ]);
+      }
+      showToast("Strain & walking settings saved.", "success");
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not save strain settings.", "error");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importHevy(rawText: string): Promise<boolean> {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/integrations/hevy/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rawText }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message ?? "Could not import Hevy data.");
+      if (json?.status) setHevy(json.status);
+      await Promise.all([
+        selectTrainingDay(trainingDayRef.current),
+        selectHomeDay(homeDayRef.current),
+      ]);
+      showToast(`Imported ${json.imported ?? 0} Hevy workout(s).`, "success");
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Hevy import failed.", "error");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncHevy() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/integrations/hevy/sync", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message ?? "Hevy sync failed.");
+      if (json?.status) setHevy(json.status);
+      await Promise.all([
+        selectTrainingDay(trainingDayRef.current),
+        selectHomeDay(homeDayRef.current),
+      ]);
+      showToast(`Synced ${json.synced ?? 0} Hevy workout(s).`, "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Hevy sync failed.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disconnectHevy() {
+    if (!window.confirm("Disconnect Hevy integration?")) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/integrations/hevy/disconnect", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message ?? "Could not disconnect Hevy.");
+      if (json?.status) setHevy(json.status);
+      showToast("Hevy disconnected.", "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not disconnect Hevy.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openMore(section: MoreSection = "Measurements") {
+    setMoreSection(section);
+    navigate("More");
+  }
+
+  function openTrainingForDay(day: string) {
+    navigate("Training");
+    void selectTrainingDay(day);
   }
 
   async function selectDay(day: string) {
@@ -468,7 +645,23 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       if (!res.ok) throw new Error(payload.message ?? "Google sync failed.");
       if (payload.status) setGoogle(payload.status);
       await refreshAccountAndMeta();
-      await Promise.all([refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current), refreshTracker()]);
+      await Promise.all([
+        refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
+        refreshTracker(),
+        fetch("/api/strain", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "recompute", day: today }),
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((j) => {
+            if (j?.strain) {
+              if (homeDayRef.current === today) setHomeStrain(j.strain);
+              if (trainingDayRef.current === today) setTrainingStrain(j.strain);
+            }
+          })
+          .catch(() => undefined),
+      ]);
       void refreshSyncToken().catch(() => null);
       const sleepNote = payload.syncedSleepDays ? ` & ${payload.syncedSleepDays} sleep session(s)` : "";
       showToast(`Synced ${payload.syncedDays} day(s)${sleepNote} from Google Health.`, "success");
@@ -551,15 +744,35 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             tracker={tracker}
             google={google}
             settings={settings}
+            strain={homeStrain}
             theme={theme}
             busy={busy}
             onToggleTheme={toggleTheme}
             onSelectHomeDay={(d) => void selectHomeDay(d)}
+            onOpenTraining={openTrainingForDay}
             onLogMeal={() => openNewMeal(homeDay)}
             onEditMeal={openEditMeal}
             onSyncGoogle={() => void syncGoogle(14)}
             onPushGoogle={() => void pushGoogle(14)}
             onNavigate={navigate}
+          />
+        )}
+
+        {tab === "Training" && trainingStrain && strainSettings && hevy && (
+          <TrainingView
+            today={today}
+            selectedDay={trainingDay}
+            strain={trainingStrain}
+            strainSettings={strainSettings}
+            hevy={hevy}
+            theme={theme}
+            busy={busy}
+            loading={trainingLoading}
+            onSelectDay={(d) => void selectTrainingDay(d)}
+            onRecomputeDay={(d) => void recomputeStrainDay(d)}
+            onImportHevy={importHevy}
+            onSyncHevy={syncHevy}
+            onOpenSettings={(section = "Settings") => openMore(section)}
           />
         )}
 
@@ -590,39 +803,64 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           />
         )}
 
-        {tab === "Measurements" && (
-          <MeasurementsView
-            snapshot={tracker}
-            nutritionSettings={settings}
-            history30={history30}
-            daily={homeDaily}
-            today={today}
-            theme={theme}
-            busy={busy}
-            onToggleTheme={toggleTheme}
-            onSaveTracker={saveTracker}
-          />
-        )}
+        {tab === "More" && (
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <div className="segmented" role="tablist" aria-label="More sections">
+              {(["Measurements", "Settings"] as MoreSection[]).map((section) => (
+                <button
+                  key={section}
+                  type="button"
+                  role="tab"
+                  aria-selected={moreSection === section}
+                  className={moreSection === section ? "active" : ""}
+                  onClick={() => setMoreSection(section)}
+                >
+                  {section}
+                </button>
+              ))}
+            </div>
 
-        {tab === "Settings" && (
-          <SettingsView
-            today={today}
-            tracker={tracker}
-            settings={settings}
-            google={google}
-            audit={audit}
-            mcpEnabled={initial.mcpEnabled}
-            theme={theme}
-            busy={busy}
-            onSetTheme={applyTheme}
-            onToggleTheme={toggleTheme}
-            onSaveTracker={saveTracker}
-            onNutritionAction={(action, msg) => runNutritionAction(action as { action: string }, msg)}
-            onSyncGoogle={syncGoogle}
-            onPushGoogle={pushGoogle}
-            onDisconnectGoogle={disconnectGoogle}
-            onMessage={(msg) => showToast(msg)}
-          />
+            {moreSection === "Measurements" && (
+              <MeasurementsView
+                snapshot={tracker}
+                nutritionSettings={settings}
+                history30={history30}
+                daily={homeDaily}
+                today={today}
+                theme={theme}
+                busy={busy}
+                onToggleTheme={toggleTheme}
+                onSaveTracker={saveTracker}
+              />
+            )}
+
+            {moreSection === "Settings" && (
+              <SettingsView
+                today={today}
+                tracker={tracker}
+                settings={settings}
+                google={google}
+                hevy={hevy}
+                strainSettings={strainSettings}
+                audit={audit}
+                mcpEnabled={initial.mcpEnabled}
+                theme={theme}
+                busy={busy}
+                onSetTheme={applyTheme}
+                onToggleTheme={toggleTheme}
+                onSaveTracker={saveTracker}
+                onNutritionAction={(action, msg) => runNutritionAction(action as { action: string }, msg)}
+                onSaveStrainSettings={saveStrainSettings}
+                onImportHevy={importHevy}
+                onSyncHevy={syncHevy}
+                onDisconnectHevy={disconnectHevy}
+                onSyncGoogle={syncGoogle}
+                onPushGoogle={pushGoogle}
+                onDisconnectGoogle={disconnectGoogle}
+                onMessage={(msg) => showToast(msg)}
+              />
+            )}
+          </div>
         )}
       </div>
 

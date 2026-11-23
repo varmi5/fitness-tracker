@@ -9,7 +9,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 
 const db = await PGlite.create();
-const database = new PGLiteSocketServer({ db, host: "127.0.0.1", port: 0, maxConnections: 4 });
+const database = new PGLiteSocketServer({ db, host: "127.0.0.1", port: 0, maxConnections: 16 });
 await database.start();
 const origin = "http://localhost:3088";
 const code = randomBytes(24).toString("hex");
@@ -19,6 +19,7 @@ const env = {
   ...process.env, FITNESS_BACKGROUND_WORKER: "false", HOSTNAME: "127.0.0.1", PORT: "3088", SIGNUP_MODE: "closed",
   BETTER_AUTH_URL: origin, SETUP_CODE: code,
   BETTER_AUTH_SECRET: randomBytes(32).toString("hex"),
+  PG_POOL_MAX: "4",
   DATABASE_URL: `postgresql://postgres:postgres@${database.getServerConn()}/postgres`,
 };
 
@@ -70,7 +71,7 @@ try {
   assert.equal(loggedIn.status, 200);
   const dashboard = await loggedIn.text();
   assert.match(dashboard, /Energy Balance/);
-  assert.match(dashboard, /Measurements/);
+  assert.match(dashboard, /Training/);
   assert.doesNotMatch(dashboard, /class="masthead"/);
   const result = await post("/api/tracker", {
     action: "log", data: { date: "2026-11-01", values: [{ key: "waist", value: 80 }], note: "Test" },
