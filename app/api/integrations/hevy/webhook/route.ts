@@ -1,49 +1,65 @@
-import { timingSafeEqual } from "node:crypto";
-import { eq } from "drizzle-orm";
-import { syncHevyOAuth } from "../../../../../lib/hevy";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { findUsersForHevyWebhook, syncHevyOAuth } from "../../../../../lib/hevy";
 import { localDay } from "../../../../../lib/nutrition-model";
 import { authConfigured, getDatabase } from "../../../../../lib/runtime";
-import { healthIntegration } from "../../../../../lib/schema";
 import { strainData } from "../../../../../lib/strain-data";
 
 export const dynamic = "force-dynamic";
 
-function verifyWebhookSecret(request: Request): boolean {
-  const configured = process.env.HEVY_WEBHOOK_SECRET;
-  if (!configured) return true;
-  const authHeader =
-    request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
-    request.headers.get("x-hevy-signature") ??
-    "";
-  if (!authHeader || authHeader.length !== configured.length) return false;
-  return timingSafeEqual(Buffer.from(authHeader), Buffer.from(configured));
+function verifyHevySignature(request: Request, rawBody: string): boolean {
+  const secret = process.env.HEVY_CLIENT_SECRET ?? process.env.HEVY_WEBHOOK_SECRET;
+  if (!secret) return false;
+
+  const received = request.headers.get("hevy-signature") ?? "";
+  if (received.startsWith("sha256=")) {
+    const expected = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
+    if (received.length !== expected.length) return false;
+    return timingSafeEqual(Buffer.from(received), Buffer.from(expected));
+  }
+
+  // Fallback for custom Bearer token if HEVY_WEBHOOK_SECRET is configured separately
+  const webhookSecret = process.env.HEVY_WEBHOOK_SECRET;
+  if (webhookSecret) {
+    const bearer = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+    if (bearer && bearer.length === webhookSecret.length) {
+      return timingSafeEqual(Buffer.from(bearer), Buffer.from(webhookSecret));
+    }
+  }
+  return false;
 }
 
 export async function POST(request: Request) {
   if (!authConfigured()) {
     return Response.json({ message: "Not configured." }, { status: 503 });
   }
-  if (!verifyWebhookSecret(request)) {
-    return Response.json({ message: "Unauthorized webhook." }, { status: 401 });
+
+  const rawBody = await request.text();
+  if (!verifyHevySignature(request, rawBody)) {
+    return Response.json({ message: "Invalid Hevy-Signature." }, { status: 401 });
   }
 
   try {
-    await request.json().catch(() => ({}));
+    const payload = (rawBody ? JSON.parse(rawBody) : {}) as {
+      type?: string;
+      workoutId?: string;
+      userId?: string;
+    };
     const db = getDatabase();
-    const linkedAccounts = await db
-      .select({ userId: healthIntegration.userId })
-      .from(healthIntegration)
-      .where(eq(healthIntegration.provider, "hevy"));
+    const userIds = await findUsersForHevyWebhook(db, payload.userId);
 
     let syncedUsers = 0;
-    for (const row of linkedAccounts) {
+    for (const userId of userIds) {
       try {
-        await syncHevyOAuth(db, row.userId, 2);
+        const res = await syncHevyOAuth(db, userId, 2, payload.workoutId);
         const today = localDay(new Date(), "Europe/London");
-        await strainData(db, row.userId).computeDay(today);
+        const strain = strainData(db, userId);
+        const days = new Set<string>([today, ...(res.affectedDays ?? [])]);
+        for (const d of days) {
+          await strain.computeDay(d).catch(() => null);
+        }
         syncedUsers += 1;
       } catch {
-        // continue other accounts
+        // continue other users
       }
     }
 

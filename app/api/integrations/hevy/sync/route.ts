@@ -1,6 +1,8 @@
 import { hevyOAuthConfigured, hevyStatus, syncHevyOAuth } from "../../../../../lib/hevy";
-import { NutritionError } from "../../../../../lib/nutrition-data";
+import { NutritionError, nutritionData } from "../../../../../lib/nutrition-data";
+import { localDay } from "../../../../../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
+import { strainData } from "../../../../../lib/strain-data";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +23,14 @@ export async function POST(request: Request) {
   const db = getDatabase();
   try {
     const result = await syncHevyOAuth(db, session.user.id);
-    return json({ ...result, status: await hevyStatus(db, session.user.id) });
+    const prefs = await nutritionData(db, session.user.id).settings();
+    const today = localDay(new Date(), prefs.timezone);
+    const strain = strainData(db, session.user.id);
+    const daysToRecompute = new Set<string>([today, ...(result.affectedDays ?? [])]);
+    for (const d of daysToRecompute) {
+      await strain.computeDay(d).catch(() => null);
+    }
+    return json({ ...result, synced: result.importedWorkouts, status: await hevyStatus(db, session.user.id) });
   } catch (error) {
     if (error instanceof NutritionError) return json({ message: error.message }, error.status);
     return json({ message: "Could not sync Hevy right now." }, 500);

@@ -2,8 +2,8 @@
 
 import { ReminderSettings } from "./reminder-settings";
 import { MacroTargetEditor } from "./macro-target-editor";
-import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
-import { ArrowDownToLine, Copy, Fingerprint, RefreshCw, Upload } from "lucide-react";
+import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import { ArrowDownToLine, ChevronDown, Copy, Fingerprint, RefreshCw, Upload } from "lucide-react";
 import { MoonThemeIcon, SunThemeIcon, TwoWaySyncIcon } from "../components/icons";
 import { Button } from "../components/ui/button";
 import { authClient } from "../lib/auth-client";
@@ -297,7 +297,7 @@ export function SettingsView({
       <div className="page-header">
         <div className="page-header-title">
           <h1>Settings</h1>
-          <p style={{ fontSize: ".84rem" }}>Theme, targets, manual TDEE, Google Health &amp; MCP</p>
+          <p style={{ fontSize: ".84rem" }}>Tap any section to expand or collapse</p>
         </div>
         <div className="header-actions">
           <button
@@ -312,39 +312,33 @@ export function SettingsView({
       </div>
 
       {/* Appearance Theme Switcher */}
-      <section className="card">
-        <div className="split-row">
-          <div>
-            <h2>Appearance</h2>
-            <p style={{ fontSize: ".8rem" }}>Light clean canvas default or OLED dark mode</p>
-          </div>
-          <div className="segments" role="group" aria-label="Theme mode">
-            <button type="button" aria-pressed={theme === "light"} onClick={() => onSetTheme("light")}>
-              <SunThemeIcon size={15} /> Light
-            </button>
-            <button type="button" aria-pressed={theme === "dark"} onClick={() => onSetTheme("dark")}>
-              <MoonThemeIcon size={15} /> Dark
-            </button>
-          </div>
+      <SettingsDropdown
+        title="Appearance"
+        subtitle="Light clean canvas default or OLED dark mode"
+        badge={theme === "dark" ? "Dark" : "Light"}
+      >
+        <div className="segments" role="group" aria-label="Theme mode">
+          <button type="button" aria-pressed={theme === "light"} onClick={() => onSetTheme("light")}>
+            <SunThemeIcon size={15} /> Light
+          </button>
+          <button type="button" aria-pressed={theme === "dark"} onClick={() => onSetTheme("dark")}>
+            <MoonThemeIcon size={15} /> Dark
+          </button>
         </div>
-      </section>
+      </SettingsDropdown>
 
       {/* Nutrition Targets */}
-      <section className="card">
-        <div className="split-row" style={{ marginBottom: ".55rem" }}>
-          <div>
-            <h2>Calorie &amp; Macro Targets</h2>
-            <p style={{ fontSize: ".8rem" }}>
-              {bulkMode
-                ? "Bulk mode: green when intake meets/exceeds target, red when under target."
-                : "Cut / Deficit mode: green when intake stays at/under target, red when over target."}
-            </p>
-          </div>
-          <span className={`pill ${bulkMode ? "accent-soft" : "teal-soft"}`}>
-            {bulkMode ? "Bulk mode" : "Cut / Deficit"}
-          </span>
-        </div>
-        <div className="segments" role="group" aria-label="Calorie goal mode" style={{ marginBottom: ".75rem" }}>
+      <SettingsDropdown
+        title="Calorie & Macro Targets"
+        subtitle={
+          bulkMode
+            ? "Bulk mode: green when intake meets/exceeds target, red when under target."
+            : "Cut / Deficit mode: green when intake stays at/under target, red when over target."
+        }
+        badge={bulkMode ? "Bulk mode" : "Cut / Deficit"}
+        badgeClass={bulkMode ? "accent-soft" : "teal-soft"}
+      >
+        <div className="segments" role="group" aria-label="Calorie goal mode">
           <button
             type="button"
             aria-pressed={!bulkMode}
@@ -365,7 +359,7 @@ export function SettingsView({
         <MacroTargetEditor initial={settings.macroTargets} today={today} busy={busy} onSave={onNutritionAction} />
 
         {settings.targets.length > 0 && (
-          <div style={{ marginTop: ".75rem" }}>
+          <div>
             <h3 style={{ fontSize: ".84rem", color: "var(--muted)", marginBottom: ".3rem" }}>Historical targets</h3>
             {settings.targets.map((t) => (
               <div className="list-item" key={t.id}>
@@ -375,14 +369,14 @@ export function SettingsView({
             ))}
           </div>
         )}
-      </section>
+      </SettingsDropdown>
 
       {/* Manual Daily Expenditure (TDEE) — promoted clearly ABOVE source selector & Google Health */}
-      <section className="card">
-        <h2>Manual Daily Expenditure (TDEE)</h2>
-        <p style={{ fontSize: ".8rem", marginBottom: ".65rem" }}>
-          Not using Fitbit? Enter your estimated total daily burn (TDEE, including resting metabolism) for any day to compute accurate calorie deficit without connecting Google Health.
-        </p>
+      <SettingsDropdown
+        title="Manual Daily Expenditure (TDEE)"
+        subtitle="Enter estimated total daily burn (TDEE) for any day without Fitbit"
+        badge="Manual TDEE"
+      >
         <form onSubmit={submitManualEnergy}>
           <div className="input-grid">
             <label>Date<input type="date" value={manualDay} onChange={(e) => e.target.value && setManualDay(e.target.value)} /></label>
@@ -398,22 +392,16 @@ export function SettingsView({
           </details>
           <Button variant="secondary" disabled={busy} type="submit">Save manual expenditure</Button>
         </form>
-      </section>
+      </SettingsDropdown>
 
       {/* Expenditure Source & Timezone Preferences */}
-      <section className="card">
-        <div className="split-row">
-          <div>
-            <h2>Expenditure Source &amp; Timezone</h2>
-            <p style={{ fontSize: ".8rem" }}>
-              Choose whether FitnessTrackr runs in Manual TDEE mode or Fitbit Air (Google Health) mode across Home, Nutrition &amp; Measurements.
-            </p>
-          </div>
-          <span className={`pill ${trackingMode === "fitbit" ? "teal-soft" : "accent-soft"}`}>
-            {trackingMode === "fitbit" ? "Fitbit Air mode" : "Manual mode"}
-          </span>
-        </div>
-        <form onSubmit={submitPreferences} style={{ marginTop: ".6rem" }}>
+      <SettingsDropdown
+        title="Expenditure Source & Timezone"
+        subtitle="Choose Manual TDEE mode or Fitbit Air (Google Health) mode"
+        badge={trackingMode === "fitbit" ? "Fitbit Air mode" : "Manual mode"}
+        badgeClass={trackingMode === "fitbit" ? "teal-soft" : "accent-soft"}
+      >
+        <form onSubmit={submitPreferences}>
           <div className="segments" role="group" aria-label="Tracking mode">
             <button
               type="button"
@@ -458,29 +446,24 @@ export function SettingsView({
           )}
           <Button variant="secondary" disabled={busy} type="submit">Save preferences</Button>
         </form>
-      </section>
+      </SettingsDropdown>
 
       {/* Google Health / Fitbit Air Two-Way Integration & Saved File Importer */}
-      <section className="card">
-        <div className="split-row">
-          <div>
-            <h2>Google Health (Fitbit Air)</h2>
-            <p style={{ fontSize: ".8rem" }}>
-              Two-way sync: imports TDEE, sleep, recovery/vitals, workouts, active burn, steps, weight, and height; writes meals and weights back. Each FitnessTrackr account links its own Google account.
-            </p>
-          </div>
-          <span className={`pill ${google.connected ? (trackingMode === "fitbit" ? "teal-soft" : "amber-soft") : ""}`}>
-            {google.connected
-              ? trackingMode === "fitbit"
-                ? "Connected · Active"
-                : "Connected · Manual mode"
-              : google.available
-                ? "Ready to link"
-                : "Env vars not set"}
-          </span>
-        </div>
-
-        <div style={{ marginTop: ".75rem", display: "grid", gap: ".65rem" }}>
+      <SettingsDropdown
+        title="Google Health (Fitbit Air)"
+        subtitle="Two-way sync: TDEE, sleep, RHR, HRV, workouts, steps, meals & weights"
+        badge={
+          google.connected
+            ? trackingMode === "fitbit"
+              ? "Connected · Active"
+              : "Connected · Manual mode"
+            : google.available
+              ? "Ready to link"
+              : "Env vars not set"
+        }
+        badgeClass={google.connected ? (trackingMode === "fitbit" ? "teal-soft" : "amber-soft") : ""}
+      >
+        <div style={{ display: "grid", gap: ".65rem" }}>
           {!google.available && (
             <p style={{ fontSize: ".82rem" }}>
               Set <code>GOOGLE_HEALTH_CLIENT_ID</code>, <code>GOOGLE_HEALTH_CLIENT_SECRET</code>, and 64-hex{" "}
@@ -526,17 +509,7 @@ export function SettingsView({
             {google.available && (!google.connected || missingWriteScopes) && (
               <a
                 href={missingWriteScopes || twoWaySync ? "/api/integrations/google/connect?write=1" : "/api/integrations/google/connect"}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  minHeight: "42px",
-                  padding: ".55rem .95rem",
-                  borderRadius: "14px",
-                  background: "var(--accent)",
-                  color: "var(--accent-ink)",
-                  fontWeight: 640,
-                  textDecoration: "none",
-                }}
+                className="unlock-btn"
               >
                 {missingWriteScopes ? "Reconnect for sleep & 2-way permissions" : "Connect Google Health"}
               </a>
@@ -568,11 +541,11 @@ export function SettingsView({
         </div>
 
         {/* Saved Google Health / Google Takeout / Fitbit Export Importer */}
-        <form onSubmit={submitHealthFileImport} style={{ marginTop: "1rem", borderTop: "1px solid var(--border)", paddingTop: ".9rem" }}>
+        <form onSubmit={submitHealthFileImport} style={{ borderTop: "1px solid var(--border)", paddingTop: ".9rem" }}>
           <div>
             <h3>Import Saved Health Data (Google Health / Takeout / Fitbit)</h3>
             <p style={{ fontSize: ".79rem" }}>
-              Upload or paste saved JSON (Google Health v4 <code>dataPoints</code>/<code>rollupDataPoints</code>/<code>sleep</code>, Fitbit Takeout <code>weight-*.json</code>/<code>calories-*.json</code>/<code>sleep-*.json</code>) or CSV exports. Weights sync into Measurements &amp; Trends without overwriting manual scale entries.
+              Upload or paste saved JSON or CSV exports. Weights sync into Measurements &amp; Trends without overwriting manual scale entries.
             </p>
           </div>
           <label className="drop-zone">
@@ -592,24 +565,107 @@ export function SettingsView({
           </label>
           <Button variant="secondary" disabled={busy} type="submit">Import saved health data</Button>
         </form>
-      </section>
+      </SettingsDropdown>
+
+      {/* Hevy Strength Training Integration */}
+      <SettingsDropdown
+        id="hevy-settings"
+        title="Hevy Strength Integration"
+        subtitle="Syncs resistance workouts, sets, reps, weights & RPE and pairs with wearable HR"
+        badge={
+          hevy?.connected
+            ? hevy.accountLabel
+              ? `Connected · ${hevy.accountLabel}`
+              : "Connected"
+            : hevy?.oauthAvailable
+              ? "Ready to link"
+              : "CSV / JSON Import"
+        }
+        badgeClass={hevy?.connected ? "teal-soft" : ""}
+      >
+        <div style={{ display: "grid", gap: ".65rem" }}>
+          <div className="muted" style={{ fontSize: ".82rem" }}>
+            {hevy?.accountLabel && (
+              <>
+                Account: <strong style={{ color: "var(--text)" }}>{hevy.accountLabel}</strong> ·{" "}
+              </>
+            )}
+            Workouts stored: <strong style={{ color: "var(--text)" }}>{hevy?.workoutCount ?? 0}</strong>
+            {hevy?.lastSync && (
+              <>
+                {" "}· Last sync: <strong style={{ color: "var(--text)" }}>{fmtRelativeSync(hevy.lastSync)}</strong>
+              </>
+            )}
+            {hevy?.lastError && (
+              <div style={{ color: "var(--danger-fg)", marginTop: ".25rem" }}>Last error: {hevy.lastError}</div>
+            )}
+          </div>
+
+          <div className="button-row">
+            {hevy?.oauthAvailable && !hevy.connected && (
+              <a className="unlock-btn" href="/api/integrations/hevy/connect">
+                Connect Hevy OAuth
+              </a>
+            )}
+            {hevy?.connected && onSyncHevy && (
+              <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncHevy()}>
+                <RefreshCw size={14} /> Sync Hevy
+              </button>
+            )}
+            {hevy?.connected && onDisconnectHevy && (
+              <button type="button" className="danger compact" disabled={busy} onClick={() => void onDisconnectHevy()}>
+                Disconnect Hevy
+              </button>
+            )}
+          </div>
+
+          {onImportHevy && (
+            <div style={{ display: "grid", gap: ".55rem", borderTop: "1px solid var(--border)", paddingTop: ".75rem" }}>
+              <strong style={{ fontSize: ".84rem" }}>Import Hevy CSV or JSON export (works on Hevy Free)</strong>
+              <input
+                type="file"
+                accept=".csv,.json,text/csv,application/json"
+                onChange={async (e: ChangeEvent<HTMLInputElement>) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const text = await file.text();
+                  setHevyRawText(text);
+                  await onImportHevy(text);
+                  e.target.value = "";
+                }}
+              />
+              <textarea
+                rows={3}
+                placeholder="Or paste Hevy CSV / JSON export here…"
+                value={hevyRawText}
+                onChange={(e) => setHevyRawText(e.target.value)}
+              />
+              <button
+                type="button"
+                className="secondary compact"
+                disabled={busy || !hevyRawText.trim()}
+                onClick={async () => {
+                  const ok = await onImportHevy(hevyRawText);
+                  if (ok) setHevyRawText("");
+                }}
+              >
+                <Upload size={14} /> Import pasted Hevy data
+              </button>
+            </div>
+          )}
+        </div>
+      </SettingsDropdown>
 
       {/* Training & Strain -> Walking Contribution & HR Zones */}
-      <section className="card" id="strain-walking-settings">
-        <div className="split-row">
-          <div>
-            <h2>Training &amp; Strain · Walking Contribution</h2>
-            <p style={{ fontSize: ".8rem" }}>
-              Configure how extra non-workout daily steps contribute to your 0–100 Overall Strain score and how heart-rate zones are calibrated.
-            </p>
-          </div>
-          <span className={`pill ${walkingEnabled ? "teal-soft" : ""}`}>
-            {walkingEnabled ? "Walking enabled" : "Walking off"}
-          </span>
-        </div>
-
+      <SettingsDropdown
+        id="strain-walking-settings"
+        title="Training & Strain · Walking Contribution"
+        subtitle="Configure daily step threshold, walking sensitivity, max bonus & HR zones"
+        badge={walkingEnabled ? "Walking enabled" : "Walking off"}
+        badgeClass={walkingEnabled ? "teal-soft" : ""}
+      >
         <form
-          style={{ display: "grid", gap: ".75rem", marginTop: ".75rem" }}
+          style={{ display: "grid", gap: ".75rem" }}
           onSubmit={async (e: FormEvent) => {
             e.preventDefault();
             if (!onSaveStrainSettings) return;
@@ -714,108 +770,25 @@ export function SettingsView({
             </Button>
           </div>
         </form>
-      </section>
+      </SettingsDropdown>
 
-      {/* Hevy Strength Training Integration */}
-      <section className="card" id="hevy-settings">
-        <div className="split-row">
-          <div>
-            <h2>Hevy Strength Integration</h2>
-            <p style={{ fontSize: ".8rem" }}>
-              Syncs resistance workouts (exercises, sets, reps, weights, RPE, set types) and pairs them with Google Health wearable HR by timestamp.
-            </p>
-          </div>
-          <span className={`pill ${hevy?.connected ? "teal-soft" : ""}`}>
-            {hevy?.connected
-              ? "OAuth Connected"
-              : hevy?.oauthAvailable
-                ? "Ready to link"
-                : "CSV / JSON Import"}
-          </span>
-        </div>
-
-        <div style={{ marginTop: ".75rem", display: "grid", gap: ".65rem" }}>
-          <div className="muted" style={{ fontSize: ".82rem" }}>
-            Workouts stored: <strong style={{ color: "var(--text)" }}>{hevy?.workoutCount ?? 0}</strong>
-            {hevy?.lastSync && (
-              <>
-                {" "}· Last sync: <strong style={{ color: "var(--text)" }}>{fmtRelativeSync(hevy.lastSync)}</strong>
-              </>
-            )}
-          </div>
-
-          <div className="button-row">
-            {hevy?.oauthAvailable && !hevy.connected && (
-              <a className="button" href="/api/integrations/hevy/connect">
-                Connect Hevy OAuth
-              </a>
-            )}
-            {hevy?.connected && onSyncHevy && (
-              <button type="button" className="secondary compact" disabled={busy} onClick={() => onSyncHevy()}>
-                <RefreshCw size={14} /> Sync Hevy
-              </button>
-            )}
-            {hevy?.connected && onDisconnectHevy && (
-              <button type="button" className="secondary compact" disabled={busy} onClick={() => onDisconnectHevy()}>
-                Disconnect Hevy
-              </button>
-            )}
-          </div>
-
-          {onImportHevy && (
-            <details>
-              <summary style={{ cursor: "pointer", fontSize: ".84rem", fontWeight: 500 }}>
-                Import Hevy CSV or JSON export (works on Hevy Free)
-              </summary>
-              <div style={{ display: "grid", gap: ".55rem", marginTop: ".6rem" }}>
-                <input
-                  type="file"
-                  accept=".csv,.json,text/csv,application/json"
-                  onChange={async (e: ChangeEvent<HTMLInputElement>) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const text = await file.text();
-                    setHevyRawText(text);
-                    await onImportHevy(text);
-                    e.target.value = "";
-                  }}
-                />
-                <textarea
-                  rows={3}
-                  placeholder="Or paste Hevy CSV / JSON export here…"
-                  value={hevyRawText}
-                  onChange={(e) => setHevyRawText(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="secondary compact"
-                  disabled={busy || !hevyRawText.trim()}
-                  onClick={async () => {
-                    const ok = await onImportHevy(hevyRawText);
-                    if (ok) setHevyRawText("");
-                  }}
-                >
-                  <Upload size={14} /> Import pasted Hevy data
-                </button>
-              </div>
-            </details>
-          )}
-        </div>
-      </section>
-
-      <ReminderSettings />
+      {/* Meal & Weigh-in Reminders */}
+      <SettingsDropdown
+        title="Reminders & Notifications"
+        subtitle="Meal logging and morning weigh-in push reminders"
+        badge="Push alerts"
+      >
+        <ReminderSettings />
+      </SettingsDropdown>
 
       {/* Private MCP / ChatGPT Connector */}
-      <section className="card">
-        <div className="split-row">
-          <div>
-            <h2>FitnessTrackr · ChatGPT Server</h2>
-            <p style={{ fontSize: ".8rem" }}>OAuth 2.1 protected Streamable HTTP endpoint for photo meal logging.</p>
-          </div>
-          <span className={`pill ${mcpEnabled ? "accent-soft" : ""}`}>{mcpEnabled ? "Enabled" : "Disabled"}</span>
-        </div>
-
-        <div style={{ display: "grid", gap: ".65rem", marginTop: ".75rem" }}>
+      <SettingsDropdown
+        title="FitnessTrackr · ChatGPT Server"
+        subtitle="OAuth 2.1 protected Streamable HTTP endpoint for photo meal logging"
+        badge={mcpEnabled ? "Enabled" : "Disabled"}
+        badgeClass={mcpEnabled ? "accent-soft" : ""}
+      >
+        <div style={{ display: "grid", gap: ".65rem" }}>
           <div className="mono-box">{mcpUrl}</div>
           <details>
             <summary>Connect on ChatGPT web first, then use on your phone</summary><p><a href="/connect" target="_blank" rel="noreferrer">Open the connection guide and plugin download</a></p>
@@ -878,46 +851,54 @@ export function SettingsView({
             </details>
           )}
         </div>
-      </section>
+      </SettingsDropdown>
 
       {/* Body Profile */}
-      <form className="card" onSubmit={submitProfile} method="post">
-        <h2>Body Profile</h2>
-        <div className="input-grid">
+      <SettingsDropdown
+        title="Body Profile"
+        subtitle="Height, measurement units (metric/imperial) & personal goals"
+        badge={tracker.settings.units === "imperial" ? "Imperial" : "Metric"}
+      >
+        <form onSubmit={submitProfile} method="post">
+          <div className="input-grid">
+            <label>
+              Height (cm)
+              <input name="height" type="number" inputMode="decimal" min="1" max="300" step="0.1" defaultValue={tracker.settings.heightCm ?? ""} />
+            </label>
+            <label>
+              Measurement units
+              <select name="units" defaultValue={tracker.settings.units}>
+                <option value="metric">Metric (cm, kg)</option>
+                <option value="imperial">Imperial (in, lb)</option>
+              </select>
+            </label>
+          </div>
           <label>
-            Height (cm)
-            <input name="height" type="number" inputMode="decimal" min="1" max="300" step="0.1" defaultValue={tracker.settings.heightCm ?? ""} />
+            Goals
+            <textarea name="goals" maxLength={2000} rows={2} defaultValue={tracker.settings.goals} />
           </label>
-          <label>
-            Measurement units
-            <select name="units" defaultValue={tracker.settings.units}>
-              <option value="metric">Metric (cm, kg)</option>
-              <option value="imperial">Imperial (in, lb)</option>
-            </select>
-          </label>
-        </div>
-        <label>
-          Goals
-          <textarea name="goals" maxLength={2000} rows={2} defaultValue={tracker.settings.goals} />
-        </label>
-        {tracker.settings.heightCm && (
-          <p style={{ fontSize: ".82rem" }}>
-            Waist reference (half of height) ·{" "}
-            <strong className="num">
-              {displayValue(tracker.settings.heightCm / 2, waistMetric, tracker.settings.units).toFixed(1)}{" "}
-              {displayUnit(waistMetric, tracker.settings.units)}
-            </strong>
-          </p>
-        )}
-        <Button disabled={busy} type="submit">Save profile</Button>
-      </form>
+          {tracker.settings.heightCm && (
+            <p style={{ fontSize: ".82rem" }}>
+              Waist reference (half of height) ·{" "}
+              <strong className="num">
+                {displayValue(tracker.settings.heightCm / 2, waistMetric, tracker.settings.units).toFixed(1)}{" "}
+                {displayUnit(waistMetric, tracker.settings.units)}
+              </strong>
+            </p>
+          )}
+          <Button disabled={busy} type="submit">Save profile</Button>
+        </form>
+      </SettingsDropdown>
 
       <Passkeys onMessage={onMessage} />
 
       {/* Data Export & Account */}
-      <section className="card">
-        <h2>Your Data &amp; Account</h2>
-        <div className="button-row" style={{ marginTop: ".6rem" }}>
+      <SettingsDropdown
+        title="Your Data & Account"
+        subtitle="Export JSON/CSV backups, sign out, or delete account"
+        badge="Account"
+      >
+        <div className="button-row">
           <button type="button" className="secondary" onClick={() => void downloadAll("json")}>
             <ArrowDownToLine size={17} /> Full Export (JSON)
           </button>
@@ -958,16 +939,53 @@ export function SettingsView({
             </Button>
           </form>
         )}
-      </section>
+      </SettingsDropdown>
     </>
+  );
+}
+
+function SettingsDropdown({
+  id,
+  title,
+  subtitle,
+  badge,
+  badgeClass = "",
+  defaultOpen = false,
+  children,
+}: {
+  id?: string;
+  title: string;
+  subtitle?: string;
+  badge?: string;
+  badgeClass?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details className="card settings-accordion" id={id} open={defaultOpen}>
+      <summary className="settings-accordion-summary">
+        <div className="settings-accordion-title">
+          <h2>{title}</h2>
+          {subtitle && <p>{subtitle}</p>}
+        </div>
+        <div className="settings-accordion-right">
+          {badge && <span className={`pill ${badgeClass}`}>{badge}</span>}
+          <ChevronDown size={18} className="settings-accordion-chevron" aria-hidden="true" />
+        </div>
+      </summary>
+      <div className="settings-accordion-body">{children}</div>
+    </details>
   );
 }
 
 function Passkeys({ onMessage }: { onMessage: (message: string) => void }) {
   const keys = authClient.useListPasskeys();
   return (
-    <section className="card">
-      <h2>Passkeys</h2>
+    <SettingsDropdown
+      title="Passkeys"
+      subtitle="Biometric & hardware security keys for passwordless sign-in"
+      badge={keys.data ? `${keys.data.length} saved` : "Security"}
+    >
       {keys.isPending && <p>Loading passkeys…</p>}
       {keys.error && <p>Could not load passkeys.</p>}
       {keys.data?.map((key) => (
@@ -1000,7 +1018,7 @@ function Passkeys({ onMessage }: { onMessage: (message: string) => void }) {
       >
         <Fingerprint size={18} /> Add passkey
       </button>
-    </section>
+    </SettingsDropdown>
   );
 }
 

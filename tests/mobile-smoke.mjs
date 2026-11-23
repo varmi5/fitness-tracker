@@ -175,30 +175,39 @@ try {
       if (tab === "Training") {
         await page.getByRole("heading", { name: "Training & Strain", exact: true }).waitFor();
         await page.getByText(/Cardio Load|Daily Walking/).first().waitFor();
+        await page.getByText("Unlock Muscular Load").first().waitFor();
       }
       if (tab === "More") {
         await page.getByRole("tab", { name: "Measurements", exact: true }).waitFor();
         await page.getByRole("tab", { name: "Settings", exact: true }).click();
         const manualHeading = page.getByRole("heading", { name: "Manual Daily Expenditure (TDEE)", exact: true });
-        const sourceSelect = page.getByLabel("Preferred expenditure source");
+        const expSourceHeading = page.getByRole("heading", { name: "Expenditure Source & Timezone", exact: true });
         await manualHeading.waitFor();
-        await sourceSelect.waitFor();
+        await expSourceHeading.waitFor();
         const manualBox = await manualHeading.boundingBox();
-        const sourceBox = await sourceSelect.boundingBox();
-        assert.ok(manualBox && sourceBox && manualBox.y < sourceBox.y, "Manual TDEE card must appear above Preferred expenditure source");
+        const expSourceBox = await expSourceHeading.boundingBox();
+        assert.ok(manualBox && expSourceBox && manualBox.y < expSourceBox.y, "Manual TDEE card must appear above Preferred expenditure source");
+        await expSourceHeading.click();
+        const sourceSelect = page.getByLabel("Preferred expenditure source");
+        await sourceSelect.waitFor();
         const optionTexts = await sourceSelect.locator("option").allInnerTexts();
         assert.deepEqual(optionTexts, ["Manual TDEE entry", "Google Health (Fitbit Air)"]);
         const settingsText = await page.locator("main").innerText();
         assert.equal(settingsText.includes("Apple Health"), false, "Settings must not reference Apple Health");
 
         // Stage 6: Training & Strain -> Walking Contribution settings
-        await page.getByRole("heading", { name: /Walking Contribution/ }).waitFor();
+        const walkingHeading = page.getByRole("heading", { name: /Walking Contribution/ });
+        await walkingHeading.waitFor();
+        await walkingHeading.click();
         const stepThresholdInput = page.getByRole("spinbutton", { name: "Daily step threshold" });
         await stepThresholdInput.fill("11000");
         await page.getByRole("button", { name: "Save strain & walking settings", exact: true }).click();
         await page.getByText("Strain & walking settings saved.").waitFor();
         await page.locator(".toast-dismiss").click();
 
+        const googleHeading = page.getByRole("heading", { name: "Google Health (Fitbit Air)", exact: true });
+        await googleHeading.waitFor();
+        await googleHeading.click();
         const syncButton = page.getByRole("button", { name: "Sync Now", exact: true });
         await syncButton.waitFor();
         const status = { available: true, connected: true, status: "connected", accountLabel: "synthetic@example.test", canWriteNutrition: true, mealSync: { pending: 0, failed: 1, verified: 2, lastVerifiedAt: "2026-11-17T12:00:00Z", lastError: "Google meal creation returned HTTP 400; check serving.food_measurement_unit." } };
@@ -297,6 +306,7 @@ try {
     // Verify success toast auto-dismisses after ~3s
     await page.getByRole("navigation").getByRole("button", { name: "More", exact: true }).click();
     await page.getByRole("tab", { name: "Settings", exact: true }).click();
+    await page.getByRole("heading", { name: "Expenditure Source & Timezone", exact: true }).click();
     await page.getByRole("button", { name: "Save preferences", exact: true }).click();
     const toast = page.locator(".feedback");
     await toast.waitFor({ state: "visible" });

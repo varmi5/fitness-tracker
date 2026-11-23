@@ -11,6 +11,7 @@ import { RecoveryCard } from "./recovery-card";
 import {
   fmtRelativeSync,
   type DailyStrainView,
+  type GoogleIntegrationStatus,
   type HevyIntegrationStatus,
   type MoreSection,
   type RecoveryInsightView,
@@ -25,6 +26,7 @@ interface TrainingViewProps {
   recoveryInsights?: RecoveryInsightView;
   strainSettings: StrainSettings;
   hevy: HevyIntegrationStatus;
+  google?: GoogleIntegrationStatus;
   theme: ThemeMode;
   busy: boolean;
   loading: boolean;
@@ -50,6 +52,7 @@ export function TrainingView({
   recoveryInsights,
   strainSettings,
   hevy,
+  google,
   busy,
   loading,
   onSelectDay,
@@ -183,7 +186,26 @@ export function TrainingView({
       </section>
 
       {/* Stage 7: Recovery Insights (separated from Strain) */}
-      <RecoveryCard recovery={recoveryInsights} />
+      <div className="unlock-gate">
+        <div className={`unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}>
+          <RecoveryCard recovery={recoveryInsights} />
+        </div>
+        {google && !google.connected && (
+          <div className="unlock-overlay">
+            <h3>Unlock Recovery Insights</h3>
+            <p>Connect Google Health (Fitbit Air) to unlock daily Sleep, Resting HR, and HRV readiness.</p>
+            {google.available ? (
+              <a className="unlock-btn" href="/api/integrations/google/connect">
+                Connect Google Health to Unlock
+              </a>
+            ) : (
+              <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
+                Configure Google Health in Settings
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Overall Strain Hero */}
       <section className="card card-hero" aria-label="Overall Strain summary">
@@ -390,179 +412,218 @@ export function TrainingView({
 
       {/* Long-term Cardio Load & Muscular Load (Separate EWMAs) */}
       <section className="two-col" aria-label="Long-term training loads">
-        <article className="card">
-          <div className="split-row">
-            <h2>Cardio Load (TRIMP EWMA)</h2>
-            <span className="pill teal-soft">7d / 42d</span>
-          </div>
-          {loadsBusy && !loads ? (
-            <p className="empty">Loading Cardio Load…</p>
-          ) : !loads?.latestCardio ? (
-            <p className="empty">No cardio TRIMP history yet.</p>
-          ) : (
-            <>
-              <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
-                <div className="energy-cell">
-                  <span>Daily</span>
-                  <strong className="num">{loads.latestCardio.daily}</strong>
+        <div className="unlock-gate">
+          <article className={`card unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}>
+            <div className="split-row">
+              <h2>Cardio Load (TRIMP EWMA)</h2>
+              <span className="pill teal-soft">7d / 42d</span>
+            </div>
+            {loadsBusy && !loads ? (
+              <p className="empty">Loading Cardio Load…</p>
+            ) : !loads?.latestCardio ? (
+              <p className="empty">No cardio TRIMP history yet.</p>
+            ) : (
+              <>
+                <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+                  <div className="energy-cell">
+                    <span>Daily</span>
+                    <strong className="num">{loads.latestCardio.daily}</strong>
+                  </div>
+                  <div className="energy-cell">
+                    <span>7d Acute</span>
+                    <strong className="num">{loads.latestCardio.acute7d}</strong>
+                  </div>
+                  <div className="energy-cell">
+                    <span>42d Chronic</span>
+                    <strong className="num">{loads.latestCardio.chronic42d}</strong>
+                  </div>
                 </div>
-                <div className="energy-cell">
-                  <span>7d Acute</span>
-                  <strong className="num">{loads.latestCardio.acute7d}</strong>
-                </div>
-                <div className="energy-cell">
-                  <span>42d Chronic</span>
-                  <strong className="num">{loads.latestCardio.chronic42d}</strong>
-                </div>
-              </div>
-              {loads.cardioSeries.length > 1 && (
-                <div className="chart" style={{ height: 150, marginTop: ".65rem" }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={loads.cardioSeries.slice(-28)}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10 }} />
-                      <YAxis tick={{ fontSize: 10 }} width={32} />
-                      <Tooltip />
-                      <Line type="monotone" dataKey="acute7d" name="7d Acute" stroke="var(--blue)" dot={false} strokeWidth={2} />
-                      <Line type="monotone" dataKey="chronic42d" name="42d Chronic" stroke="var(--teal)" dot={false} strokeWidth={2} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
+                {loads.cardioSeries.length > 1 && (
+                  <div className="chart" style={{ height: 150, marginTop: ".65rem" }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={loads.cardioSeries.slice(-28)}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                        <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} width={32} />
+                        <Tooltip />
+                        <Line type="monotone" dataKey="acute7d" name="7d Acute" stroke="var(--blue)" dot={false} strokeWidth={2} />
+                        <Line type="monotone" dataKey="chronic42d" name="42d Chronic" stroke="var(--teal)" dot={false} strokeWidth={2} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </>
+            )}
+          </article>
+          {google && !google.connected && (
+            <div className="unlock-overlay">
+              <h3>Unlock Cardio Load</h3>
+              <p>Connect Google Health (Fitbit) to track 7d &amp; 42d heart-rate TRIMP load.</p>
+              {google.available ? (
+                <a className="unlock-btn" href="/api/integrations/google/connect">
+                  Connect Google Health
+                </a>
+              ) : (
+                <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
+                  Open Google Settings
+                </button>
               )}
-            </>
+            </div>
           )}
-        </article>
+        </div>
 
-        <article className="card">
-          <div className="split-row">
-            <h2>Muscular Load (Sets EWMA)</h2>
-            <span className="pill protein-soft">7d / 42d</span>
-          </div>
-          {loadsBusy && !loads ? (
-            <p className="empty">Loading Muscular Load…</p>
-          ) : !loads?.latestMuscular ? (
-            <p className="empty">No muscular training history yet.</p>
-          ) : (
-            <>
-              <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
-                <div className="energy-cell">
-                  <span>Daily</span>
-                  <strong className="num">{loads.latestMuscular.daily}</strong>
+        <div className="unlock-gate">
+          <article className={`card unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}>
+            <div className="split-row">
+              <h2>Muscular Load (Sets EWMA)</h2>
+              <span className="pill protein-soft">7d / 42d</span>
+            </div>
+            {loadsBusy && !loads ? (
+              <p className="empty">Loading Muscular Load…</p>
+            ) : !loads?.latestMuscular ? (
+              <p className="empty">No muscular training history yet.</p>
+            ) : (
+              <>
+                <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+                  <div className="energy-cell">
+                    <span>Daily</span>
+                    <strong className="num">{loads.latestMuscular.daily}</strong>
+                  </div>
+                  <div className="energy-cell">
+                    <span>7d Acute</span>
+                    <strong className="num">{loads.latestMuscular.acute7d}</strong>
+                  </div>
+                  <div className="energy-cell">
+                    <span>42d Chronic</span>
+                    <strong className="num">{loads.latestMuscular.chronic42d}</strong>
+                  </div>
                 </div>
-                <div className="energy-cell">
-                  <span>7d Acute</span>
-                  <strong className="num">{loads.latestMuscular.acute7d}</strong>
-                </div>
-                <div className="energy-cell">
-                  <span>42d Chronic</span>
-                  <strong className="num">{loads.latestMuscular.chronic42d}</strong>
-                </div>
+                {loads.muscularSeries.length > 1 && (
+                  <div className="chart" style={{ height: 150, marginTop: ".65rem" }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={loads.muscularSeries.slice(-28)}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                        <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} width={32} />
+                        <Tooltip />
+                        <Line type="monotone" dataKey="acute7d" name="7d Acute" stroke="var(--purple)" dot={false} strokeWidth={2} />
+                        <Line type="monotone" dataKey="chronic42d" name="42d Chronic" stroke="var(--accent)" dot={false} strokeWidth={2} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </>
+            )}
+          </article>
+          {!hevy.connected && (
+            <div className="unlock-overlay">
+              <h3>Unlock Muscular Load</h3>
+              <p>Connect Hevy or import a workout export to unlock 7d &amp; 42d Muscular Load.</p>
+              <div className="button-row" style={{ justifyContent: "center" }}>
+                {hevy.oauthAvailable ? (
+                  <a className="unlock-btn" href="/api/integrations/hevy/connect">
+                    Connect Hevy to Unlock
+                  </a>
+                ) : (
+                  <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
+                    Connect Hevy in Settings
+                  </button>
+                )}
+                <label className="secondary compact" style={{ display: "inline-flex", alignItems: "center", gap: ".4rem", cursor: "pointer" }}>
+                  <Upload size={14} /> Import CSV / JSON
+                  <input type="file" accept=".csv,.json,text/csv,application/json" style={{ display: "none" }} onChange={(e) => void handleHevyFile(e)} />
+                </label>
               </div>
-              {loads.muscularSeries.length > 1 && (
-                <div className="chart" style={{ height: 150, marginTop: ".65rem" }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={loads.muscularSeries.slice(-28)}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10 }} />
-                      <YAxis tick={{ fontSize: 10 }} width={32} />
-                      <Tooltip />
-                      <Line type="monotone" dataKey="acute7d" name="7d Acute" stroke="var(--purple)" dot={false} strokeWidth={2} />
-                      <Line type="monotone" dataKey="chronic42d" name="42d Chronic" stroke="var(--accent)" dot={false} strokeWidth={2} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </>
+            </div>
           )}
-        </article>
+        </div>
       </section>
 
       {/* Muscle-Group Weekly Working Sets & Exercise Progression */}
       {loads && (
-        <section className="card" aria-label="Muscle group workload">
-          <div className="split-row">
-            <h2>Muscle Group Weekly Sets</h2>
-            <span className="pill">{loads.dataQuality.completeDays} complete days</span>
-          </div>
-          <div className="energy-strip">
-            {loads.muscleSummaries.map((m) => (
-              <div className="energy-cell" key={m.muscle}>
-                <span>{m.muscle}</span>
-                <strong className="num">{m.weeklyWorkingSets} sets</strong>
-                <small className="num">Load {m.totalLoad.toFixed(1)}</small>
-              </div>
-            ))}
-          </div>
-          {loads.exerciseProgression.length > 0 && (
-            <div style={{ marginTop: ".85rem" }}>
-              <h3 style={{ fontSize: ".88rem", color: "var(--muted)", marginBottom: ".35rem" }}>Exercise Progression (Est. 1RM)</h3>
-              {loads.exerciseProgression.slice(0, 6).map((ex) => (
-                <div className="list-item" key={ex.exerciseTitle}>
-                  <div>
-                    <strong>{ex.exerciseTitle}</strong>
-                    <span className="row-note">
-                      {ex.sessions} session(s) · Latest {ex.latestWeightKg ?? "—"} kg × {ex.latestReps ?? "—"} ({ex.latestDay})
-                    </span>
-                  </div>
-                  <div className="num" style={{ textAlign: "right" }}>
-                    <strong>{ex.bestEstimated1RmKg != null ? `${ex.bestEstimated1RmKg} kg` : "—"}</strong>
-                    {ex.deltaKg != null && (
-                      <small className="row-note" style={{ color: ex.deltaKg >= 0 ? "var(--accent)" : "var(--danger-fg)" }}>
-                        {ex.deltaKg >= 0 ? `+${ex.deltaKg}` : ex.deltaKg} kg
-                      </small>
-                    )}
-                  </div>
+        <div className="unlock-gate">
+          <section
+            className={`card unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
+            aria-label="Muscle group workload"
+          >
+            <div className="split-row">
+              <h2>Muscle Group Weekly Sets</h2>
+              <span className="pill">{loads.dataQuality.completeDays} complete days</span>
+            </div>
+            <div className="energy-strip">
+              {loads.muscleSummaries.map((m) => (
+                <div className="energy-cell" key={m.muscle}>
+                  <span>{m.muscle}</span>
+                  <strong className="num">{m.weeklyWorkingSets} sets</strong>
+                  <small className="num">Load {m.totalLoad.toFixed(1)}</small>
                 </div>
               ))}
             </div>
+            {loads.exerciseProgression.length > 0 && (
+              <div style={{ marginTop: ".85rem" }}>
+                <h3 style={{ fontSize: ".88rem", color: "var(--muted)", marginBottom: ".35rem" }}>Exercise Progression (Est. 1RM)</h3>
+                {loads.exerciseProgression.slice(0, 6).map((ex) => (
+                  <div className="list-item" key={ex.exerciseTitle}>
+                    <div>
+                      <strong>{ex.exerciseTitle}</strong>
+                      <span className="row-note">
+                        {ex.sessions} session(s) · Latest {ex.latestWeightKg ?? "—"} kg × {ex.latestReps ?? "—"} ({ex.latestDay})
+                      </span>
+                    </div>
+                    <div className="num" style={{ textAlign: "right" }}>
+                      <strong>{ex.bestEstimated1RmKg != null ? `${ex.bestEstimated1RmKg} kg` : "—"}</strong>
+                      {ex.deltaKg != null && (
+                        <small className="row-note" style={{ color: ex.deltaKg >= 0 ? "var(--accent)" : "var(--danger-fg)" }}>
+                          {ex.deltaKg >= 0 ? `+${ex.deltaKg}` : ex.deltaKg} kg
+                        </small>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+          {!hevy.connected && (
+            <div className="unlock-overlay">
+              <h3>Unlock 10-Muscle-Group Breakdown &amp; 1RM Progression</h3>
+              <p>Connect your Hevy account to see weekly working sets across Chest, Back, Quads, Glutes &amp; more.</p>
+              {hevy.oauthAvailable ? (
+                <a className="unlock-btn" href="/api/integrations/hevy/connect">
+                  Connect Hevy to Unlock
+                </a>
+              ) : (
+                <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
+                  Open Hevy Settings
+                </button>
+              )}
+            </div>
           )}
-        </section>
+        </div>
       )}
 
-      {/* Hevy Sync & Import */}
-      <section className="card" aria-label="Hevy workouts import">
-        <div className="split-row">
-          <div>
-            <h2>Hevy Strength Sync</h2>
-            <p style={{ fontSize: ".8rem" }}>
-              {hevy.workoutCount} Hevy workout(s) stored ·{" "}
-              {hevy.connected ? `Connected · Last sync ${fmtRelativeSync(hevy.lastSync)}` : "Import Hevy CSV/JSON export anytime (works with Hevy Free)"}
-            </p>
+      {/* Hevy Sync & Status bar (shown compactly once connected) */}
+      {hevy.connected && (
+        <section className="card" aria-label="Hevy workouts import">
+          <div className="split-row">
+            <div>
+              <h2>Hevy Strength Sync</h2>
+              <p style={{ fontSize: ".8rem" }}>
+                {hevy.accountLabel ? `${hevy.accountLabel} · ` : ""}
+                {hevy.workoutCount} Hevy workout(s) stored · Last sync {fmtRelativeSync(hevy.lastSync)}
+              </p>
+            </div>
+            <div className="button-row">
+              <span className="pill teal-soft">Hevy Connected</span>
+              <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncHevy()}>
+                <RefreshCw size={14} /> Sync Hevy
+              </button>
+              <button type="button" className="secondary compact" onClick={() => onOpenSettings("Settings")}>
+                <SlidersHorizontal size={14} /> Settings
+              </button>
+            </div>
           </div>
-          <span className={`pill ${hevy.connected ? "teal-soft" : ""}`}>
-            {hevy.connected ? "Hevy Connected" : "CSV / JSON Ready"}
-          </span>
-        </div>
-        <div className="button-row" style={{ marginTop: ".65rem" }}>
-          {hevy.oauthAvailable && !hevy.connected && (
-            <a
-              href="/api/integrations/hevy/connect"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                minHeight: "42px",
-                padding: ".5rem .9rem",
-                borderRadius: "14px",
-                background: "var(--accent)",
-                color: "var(--accent-ink)",
-                fontWeight: 640,
-                textDecoration: "none",
-              }}
-            >
-              Connect Hevy
-            </a>
-          )}
-          {hevy.connected && (
-            <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncHevy()}>
-              <RefreshCw size={14} /> Sync Hevy
-            </button>
-          )}
-          <label className="secondary compact" style={{ display: "inline-flex", alignItems: "center", gap: ".4rem", cursor: "pointer", padding: ".45rem .85rem", borderRadius: "12px" }}>
-            <Upload size={14} /> Import Hevy CSV / JSON
-            <input type="file" accept=".csv,.json,text/csv,application/json" style={{ display: "none" }} onChange={(e) => void handleHevyFile(e)} />
-          </label>
-        </div>
-      </section>
+        </section>
+      )}
     </>
   );
 }

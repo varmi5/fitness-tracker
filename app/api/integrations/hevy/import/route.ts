@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { hevyStatus, importHevyWorkouts, parseHevyImport } from "../../../../../lib/hevy";
 import { NutritionError, nutritionData } from "../../../../../lib/nutrition-data";
+import { localDay } from "../../../../../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
+import { strainData } from "../../../../../lib/strain-data";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +34,15 @@ export async function POST(request: Request) {
     const prefs = await nutritionData(db, session.user.id).settings();
     const workouts = parseHevyImport(body.rawText, prefs.timezone);
     const result = await importHevyWorkouts(db, session.user.id, workouts);
-    return json({ ...result, status: await hevyStatus(db, session.user.id) });
+
+    const today = localDay(new Date(), prefs.timezone);
+    const strain = strainData(db, session.user.id);
+    const daysToRecompute = new Set<string>([today, ...(result.affectedDays ?? [])]);
+    for (const d of daysToRecompute) {
+      await strain.computeDay(d).catch(() => null);
+    }
+
+    return json({ ...result, imported: result.importedWorkouts, status: await hevyStatus(db, session.user.id) });
   } catch (error) {
     if (error instanceof NutritionError) return json({ message: error.message }, error.status);
     if (error instanceof z.ZodError) return json({ message: error.issues[0]?.message ?? "Invalid Hevy export." }, 400);

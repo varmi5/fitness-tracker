@@ -9,9 +9,7 @@ import { dailyWorkout, healthIntegration, heartRateSample, hevySet, hevyWorkout 
 
 const HEVY_API_BASE = "https://api.hevyapp.com/v1";
 const HEVY_AUTHORIZE_URL = process.env.HEVY_AUTHORIZE_URL ?? "https://hevy.com/oauth/authorize";
-const HEVY_TOKEN_URLS = process.env.HEVY_TOKEN_URL
-  ? [process.env.HEVY_TOKEN_URL]
-  : ["https://api.hevyapp.com/v1/oauth/token", "https://hevy.com/oauth/token"];
+const HEVY_TOKEN_URL = process.env.HEVY_TOKEN_URL ?? "https://hevy.com/api/token";
 const DEFAULT_HEVY_SCOPES = ["read-workout", "read-exercise", "read-profile"];
 
 const hevyTokensSchema = z.object({
@@ -19,8 +17,11 @@ const hevyTokensSchema = z.object({
   refreshToken: z.string().optional().default(""),
   expiresAt: z.number(),
   scopes: z.array(z.string()).default(DEFAULT_HEVY_SCOPES),
+  hevyUserId: z.string().optional(),
+  username: z.string().optional(),
+  profilePic: z.string().nullable().optional(),
 });
-type HevyTokens = z.infer<typeof hevyTokensSchema>;
+export type HevyTokens = z.infer<typeof hevyTokensSchema>;
 
 export const HEVY_SET_TYPES = ["warmup", "normal", "failure", "dropset"] as const;
 export type HevySetType = (typeof HEVY_SET_TYPES)[number];
@@ -67,9 +68,7 @@ export function hevyConsentUrl(callback: string, state: string): URL {
   const url = new URL(HEVY_AUTHORIZE_URL);
   url.search = new URLSearchParams({
     client_id: process.env.HEVY_CLIENT_ID!,
-    response_type: "code",
     redirect_uri: callback,
-    scope: process.env.HEVY_OAUTH_SCOPES ?? DEFAULT_HEVY_SCOPES.join(" "),
     state,
   }).toString();
   return url;
@@ -85,25 +84,25 @@ export async function exchangeHevyToken(params: Record<string, string>, previous
     client_secret: process.env.HEVY_CLIENT_SECRET!,
   });
 
-  let response: Response | null = null;
-  for (const tokenUrl of HEVY_TOKEN_URLS) {
-    response = await fetch(tokenUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-      signal: AbortSignal.timeout(10000),
-      body,
-    });
-    if (response.status !== 404) break;
-  }
-  if (!response || !response.ok) {
-    throw new NutritionError("Hevy rejected the authorization. Reconnect Hevy.", 422);
+  const response = await fetch(HEVY_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+    signal: AbortSignal.timeout(10000),
+    body,
+  });
+  if (!response.ok) {
+    throw new NutritionError(`Hevy rejected the authorization (HTTP ${response.status}). Reconnect Hevy.`, 422);
   }
   const wire = z
     .object({
       access_token: z.string(),
+      token_type: z.string().optional(),
       expires_in: z.number().optional().default(3600),
       refresh_token: z.string().optional(),
       scope: z.string().optional(),
+      user_id: z.string().optional(),
+      username: z.string().optional(),
+      profile_pic: z.string().nullable().optional(),
     })
     .parse(await response.json());
 
@@ -112,6 +111,9 @@ export async function exchangeHevyToken(params: Record<string, string>, previous
     refreshToken: wire.refresh_token ?? previous?.refreshToken ?? "",
     expiresAt: Date.now() + wire.expires_in * 1000,
     scopes: wire.scope ? wire.scope.split(/\s+/).filter(Boolean) : previous?.scopes ?? DEFAULT_HEVY_SCOPES,
+    hevyUserId: wire.user_id ?? previous?.hevyUserId,
+    username: wire.username ?? previous?.username,
+    profilePic: wire.profile_pic !== undefined ? wire.profile_pic : previous?.profilePic,
   };
 }
 
@@ -164,14 +166,19 @@ export function parseHevyJson(
   timezone = DEFAULT_TIMEZONE,
   source: "hevy_oauth" | "hevy_json" = "hevy_json",
 ): { workouts: ParsedHevyWorkout[]; pageCount?: number } {
+  const obj = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
   const list = Array.isArray(payload)
     ? payload
-    : payload && typeof payload === "object" && Array.isArray((payload as { workouts?: unknown[] }).workouts)
-      ? (payload as { workouts: unknown[] }).workouts
-      : [];
+    : obj && Array.isArray(obj.workouts)
+      ? obj.workouts
+      : obj && obj.workout && typeof obj.workout === "object"
+        ? [obj.workout]
+        : obj && (obj.start_time || obj.startTime) && Array.isArray(obj.exercises)
+          ? [obj]
+          : [];
   const pageCount =
-    payload && typeof payload === "object" && typeof (payload as { page_count?: number }).page_count === "number"
-      ? (payload as { page_count: number }).page_count
+    obj && typeof obj.page_count === "number"
+      ? obj.page_count
       : undefined;
 
   const workouts: ParsedHevyWorkout[] = [];
@@ -560,6 +567,7 @@ export async function importHevyWorkouts(
     deletedWorkouts: deletedIds.length,
     matchedGoogleWorkouts: matchedCount,
     hrAssociatedWorkouts: hrAssociatedCount,
+    affectedDays: [...new Set(workouts.map((w) => w.day))],
   };
 }
 
@@ -583,9 +591,9 @@ export async function hevyStatus(db: AuthDatabase, userId: string) {
 
   return {
     oauthAvailable: hevyOAuthConfigured(),
-    connected: Boolean(row),
-    accountLabel: row?.accountLabel ?? null,
-    status: row?.status ?? null,
+    connected: Boolean(row) || workoutCountRows.length > 0,
+    accountLabel: row?.accountLabel ?? (workoutCountRows.length > 0 ? "Hevy Import" : null),
+    status: row?.status ?? (workoutCountRows.length > 0 ? "imported" : null),
     lastSync: row?.lastSync?.toISOString() ?? null,
     lastError: row?.lastError ?? null,
     workoutCount: workoutCountRows.length,
@@ -593,13 +601,14 @@ export async function hevyStatus(db: AuthDatabase, userId: string) {
 }
 
 export async function connectHevy(db: AuthDatabase, userId: string, grant: HevyTokens, accountLabel = "Hevy") {
+  const resolvedLabel = grant.username ? `@${grant.username}` : accountLabel;
   await db
     .insert(healthIntegration)
     .values({
       userId,
       provider: "hevy",
       credential: seal(grant, userId),
-      accountLabel,
+      accountLabel: resolvedLabel,
       status: "connected",
       lastError: null,
     })
@@ -607,7 +616,7 @@ export async function connectHevy(db: AuthDatabase, userId: string, grant: HevyT
       target: [healthIntegration.userId, healthIntegration.provider],
       set: {
         credential: seal(grant, userId),
-        accountLabel,
+        accountLabel: resolvedLabel,
         status: "connected",
         lastError: null,
       },
@@ -625,7 +634,7 @@ export async function disconnectHevy(db: AuthDatabase, userId: string, deleteWor
   return { disconnected: true };
 }
 
-export async function syncHevyOAuth(db: AuthDatabase, userId: string, maxPages = 10) {
+export async function syncHevyOAuth(db: AuthDatabase, userId: string, maxPages = 10, singleWorkoutId?: string) {
   const [linked] = await db.select().from(healthIntegration).where(ownHevy(userId));
   if (!linked) throw new NutritionError("Connect Hevy first or import a Hevy CSV/JSON export.", 409);
 
@@ -633,17 +642,18 @@ export async function syncHevyOAuth(db: AuthDatabase, userId: string, maxPages =
     let grant = hevyTokensSchema.parse(unseal(linked.credential, userId));
     if (grant.expiresAt < Date.now() + 60_000 && grant.refreshToken) {
       grant = await exchangeHevyToken({ grant_type: "refresh_token", refresh_token: grant.refreshToken }, grant);
+      // Hevy refresh tokens are single-use: persist the rotated refresh token immediately before making API requests.
+      await db
+        .update(healthIntegration)
+        .set({ credential: seal(grant, userId) })
+        .where(ownHevy(userId));
     }
 
     const tz = (await nutritionData(db, userId).settings()).timezone;
     const allWorkouts: ParsedHevyWorkout[] = [];
 
-    for (let page = 1; page <= maxPages; page++) {
-      const url = new URL(`${HEVY_API_BASE}/workouts`);
-      url.searchParams.set("page", String(page));
-      url.searchParams.set("pageSize", "10");
-
-      const response = await fetch(url, {
+    if (singleWorkoutId) {
+      const response = await fetch(`${HEVY_API_BASE}/workouts/${encodeURIComponent(singleWorkoutId)}`, {
         headers: { Authorization: `Bearer ${grant.accessToken}` },
         signal: AbortSignal.timeout(9000),
         cache: "no-store",
@@ -653,7 +663,24 @@ export async function syncHevyOAuth(db: AuthDatabase, userId: string, maxPages =
       }
       const parsed = parseHevyJson(await response.json(), tz, "hevy_oauth");
       allWorkouts.push(...parsed.workouts);
-      if (!parsed.pageCount || page >= parsed.pageCount) break;
+    } else {
+      for (let page = 1; page <= maxPages; page++) {
+        const url = new URL(`${HEVY_API_BASE}/workouts`);
+        url.searchParams.set("page", String(page));
+        url.searchParams.set("pageSize", "10");
+
+        const response = await fetch(url, {
+          headers: { Authorization: `Bearer ${grant.accessToken}` },
+          signal: AbortSignal.timeout(9000),
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          throw new NutritionError(`Hevy API returned HTTP ${response.status}.`, 502);
+        }
+        const parsed = parseHevyJson(await response.json(), tz, "hevy_oauth");
+        allWorkouts.push(...parsed.workouts);
+        if (!parsed.pageCount || page >= parsed.pageCount) break;
+      }
     }
 
     const result = await importHevyWorkouts(db, userId, allWorkouts);
@@ -672,6 +699,26 @@ export async function syncHevyOAuth(db: AuthDatabase, userId: string, maxPages =
       .where(ownHevy(userId));
     throw error;
   }
+}
+
+export async function findUsersForHevyWebhook(db: AuthDatabase, hevyUserId?: string): Promise<string[]> {
+  const rows = await db
+    .select({ userId: healthIntegration.userId, credential: healthIntegration.credential })
+    .from(healthIntegration)
+    .where(eq(healthIntegration.provider, "hevy"));
+
+  if (!hevyUserId) return rows.map((r) => r.userId);
+
+  const matched: string[] = [];
+  for (const r of rows) {
+    try {
+      const parsed = hevyTokensSchema.parse(unseal(r.credential, r.userId));
+      if (parsed.hevyUserId === hevyUserId) matched.push(r.userId);
+    } catch {
+      // ignore unseal failures
+    }
+  }
+  return matched.length > 0 ? matched : rows.map((r) => r.userId);
 }
 
 export async function listHevyWorkoutsForRange(db: AuthDatabase, userId: string, from: string, to: string) {

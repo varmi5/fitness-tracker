@@ -229,3 +229,58 @@ test("strainData combines Hevy + matched Google workout + HR samples + step inte
   assert.equal(st2View.overallStrain, null);
   assert.equal(st2View.confidence, "incomplete");
 });
+
+test("strainData estimates provisional Muscular Load for unmatched Google Health strength workouts and invalidates history cache when Hevy pairs", async () => {
+  const s1 = strainData(db, "ST-1");
+  await db.insert(schema.dailyWorkout).values({
+    userId: "ST-1",
+    source: "google",
+    sessionId: "gw-nov24",
+    day: "2026-11-24",
+    exerciseType: "EXERCISE_TYPE_WEIGHTLIFTING",
+    title: "Push Workout",
+    startTime: new Date("2026-11-24T10:00:00Z"),
+    endTime: new Date("2026-11-24T10:50:00Z"),
+    durationSeconds: 3000,
+    caloriesKcal: 340,
+    distanceMeters: 0,
+    avgHrBpm: 132,
+  });
+
+  const provisional = await s1.computeDay("2026-11-24");
+  const strengthAct = provisional.activities.find((a) => a.id === "google:gw-nov24" || a.id === "gw-nov24");
+  assert.ok(strengthAct, "Unmatched Google Health strength workout must be present");
+  assert.equal(strengthAct.kind, "strength");
+  assert.ok(provisional.mRaw > 0, "Unmatched Google Health strength workout must generate provisional Muscular Load (mRaw > 0)");
+  assert.ok((provisional.muscularStrain ?? 0) > 0, "muscularStrain must be > 0");
+  assert.ok((provisional.muscleLoads.Chest ?? 0) > 0, "Push Workout must attribute provisional sets to Chest");
+
+  // Simulate later Hevy sync for the same workout timestamp and verify history() invalidates the cached row
+  await new Promise((r) => setTimeout(r, 15));
+  await importHevyWorkouts(db, "ST-1", [
+    {
+      hevyId: "hv-st-nov24",
+      day: "2026-11-24",
+      title: "Push Workout",
+      description: "",
+      startTime: "2026-11-24T10:01:00Z",
+      endTime: "2026-11-24T10:51:00Z",
+      durationSeconds: 3000,
+      source: "hevy_oauth",
+      sets: [
+        { exerciseIndex: 0, exerciseTitle: "Bench Press (Barbell)", exerciseTemplateId: null, supersetId: null, setIndex: 0, setType: "normal", weightKg: 90, reps: 8, distanceMeters: null, durationSeconds: null, rpe: 9, notes: "" },
+        { exerciseIndex: 0, exerciseTitle: "Bench Press (Barbell)", exerciseTemplateId: null, supersetId: null, setIndex: 1, setType: "normal", weightKg: 90, reps: 8, distanceMeters: null, durationSeconds: null, rpe: 9, notes: "" },
+        { exerciseIndex: 0, exerciseTitle: "Bench Press (Barbell)", exerciseTemplateId: null, supersetId: null, setIndex: 2, setType: "normal", weightKg: 90, reps: 8, distanceMeters: null, durationSeconds: null, rpe: 9.5, notes: "" },
+      ],
+    },
+  ]);
+
+  const hist = await s1.history("2026-11-24", "2026-11-24");
+  const nov24 = hist.find((d) => d.day === "2026-11-24");
+  assert.ok(nov24);
+  const pairedAct = nov24.activities.find((a) => a.kind === "strength");
+  assert.ok(pairedAct);
+  assert.equal(pairedAct.source, "Hevy + Google Health");
+  assert.equal(pairedAct.sets?.length, 3);
+});
+
