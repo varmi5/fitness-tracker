@@ -17,6 +17,7 @@ import {
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
 import { addDays, isCalorieGoalMet } from "../lib/nutrition-model";
 import { metrics, readingsFor, summary } from "../lib/metrics";
+import { RecoveryCard } from "./recovery-card";
 import {
   CATEGORY_LABELS,
   fmtGram,
@@ -29,6 +30,7 @@ import {
   type GoogleIntegrationStatus,
   type NutritionHistory,
   type NutritionSettings,
+  type RecoveryInsightView,
   type ThemeMode,
   type TrackerSnapshot,
 } from "./types";
@@ -44,6 +46,7 @@ interface HomeViewProps {
   google: GoogleIntegrationStatus;
   settings: NutritionSettings;
   strain?: DailyStrainView;
+  recoveryInsights?: RecoveryInsightView;
   theme: ThemeMode;
   busy: boolean;
   onToggleTheme: () => void;
@@ -90,6 +93,7 @@ export function HomeView({
   google,
   settings,
   strain,
+  recoveryInsights,
   busy,
   onSelectHomeDay,
   onOpenTraining,
@@ -265,6 +269,9 @@ export function HomeView({
           </div>
         </button>
       )}
+
+      {/* Stage 7: Recovery Insights (separated from Strain, Fitbit/wearable mode only on Home) */}
+      {isFitbitMode && <RecoveryCard recovery={recoveryInsights} />}
 
       {/* Bevel Segmented Calorie Hero Card */}
       <section className="card card-hero" aria-label="Daily calorie summary">

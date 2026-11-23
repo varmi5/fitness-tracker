@@ -10,10 +10,11 @@ import type {
 } from "../lib/nutrition-data";
 import type { EstimationMethod } from "../lib/nutrition-model";
 import type { DailyStrainView } from "../lib/strain-data";
+import type { RecoveryInsightView } from "../lib/recovery-insights";
 import type { StrainSettings } from "../lib/strain-engine";
 import type { trackerData } from "../lib/tracker-data";
 
-export type { DailyStrainView, EnergyRecord, RecoveryRecord, SleepRecord, StrainSettings, TrackingMode, WorkoutRecord };
+export type { DailyStrainView, EnergyRecord, RecoveryInsightView, RecoveryRecord, SleepRecord, StrainSettings, TrackingMode, WorkoutRecord };
 export type TrackerSnapshot = Awaited<ReturnType<ReturnType<typeof trackerData>["snapshot"]>>;
 export type NutritionSettings = Awaited<ReturnType<ReturnType<typeof nutritionData>["settings"]>> & {
   trackingMode: TrackingMode;
@@ -63,6 +64,7 @@ export interface InitialAppData {
   hevy: HevyIntegrationStatus;
   strain: DailyStrainView;
   strainSettings: StrainSettings;
+  recoveryInsights?: RecoveryInsightView;
   audit: AuditEntry[];
   mcpEnabled: boolean;
   syncToken: string;
