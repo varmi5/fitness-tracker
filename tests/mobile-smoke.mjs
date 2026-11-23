@@ -222,10 +222,11 @@ try {
       }
     }
 
-    // Stage 6: Tapping Overall Strain on Home opens Training
+    // Stage 6 & 7: Tapping Overall Strain on Home opens Training, where Recovery Insights is shown
     await page.getByRole("navigation").getByRole("button", { name: "Home", exact: true }).click();
     await page.getByRole("button", { name: "Overall Strain summary", exact: true }).click();
     await page.getByRole("heading", { name: "Training & Strain", exact: true }).waitFor();
+    await page.getByRole("region", { name: "Recovery Insights", exact: true }).waitFor();
 
     await page.getByRole("navigation").getByRole("button", { name: "Nutrition", exact: true }).click();
     const londonToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date());

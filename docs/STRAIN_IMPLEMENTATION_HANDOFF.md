@@ -58,9 +58,9 @@
 | **Stage 3** | Hevy integration (OAuth if supported for Free, or documented CSV/JSON export/import + sync workflow), workout matching & HR association | **Complete** (`e672d4f`) |
 | **Stage 4** | Core Strain Engine (Edwards TRIMP, Muscular Load, muscle mappings, nonlinear Overall Strain, walking threshold/cap, per-user settings, explainability, versioning) | **Complete** (`904fc2d`) |
 | **Stage 5** | Long-term Cardio Load & Muscular Load (7-day & 42-day EWMAs, muscle-group histories, progression, data-quality handling) | **Complete** (`4263c4c`) |
-| **Stage 6** | Training tab, Daily Strain Breakdown, activity/HR/walking detail views, redesigned Home cards, responsive UI tests | **Complete** |
-| **Stage 7** | Recovery integration (sleep, RHR, HRV, completeness/confidence, separated from Strain) | **Next** |
-| **Stage 8** | Full verification (`npm test`, `npm run build`, `npm run test:ui`, `npm run test:smoke`), security & deployment check | Pending |
+| **Stage 6** | Training tab, Daily Strain Breakdown, activity/HR/walking detail views, redesigned Home cards, responsive UI tests | **Complete** (`22d96f2`) |
+| **Stage 7** | Recovery integration (sleep, RHR, HRV, completeness/confidence, separated from Strain) | **Complete** |
+| **Stage 8** | Full verification (`npm test`, `npm run build`, `npm run test:ui`, `npm run test:smoke`), security & deployment check | **Next** |
 
 ---
 

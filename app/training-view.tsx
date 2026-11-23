@@ -7,11 +7,13 @@ import { BevelSegmentedRing, FitbitPulseIcon, FlameBurnIcon, FootstepsIcon } fro
 import type { StrainActivityBreakdown } from "../lib/strain-data";
 import type { TrainingLoadSummary } from "../lib/training-load";
 import { addDays } from "../lib/nutrition-model";
+import { RecoveryCard } from "./recovery-card";
 import {
   fmtRelativeSync,
   type DailyStrainView,
   type HevyIntegrationStatus,
   type MoreSection,
+  type RecoveryInsightView,
   type StrainSettings,
   type ThemeMode,
 } from "./types";
@@ -20,6 +22,7 @@ interface TrainingViewProps {
   today: string;
   selectedDay: string;
   strain: DailyStrainView;
+  recoveryInsights?: RecoveryInsightView;
   strainSettings: StrainSettings;
   hevy: HevyIntegrationStatus;
   theme: ThemeMode;
@@ -44,6 +47,7 @@ export function TrainingView({
   today,
   selectedDay,
   strain,
+  recoveryInsights,
   strainSettings,
   hevy,
   busy,
@@ -177,6 +181,9 @@ export function TrainingView({
           )}
         </div>
       </section>
+
+      {/* Stage 7: Recovery Insights (separated from Strain) */}
+      <RecoveryCard recovery={recoveryInsights} />
 
       {/* Overall Strain Hero */}
       <section className="card card-hero" aria-label="Overall Strain summary">

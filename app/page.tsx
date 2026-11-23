@@ -4,6 +4,7 @@ import { hevyStatus } from "../lib/hevy";
 import { nutritionData } from "../lib/nutrition-data";
 import { localDay } from "../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../lib/runtime";
+import { getRecoveryInsightsForUser } from "../lib/recovery-insights";
 import { strainData } from "../lib/strain-data";
 import { trackerData } from "../lib/tracker-data";
 import { Dashboard } from "./dashboard";
@@ -44,6 +45,7 @@ export default async function Home() {
   const prefToday = localDay(new Date(), nutritionSettings.timezone);
   const home = await nutrition.homeSnapshot(prefToday, { canReadSleep: google.canReadSleep });
   const strain = await strainSvc.computeDay(prefToday, strainSettings);
+  const recoveryInsights = await getRecoveryInsightsForUser(db, userId, prefToday);
 
   return (
     <Dashboard
@@ -60,6 +62,7 @@ export default async function Home() {
         hevy,
         strain,
         strainSettings,
+        recoveryInsights,
         audit,
         mcpEnabled: Boolean(config.mcpEnabled),
         syncToken,

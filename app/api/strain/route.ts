@@ -2,6 +2,7 @@ import { z } from "zod";
 import { historyInput } from "../../../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
 import { strainData } from "../../../lib/strain-data";
+import { getRecoveryInsightsForUser } from "../../../lib/recovery-insights";
 import { trainingPreferenceInput } from "../../../lib/strain-engine";
 import { getTrainingLoadSummary } from "../../../lib/training-load";
 
@@ -27,8 +28,12 @@ export async function GET(request: Request) {
     if (query.has("day")) {
       const day = z.iso.date().parse(query.get("day"));
       const force = query.get("recompute") === "1";
-      const data = force ? await strain.computeDay(day) : (await strain.history(day, day))[0];
-      return json({ strain: data, settings: await strain.getSettings() });
+      const [data, settings, recoveryInsights] = await Promise.all([
+        force ? strain.computeDay(day) : (await strain.history(day, day))[0],
+        strain.getSettings(),
+        getRecoveryInsightsForUser(db, session.user.id, day),
+      ]);
+      return json({ strain: data, settings, recoveryInsights });
     }
     if (query.has("from") || query.has("to")) {
       const range = historyInput.parse({ from: query.get("from"), to: query.get("to") });

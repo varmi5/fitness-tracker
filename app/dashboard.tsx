@@ -18,6 +18,7 @@ import type {
   HevyIntegrationStatus,
   InitialAppData,
   MoreSection,
+  RecoveryInsightView,
   StrainSettings,
   ThemeMode,
 } from "./types";
@@ -87,6 +88,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [trainingLoading, setTrainingLoading] = useState(false);
   const [strainSettings, setStrainSettings] = useState<StrainSettings | undefined>(initial.strainSettings);
   const [hevy, setHevy] = useState<HevyIntegrationStatus | undefined>(initial.hevy);
+  const [homeRecovery, setHomeRecovery] = useState<RecoveryInsightView | undefined>(initial.recoveryInsights);
+  const [trainingRecovery, setTrainingRecovery] = useState<RecoveryInsightView | undefined>(initial.recoveryInsights);
 
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
@@ -367,6 +370,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       if (strainRes?.ok) {
         const strainJson = await strainRes.json();
         if (homeDayRef.current === clamped && strainJson?.strain) setHomeStrain(strainJson.strain);
+        if (homeDayRef.current === clamped && strainJson?.recoveryInsights) setHomeRecovery(strainJson.recoveryInsights);
       }
     } catch (error) {
       if (!controller.signal.aborted) showToast(error instanceof Error ? error.message : "Could not load that date.", "error");
@@ -388,6 +392,9 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const json = await res.json();
       if (trainingDayRef.current === clamped && json?.strain) {
         setTrainingStrain(json.strain);
+      }
+      if (trainingDayRef.current === clamped && json?.recoveryInsights) {
+        setTrainingRecovery(json.recoveryInsights);
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Could not load strain.", "error");
@@ -745,6 +752,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             google={google}
             settings={settings}
             strain={homeStrain}
+            recoveryInsights={homeRecovery}
             theme={theme}
             busy={busy}
             onToggleTheme={toggleTheme}
@@ -763,6 +771,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             today={today}
             selectedDay={trainingDay}
             strain={trainingStrain}
+            recoveryInsights={trainingRecovery}
             strainSettings={strainSettings}
             hevy={hevy}
             theme={theme}
