@@ -21,7 +21,7 @@ async function main() {
   const db = getDatabase();
   const { grant } = await getFreshGrant(db, userId);
 
-  const filter = `heart_rate.sample_time >= "${startIso}" AND heart_rate.sample_time <= "${endIso}"`;
+  const filter = `heart_rate.sample_time.physical_time >= "${startIso}" AND heart_rate.sample_time.physical_time <= "${endIso}"`;
   for (const family of ["google-wearables", "all-sources"] as const) {
     const url = new URL("https://health.googleapis.com/v4/users/me/dataTypes/heart-rate/dataPoints:reconcile");
     url.searchParams.set("filter", filter);

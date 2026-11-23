@@ -228,42 +228,66 @@ export function HomeView({
       {strain && (
         <button
           type="button"
-          className="card"
+          className="card card-interactive"
           aria-label="Overall Strain summary"
           onClick={() => (onOpenTraining ? onOpenTraining(viewDay) : onNavigate("Training"))}
           style={{
-            width: "100%",
-            textAlign: "left",
-            cursor: "pointer",
-            display: "grid",
             gap: ".75rem",
+            background: "var(--surface)",
+            color: "var(--text)",
           }}
         >
           <div className="split-row">
-            <span className="eyebrow" style={{ display: "inline-flex", alignItems: "center", gap: ".4rem" }}>
-              <FitbitPulseIcon size={15} />
+            <span
+              className="eyebrow"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: ".4rem",
+                color: "var(--text)",
+                fontWeight: 650,
+              }}
+            >
+              <FitbitPulseIcon size={16} />
               Overall Strain
             </span>
-            <span className="pill">
-              {strain.confidence} · View breakdown →
-            </span>
-          </div>
-          <div className="split-row" style={{ alignItems: "baseline" }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: ".35rem" }}>
-              <strong className="num" style={{ fontSize: "2rem", lineHeight: 1 }}>
-                {Math.round(strain.overallStrain)}
-              </strong>
-              <span className="muted" style={{ fontSize: ".9rem" }}>/ 100</span>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: ".4rem", flexWrap: "wrap" }}>
+              <span
+                className={`pill ${
+                  strain.confidence === "complete"
+                    ? "teal-soft"
+                    : strain.confidence === "partial"
+                      ? "amber-soft"
+                      : "accent-soft"
+                }`}
+              >
+                {strain.confidence === "complete"
+                  ? "Complete"
+                  : strain.confidence === "partial"
+                    ? "Partial data"
+                    : strain.confidence === "rest"
+                      ? "Rest day"
+                      : "No activity yet"}
+              </span>
+              <span className="pill">Training →</span>
             </div>
-            <div className="muted" style={{ fontSize: ".82rem", display: "flex", gap: ".85rem", flexWrap: "wrap" }}>
-              <span>
-                Cardio <strong className="num">{Math.round(strain.cardioStrain)}</strong>
+          </div>
+          <div className="split-row" style={{ alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: ".35rem" }}>
+              <strong className="num" style={{ fontSize: "2.1rem", lineHeight: 1, color: "var(--text)" }}>
+                {strain.overallStrain == null ? "0.0" : strain.overallStrain.toFixed(1)}
+              </strong>
+              <span style={{ fontSize: ".9rem", color: "var(--muted)" }}>/ 100</span>
+            </div>
+            <div style={{ display: "flex", gap: ".45rem", flexWrap: "wrap" }}>
+              <span className="pill teal-soft">
+                Cardio <strong className="num">{strain.cardioStrain == null ? "0.0" : strain.cardioStrain.toFixed(1)}</strong>
               </span>
-              <span>
-                Muscular <strong className="num">{Math.round(strain.muscularStrain)}</strong>
+              <span className="pill protein-soft">
+                Muscular <strong className="num">{strain.muscularStrain == null ? "0.0" : strain.muscularStrain.toFixed(1)}</strong>
               </span>
-              <span>
-                Walking <strong className="num">+{strain.walkingPoints.toFixed(1)}</strong>
+              <span className="pill accent-soft">
+                Walking <strong className="num">+{(strain.walkingPoints ?? 0).toFixed(1)}</strong>
               </span>
             </div>
           </div>

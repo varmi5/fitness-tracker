@@ -8,14 +8,17 @@ import { DEFAULT_TIMEZONE, localDay } from "./nutrition-model";
 import { dailyWorkout, healthIntegration, heartRateSample, hevySet, hevyWorkout } from "./schema";
 
 const HEVY_API_BASE = "https://api.hevyapp.com/v1";
-const HEVY_AUTHORIZE_URL = "https://hevy.com/oauth/authorize";
-const HEVY_TOKEN_URL = "https://hevy.com/oauth/token";
+const HEVY_AUTHORIZE_URL = process.env.HEVY_AUTHORIZE_URL ?? "https://hevy.com/oauth/authorize";
+const HEVY_TOKEN_URLS = process.env.HEVY_TOKEN_URL
+  ? [process.env.HEVY_TOKEN_URL]
+  : ["https://api.hevyapp.com/v1/oauth/token", "https://hevy.com/oauth/token"];
+const DEFAULT_HEVY_SCOPES = ["read-workout", "read-exercise", "read-profile"];
 
 const hevyTokensSchema = z.object({
   accessToken: z.string(),
   refreshToken: z.string().optional().default(""),
   expiresAt: z.number(),
-  scopes: z.array(z.string()).default(["read:workouts"]),
+  scopes: z.array(z.string()).default(DEFAULT_HEVY_SCOPES),
 });
 type HevyTokens = z.infer<typeof hevyTokensSchema>;
 
@@ -66,7 +69,7 @@ export function hevyConsentUrl(callback: string, state: string): URL {
     client_id: process.env.HEVY_CLIENT_ID!,
     response_type: "code",
     redirect_uri: callback,
-    scope: "read:workouts",
+    scope: process.env.HEVY_OAUTH_SCOPES ?? DEFAULT_HEVY_SCOPES.join(" "),
     state,
   }).toString();
   return url;
@@ -76,17 +79,23 @@ export async function exchangeHevyToken(params: Record<string, string>, previous
   if (!hevyOAuthConfigured()) {
     throw new NutritionError("Hevy OAuth is not configured on this server.", 503);
   }
-  const response = await fetch(HEVY_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    signal: AbortSignal.timeout(10000),
-    body: new URLSearchParams({
-      ...params,
-      client_id: process.env.HEVY_CLIENT_ID!,
-      client_secret: process.env.HEVY_CLIENT_SECRET!,
-    }),
+  const body = new URLSearchParams({
+    ...params,
+    client_id: process.env.HEVY_CLIENT_ID!,
+    client_secret: process.env.HEVY_CLIENT_SECRET!,
   });
-  if (!response.ok) {
+
+  let response: Response | null = null;
+  for (const tokenUrl of HEVY_TOKEN_URLS) {
+    response = await fetch(tokenUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      signal: AbortSignal.timeout(10000),
+      body,
+    });
+    if (response.status !== 404) break;
+  }
+  if (!response || !response.ok) {
     throw new NutritionError("Hevy rejected the authorization. Reconnect Hevy.", 422);
   }
   const wire = z
@@ -102,7 +111,7 @@ export async function exchangeHevyToken(params: Record<string, string>, previous
     accessToken: wire.access_token,
     refreshToken: wire.refresh_token ?? previous?.refreshToken ?? "",
     expiresAt: Date.now() + wire.expires_in * 1000,
-    scopes: wire.scope ? wire.scope.split(/\s+/).filter(Boolean) : previous?.scopes ?? ["read:workouts"],
+    scopes: wire.scope ? wire.scope.split(/\s+/).filter(Boolean) : previous?.scopes ?? DEFAULT_HEVY_SCOPES,
   };
 }
 

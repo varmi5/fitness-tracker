@@ -417,6 +417,10 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         if (trainingDayRef.current === day) setTrainingStrain(json.strain);
         if (homeDayRef.current === day) setHomeStrain(json.strain);
       }
+      if (json?.recoveryInsights) {
+        if (trainingDayRef.current === day) setTrainingRecovery(json.recoveryInsights);
+        if (homeDayRef.current === day) setHomeRecovery(json.recoveryInsights);
+      }
       showToast("Strain recalculated.", "success");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Could not recompute strain.", "error");
@@ -665,6 +669,10 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             if (j?.strain) {
               if (homeDayRef.current === today) setHomeStrain(j.strain);
               if (trainingDayRef.current === today) setTrainingStrain(j.strain);
+            }
+            if (j?.recoveryInsights) {
+              if (homeDayRef.current === today) setHomeRecovery(j.recoveryInsights);
+              if (trainingDayRef.current === today) setTrainingRecovery(j.recoveryInsights);
             }
           })
           .catch(() => undefined),

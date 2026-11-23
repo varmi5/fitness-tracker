@@ -459,13 +459,14 @@ export function parseGoogleRecovery(type: RecoveryType, payload: unknown, timezo
   const envelope = z
     .object({
       dataPoints: z.array(z.unknown()).default([]),
+      reconciledDataPoints: z.array(z.unknown()).default([]),
       rollupDataPoints: z.array(z.unknown()).default([]),
       nextPageToken: z.string().optional(),
     })
     .parse(payload);
 
   const rows = new Map<string, number>();
-  const points = [...envelope.rollupDataPoints, ...envelope.dataPoints];
+  const points = [...envelope.reconciledDataPoints, ...envelope.rollupDataPoints, ...envelope.dataPoints];
 
   for (const raw of points) {
     if (!raw || typeof raw !== "object") continue;
@@ -507,24 +508,40 @@ async function fetchRecoveryMetric(
   endExclusive: string,
   timezone = DEFAULT_TIMEZONE,
 ) {
-  let pageToken: string | undefined;
   const rows = new Map<string, number>();
-  const filter =
+  const snakeType = type.replaceAll("-", "_");
+  const primaryFilter =
+    type === "body-fat"
+      ? `body_fat.sample_time.physical_time >= "${from}T00:00:00Z" AND body_fat.sample_time.physical_time < "${endExclusive}T00:00:00Z"`
+      : `${snakeType}.date >= "${from}" AND ${snakeType}.date < "${endExclusive}"`;
+  const fallbackFilter =
     type === "body-fat"
       ? `body_fat.sample_time >= "${from}T00:00:00Z" AND body_fat.sample_time < "${endExclusive}T00:00:00Z"`
       : `date >= "${from}" AND date < "${endExclusive}"`;
 
+  let activeFilter = primaryFilter;
+  let pageToken: string | undefined;
+
   for (let page = 0; page < 10; page++) {
     const url = new URL(`${googleAPI}/dataTypes/${type}/dataPoints:reconcile`);
-    url.searchParams.set("filter", filter);
+    url.searchParams.set("filter", activeFilter);
     url.searchParams.set("pageSize", "100");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
 
-    const response = await fetch(url, {
+    let response = await fetch(url, {
       headers: { Authorization: `Bearer ${grant.accessToken}` },
       signal: AbortSignal.timeout(8000),
       cache: "no-store",
     });
+    if (!response.ok && page === 0 && activeFilter === primaryFilter) {
+      activeFilter = fallbackFilter;
+      url.searchParams.set("filter", activeFilter);
+      response = await fetch(url, {
+        headers: { Authorization: `Bearer ${grant.accessToken}` },
+        signal: AbortSignal.timeout(8000),
+        cache: "no-store",
+      });
+    }
     if (!response.ok) throw new NutritionError(`Google Health could not retrieve ${type}.`, 502);
     const parsed = parseGoogleRecovery(type, await response.json(), timezone);
     for (const [day, value] of parsed.rows) {
@@ -568,6 +585,9 @@ export function parseGoogleWorkouts(payload: unknown, timezone = DEFAULT_TIMEZON
     ? payload
     : payload && typeof payload === "object"
       ? [
+          ...(Array.isArray((payload as Record<string, unknown>).reconciledDataPoints)
+            ? ((payload as Record<string, unknown>).reconciledDataPoints as unknown[])
+            : []),
           ...(Array.isArray((payload as Record<string, unknown>).dataPoints)
             ? ((payload as Record<string, unknown>).dataPoints as unknown[])
             : []),
@@ -781,7 +801,7 @@ export async function fetchExerciseSessions(
   for (let page = 0; page < 10; page++) {
     const url = new URL(`${googleAPI}/dataTypes/exercise/dataPoints:reconcile`);
     url.searchParams.set("filter", filter);
-    url.searchParams.set("pageSize", "50");
+    url.searchParams.set("pageSize", "25");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
 
     const response = await fetch(url, {
@@ -965,26 +985,37 @@ export async function fetchHeartRateSamples(
   endExclusive: string,
   timezone = DEFAULT_TIMEZONE,
 ): Promise<{ samples: ParsedHeartRateSample[]; sourceFamily: string; pages: number }> {
-  const filter = `heart_rate.sample_time >= "${from}T00:00:00Z" AND heart_rate.sample_time < "${endExclusive}T00:00:00Z"`;
+  const primaryFilter = `heart_rate.sample_time.physical_time >= "${from}T00:00:00Z" AND heart_rate.sample_time.physical_time < "${endExclusive}T00:00:00Z"`;
+  const fallbackFilter = `heart_rate.sample_time >= "${from}T00:00:00Z" AND heart_rate.sample_time < "${endExclusive}T00:00:00Z"`;
 
   const fetchFamily = async (family: "google-wearables" | "all-sources") => {
     let pageToken: string | undefined;
     let pages = 0;
+    let activeFilter = primaryFilter;
     const merged = new Map<string, ParsedHeartRateSample>();
 
     for (let page = 0; page < 20; page++) {
       pages += 1;
       const url = new URL(`${googleAPI}/dataTypes/heart-rate/dataPoints:reconcile`);
-      url.searchParams.set("filter", filter);
+      url.searchParams.set("filter", activeFilter);
       url.searchParams.set("pageSize", "10000");
       url.searchParams.set("dataSourceFamily", `users/me/dataSourceFamilies/${family}`);
       if (pageToken) url.searchParams.set("pageToken", pageToken);
 
-      const response = await fetch(url, {
+      let response = await fetch(url, {
         headers: { Authorization: `Bearer ${grant.accessToken}` },
         signal: AbortSignal.timeout(9000),
         cache: "no-store",
       });
+      if (!response.ok && page === 0 && activeFilter === primaryFilter) {
+        activeFilter = fallbackFilter;
+        url.searchParams.set("filter", activeFilter);
+        response = await fetch(url, {
+          headers: { Authorization: `Bearer ${grant.accessToken}` },
+          signal: AbortSignal.timeout(9000),
+          cache: "no-store",
+        });
+      }
       if (!response.ok) {
         throw new NutritionError(`Google Health heart-rate request failed (${response.status}).`, 502);
       }
@@ -1144,13 +1175,15 @@ export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE):
   const envelope = z
     .object({
       dataPoints: z.array(z.unknown()).default([]),
+      reconciledDataPoints: z.array(z.unknown()).default([]),
       nextPageToken: z.string().optional(),
     })
     .parse(payload);
 
   const sessions = new Map<string, ParsedSleepSession>();
+  const points = [...envelope.reconciledDataPoints, ...envelope.dataPoints];
 
-  for (const raw of envelope.dataPoints) {
+  for (const raw of points) {
     if (!raw || typeof raw !== "object") continue;
     const item = raw as Record<string, unknown>;
     const sleepObj = (item.sleep ?? item) as Record<string, unknown> | undefined;

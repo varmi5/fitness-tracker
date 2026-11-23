@@ -257,7 +257,27 @@ label small { color: var(--muted); font-weight: 400; }
   border: 1px solid var(--border);
   border-radius: 22px;
   background: var(--surface);
+  color: var(--text);
+  white-space: normal;
   box-shadow: var(--shadow-sm);
+}
+button.card,
+.card-interactive {
+  display: grid;
+  width: 100%;
+  text-align: left;
+  justify-content: stretch;
+  align-items: stretch;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  font-weight: 400;
+  white-space: normal;
+  cursor: pointer;
+}
+button.card:hover,
+.card-interactive:hover {
+  border-color: var(--accent-border);
 }
 .card-hero {
   background: var(--hero-bg);
@@ -896,7 +916,8 @@ label small { color: var(--muted); font-weight: 400; }
   .macro-range-field { grid-column: auto; }
 }
 
-.seg-tabs {
+.seg-tabs,
+.segmented {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: .3rem;
@@ -905,15 +926,23 @@ label small { color: var(--muted); font-weight: 400; }
   border-radius: 14px;
   border: 1px solid var(--border);
 }
-.seg-tabs button {
+.segmented,
+.seg-tabs-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.seg-tabs button,
+.segmented button {
   background: transparent;
   color: var(--muted);
-  font-size: .76rem;
+  font-size: .82rem;
   min-height: 44px;
   padding: .28rem .35rem;
   border-radius: 10px;
 }
-.seg-tabs button[aria-pressed="true"] {
+.seg-tabs button[aria-pressed="true"],
+.seg-tabs button[aria-selected="true"],
+.segmented button[aria-selected="true"],
+.segmented button.active {
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow-sm);
