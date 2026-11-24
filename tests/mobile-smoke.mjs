@@ -64,7 +64,8 @@ try {
     const nextDayBtn = page.getByRole("button", { name: "Next day", exact: true });
     await prevDayBtn.waitFor();
     assert.equal(await nextDayBtn.isDisabled(), true);
-    await page.getByRole("heading", { name: "Nutrition Score", exact: true }).waitFor();
+    await page.getByText("Calorie Intake", { exact: true }).waitFor();
+    await page.getByRole("progressbar").first().waitFor();
 
     const homeText = await page.locator("main").innerText();
     for (const forbidden of [
@@ -90,11 +91,12 @@ try {
     assert.equal((await page.locator("h1").innerText()).trim(), "Today");
     assert.equal(await nextDayBtn.isDisabled(), true);
 
+    const nav = page.getByRole("navigation");
     const fab = page.getByRole("button", { name: "Log meal", exact: true });
-    assert.equal(await fab.evaluate((node) => getComputedStyle(node).position), "fixed");
-    const fabBox = await fab.boundingBox(); const navBox = await page.getByRole("navigation").boundingBox();
-    assert.ok(fabBox.x + fabBox.width / 2 > page.viewportSize().width / 2);
-    assert.ok(fabBox.y + fabBox.height < navBox.y);
+    assert.equal(await nav.evaluate((node) => getComputedStyle(node).position), "fixed");
+    const fabBox = await fab.boundingBox(); const navBox = await nav.boundingBox();
+    assert.ok(fabBox && navBox && fabBox.x >= navBox.x && fabBox.x + fabBox.width <= navBox.x + navBox.width + 2);
+    assert.ok(fabBox.y >= navBox.y - 2 && fabBox.y + fabBox.height <= navBox.y + navBox.height + 2);
     await fab.click();
     const modal = page.getByRole("dialog");
     await modal.waitFor();

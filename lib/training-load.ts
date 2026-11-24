@@ -56,6 +56,16 @@ export interface MuscleLoadSummary {
   weeklyWorkingSets: number;
 }
 
+export interface MuscleFreshnessEntry {
+  muscle: MuscleGroup;
+  freshnessPct: number;
+  status: "fresh" | "recovering" | "fatigued";
+  daysSinceTrained: number | null;
+  lastTrainedDay: string | null;
+  weeklyWorkingSets: number;
+  recentLoad: number;
+}
+
 export interface TrainingLoadSummary {
   from: string;
   to: string;
@@ -66,6 +76,7 @@ export interface TrainingLoadSummary {
   cardioStatus: LoadStatusAssessment | null;
   muscularStatus: LoadStatusAssessment | null;
   muscleSummaries: MuscleLoadSummary[];
+  muscleFreshness: MuscleFreshnessEntry[];
   exerciseProgression: ExerciseProgressionEntry[];
   dataQuality: {
     totalDays: number;
@@ -332,6 +343,44 @@ export async function getTrainingLoadSummary(
     weeklyWorkingSets: Math.round(muscleWorkingSets[muscle] * 10) / 10,
   }));
 
+  const toMs = new Date(`${to}T12:00:00Z`).getTime();
+  const muscleFreshness: MuscleFreshnessEntry[] = MUSCLE_GROUPS.map((muscle) => {
+    let residualLoad = 0;
+    let lastTrainedDay: string | null = null;
+    for (const d of days) {
+      const load = d.muscleLoads?.[muscle] ?? 0;
+      if (load <= 0) continue;
+      const dayMs = new Date(`${d.day}T12:00:00Z`).getTime();
+      const daysAgo = Math.max(0, Math.round((toMs - dayMs) / 86_400_000));
+      if (daysAgo <= 7) {
+        // Exponential recovery curve (~30h half-life; heavy 8-10 load takes ~48-60h to recover to >=80%)
+        residualLoad += load * Math.exp(-daysAgo / 1.8);
+      }
+      if (!lastTrainedDay || d.day > lastTrainedDay) {
+        lastTrainedDay = d.day;
+      }
+    }
+    const freshnessPct =
+      residualLoad <= 0.05
+        ? 100
+        : Math.max(5, Math.min(100, Math.round(100 * Math.exp(-residualLoad / 8.5))));
+    const status: MuscleFreshnessEntry["status"] =
+      freshnessPct >= 80 ? "fresh" : freshnessPct >= 45 ? "recovering" : "fatigued";
+    const daysSinceTrained =
+      lastTrainedDay != null
+        ? Math.max(0, Math.round((toMs - new Date(`${lastTrainedDay}T12:00:00Z`).getTime()) / 86_400_000))
+        : null;
+    return {
+      muscle,
+      freshnessPct,
+      status,
+      daysSinceTrained,
+      lastTrainedDay,
+      weeklyWorkingSets: Math.round(muscleWorkingSets[muscle] * 10) / 10,
+      recentLoad: Math.round(muscleTotals[muscle] * 100) / 100,
+    };
+  });
+
   const exerciseProgression: ExerciseProgressionEntry[] = [...progressionMap.entries()]
     .map(([exerciseTitle, e]) => ({
       exerciseTitle,
@@ -365,6 +414,7 @@ export async function getTrainingLoadSummary(
     cardioStatus,
     muscularStatus,
     muscleSummaries,
+    muscleFreshness,
     exerciseProgression,
     dataQuality: {
       totalDays: days.length,

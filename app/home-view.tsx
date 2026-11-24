@@ -1,30 +1,17 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Plus, RefreshCw } from "lucide-react";
-import {
-  BevelDotGauge,
-  BevelSegmentedRing,
-  FitbitPulseIcon,
-  FlameBurnIcon,
-  FootstepsIcon,
-  McpBrandMark,
-  MealCategoryIcon,
-  ScaleWeighedIcon,
-  SparklePhotoIcon,
-  TwoWaySyncIcon,
-  WeightScaleIcon,
-} from "../components/icons";
+import { useState } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
+import { BevelScoreRing, CalorieSlider } from "../components/bevel-widgets";
+import { McpBrandMark, MealCategoryIcon } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
 import { addDays, isCalorieGoalMet } from "../lib/nutrition-model";
+import { computeTargetStrain } from "../lib/strain-engine";
 import { metrics, readingsFor, summary } from "../lib/metrics";
-import { RecoveryCard } from "./recovery-card";
 import {
   CATEGORY_LABELS,
   fmtGram,
   fmtKcal,
-  fmtRelativeSync,
-  mealMethodSummary,
-  METHOD_LABELS,
   type AppTab,
   type DailyStrainView,
   type GoogleIntegrationStatus,
@@ -67,20 +54,7 @@ function formatDurationMinutes(minutes: number): string {
 
 function formatDurationSeconds(seconds: number | null): string | null {
   if (seconds == null || seconds <= 0) return null;
-  const mins = Math.round(seconds / 60);
-  return formatDurationMinutes(mins);
-}
-
-function formatIsoClock(iso: string | null, timezone: string): string | null {
-  if (!iso) return null;
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+  return formatDurationMinutes(Math.round(seconds / 60));
 }
 
 export function HomeView({
@@ -97,45 +71,71 @@ export function HomeView({
   busy,
   onSelectHomeDay,
   onOpenTraining,
-  onLogMeal,
   onEditMeal,
   onSyncGoogle,
-  onPushGoogle,
   onNavigate,
 }: HomeViewProps) {
+  const [mealsExpanded, setMealsExpanded] = useState(false);
+  const [sleepDetailOpen, setSleepDetailOpen] = useState(false);
+
   const isFitbitMode = settings.trackingMode === "fitbit";
   const isBulkMode = Boolean(settings.bulkMode);
 
   const intake = daily.totals.calories;
   const target = daily.target;
-  const pct = intake == null || target <= 0 ? 0 : Math.min(100, Math.round((intake / target) * 100));
+  const calPct = intake == null || target <= 0 ? 0 : Math.round((intake / target) * 100);
   const goalMet = isCalorieGoalMet(intake, target, isBulkMode);
-  const overTarget = goalMet === false;
 
   const remainingLabel =
     intake == null
       ? isBulkMode
-        ? `${fmtKcal(target)} kcal to target`
-        : `${fmtKcal(target)} kcal left`
+        ? `${fmtKcal(target)} to target`
+        : `${fmtKcal(target)} left`
       : isBulkMode
         ? daily.remaining != null && daily.remaining > 0
-          ? `${fmtKcal(daily.remaining)} under target`
-          : `${fmtKcal(Math.abs(daily.remaining ?? 0))} over · target met`
+          ? `${fmtKcal(daily.remaining)} under`
+          : `${fmtKcal(Math.abs(daily.remaining ?? 0))} over · met`
         : daily.remaining != null && daily.remaining >= 0
           ? `${fmtKcal(daily.remaining)} left`
           : `${fmtKcal(Math.abs(daily.remaining ?? 0))} over`;
 
-  const proteinGoal = daily.macroTargets.proteinG;
-  const fibreGoal = daily.macroTargets.fibreG;
-  const carbsGoal = daily.macroTargets.carbsG;
-  const fatGoal = daily.macroTargets.fatG;
-
-  // Protein & Fibre prioritized on row 1 above Carbs & Fat
-  const macroCards = [
-    { label: "Protein", val: daily.totals.proteinG, goal: proteinGoal, color: "var(--macro-protein)", priority: true },
-    { label: "Fibre", val: daily.totals.fibreG, goal: fibreGoal, color: "var(--macro-fibre)", priority: true },
-    { label: "Carbs", val: daily.totals.carbsG, goal: carbsGoal, color: "var(--macro-carbs)", priority: false },
-    { label: "Fat", val: daily.totals.fatG, goal: fatGoal, color: "var(--macro-fat)", priority: false },
+  const macroBars = [
+    {
+      label: "Protein",
+      valueText: fmtGram(daily.totals.proteinG),
+      pct:
+        daily.totals.proteinG != null && daily.macroTargets.proteinG > 0
+          ? Math.round((daily.totals.proteinG / daily.macroTargets.proteinG) * 100)
+          : 0,
+      color: "var(--macro-protein)",
+    },
+    {
+      label: "Fibre",
+      valueText: fmtGram(daily.totals.fibreG),
+      pct:
+        daily.totals.fibreG != null && daily.macroTargets.fibreG > 0
+          ? Math.round((daily.totals.fibreG / daily.macroTargets.fibreG) * 100)
+          : 0,
+      color: "var(--macro-fibre)",
+    },
+    {
+      label: "Carbs",
+      valueText: fmtGram(daily.totals.carbsG),
+      pct:
+        daily.totals.carbsG != null && daily.macroTargets.carbsG > 0
+          ? Math.round((daily.totals.carbsG / daily.macroTargets.carbsG) * 100)
+          : 0,
+      color: "var(--macro-carbs)",
+    },
+    {
+      label: "Fat",
+      valueText: fmtGram(daily.totals.fatG),
+      pct:
+        daily.totals.fatG != null && daily.macroTargets.fatG > 0
+          ? Math.round((daily.totals.fatG / daily.macroTargets.fatG) * 100)
+          : 0,
+      color: "var(--macro-fat)",
+    },
   ];
 
   // Weight resolution scoped strictly to viewDay
@@ -165,29 +165,45 @@ export function HomeView({
         ? "Yesterday"
         : viewDateDisplay;
 
-  const manualSourceLabel =
-    daily.energy?.source === "manual"
-      ? "Manual TDEE"
-      : daily.energy?.source === "apple"
-        ? "Saved Health Import"
-        : "Manual TDEE mode · No TDEE entered";
+  const strainTarget = computeTargetStrain(recoveryInsights?.score);
+  const overallStrain = strain?.overallStrain ?? null;
+  const recoveryScore = recoveryInsights?.score ?? null;
+  const sleepMinutes = daily.sleep?.minutesAsleep ?? recoveryInsights?.metrics.sleepMinutes ?? null;
+  const sleepPct = sleepMinutes != null ? Math.min(100, Math.round((sleepMinutes / 480) * 100)) : 0;
+  const vitalsPending = isFitbitMode && recoveryScore == null && sleepMinutes == null;
 
-  const score = daily.nutritionScore;
-  const bedClock = formatIsoClock(daily.sleep?.sleepStart ?? null, daily.timezone);
-  const wakeClock = formatIsoClock(daily.sleep?.sleepEnd ?? null, daily.timezone);
+  const primaryWorkout =
+    strain?.activities.find((a) => a.kind === "strength" || a.kind === "cardio") ?? null;
 
-  const showManualSteps = !isFitbitMode && daily.energy?.steps != null;
-  const showManualActiveBurn = !isFitbitMode && daily.energy?.activeKcal != null;
+  const openTrainingView = () => (onOpenTraining ? onOpenTraining(viewDay) : onNavigate("Training"));
 
   return (
     <>
-      <div className="page-header">
+      {/* Minimal Bevel Header */}
+      <div className="page-header" style={{ marginBottom: ".15rem" }}>
         <div className="page-header-title" style={{ width: "100%" }}>
-          <div className="brand-lockup" style={{ marginBottom: ".2rem" }}>
-            <span className="brand-badge"><McpBrandMark size={16} /></span>
-            <span>FitnessTrackr</span>
+          <div className="split-row" style={{ alignItems: "center" }}>
+            <div className="brand-lockup">
+              <span className="brand-badge">
+                <McpBrandMark size={15} />
+              </span>
+              <span style={{ fontSize: ".82rem", letterSpacing: "-0.01em" }}>FitnessTrackr</span>
+            </div>
+            {isFitbitMode && google.connected && (
+              <button
+                type="button"
+                className="secondary compact"
+                style={{ minHeight: "32px", padding: ".2rem .6rem", fontSize: ".74rem" }}
+                disabled={busy}
+                onClick={onSyncGoogle}
+                aria-label="Sync Google Health"
+              >
+                <RefreshCw size={12} /> Sync
+              </button>
+            )}
           </div>
-          <div className="home-date-nav">
+
+          <div className="home-date-nav" style={{ marginTop: ".25rem" }}>
             <button
               type="button"
               className="secondary compact home-step-btn"
@@ -196,7 +212,10 @@ export function HomeView({
             >
               <ChevronLeft size={18} />
             </button>
-            <h1>{viewTitle}</h1>
+            <div style={{ textAlign: "center" }}>
+              <h1 style={{ fontSize: "1.45rem", letterSpacing: "-0.03em", margin: 0 }}>{viewTitle}</h1>
+              <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>{viewDateDisplay}</div>
+            </div>
             <button
               type="button"
               className="secondary compact home-step-btn"
@@ -207,541 +226,261 @@ export function HomeView({
               <ChevronRight size={18} />
             </button>
           </div>
-          <div className="page-sub">
-            <span>{viewDateDisplay}</span>
-            <span className="pill">{daily.timezone}</span>
-            {viewDay !== activeDay && (
+
+          {viewDay !== activeDay && (
+            <div style={{ display: "flex", justifyContent: "center", marginTop: ".25rem" }}>
               <button
                 type="button"
                 className="secondary compact"
-                style={{ minHeight: "34px", padding: ".2rem .65rem", fontSize: ".76rem" }}
+                style={{ minHeight: "30px", padding: ".18rem .65rem", fontSize: ".74rem" }}
                 onClick={() => onSelectHomeDay(activeDay)}
               >
                 Back to {activeDay === calendarToday ? "today" : "active day"}
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Tappable Overall Strain Hero Summary Card */}
-      {strain && (
-        <button
-          type="button"
-          className="card card-interactive"
-          aria-label="Overall Strain summary"
-          onClick={() => (onOpenTraining ? onOpenTraining(viewDay) : onNavigate("Training"))}
-          style={{
-            gap: ".75rem",
-            background: "var(--surface)",
-            color: "var(--text)",
-          }}
-        >
-          <div className="split-row">
-            <span
-              className="eyebrow"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: ".4rem",
-                color: "var(--text)",
-                fontWeight: 650,
-              }}
-            >
-              <FitbitPulseIcon size={16} />
-              Overall Strain
-            </span>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: ".4rem", flexWrap: "wrap" }}>
-              <span
-                className={`pill ${
-                  strain.confidence === "complete"
-                    ? "teal-soft"
-                    : strain.confidence === "partial"
-                      ? "amber-soft"
-                      : "accent-soft"
-                }`}
-              >
-                {strain.confidence === "complete"
-                  ? "Complete"
-                  : strain.confidence === "partial"
-                    ? "Partial data"
-                    : strain.confidence === "rest"
-                      ? "Rest day"
-                      : "No activity yet"}
-              </span>
-              <span className="pill">Training →</span>
-            </div>
+      {/* Bevel-Style Triple-Ring Hero (Strain · Recovery · Sleep) */}
+      <section className="card triple-ring-card" aria-label="Daily score rings">
+        {isFitbitMode ? (
+          <div className="triple-ring-grid">
+            <BevelScoreRing
+              label="Strain"
+              value={overallStrain}
+              displayText={overallStrain == null ? "—" : Math.round(overallStrain).toString()}
+              pct={overallStrain ?? 0}
+              color="var(--strain-color)"
+              targetRange={[strainTarget.min, strainTarget.max]}
+              sublabel={`Target ${strainTarget.min}–${strainTarget.max}`}
+              onClick={openTrainingView}
+            />
+            <BevelScoreRing
+              label="Recovery"
+              value={recoveryScore}
+              displayText={recoveryScore == null ? "—" : `${recoveryScore}%`}
+              pct={recoveryScore ?? 0}
+              color="var(--recovery-color)"
+              sublabel={
+                recoveryInsights?.band === "optimal"
+                  ? "Optimal"
+                  : recoveryInsights?.band === "moderate"
+                    ? "Moderate"
+                    : recoveryInsights?.band === "strained"
+                      ? "Strained"
+                      : "Pending"
+              }
+              onClick={openTrainingView}
+            />
+            <BevelScoreRing
+              label="Sleep"
+              value={sleepMinutes}
+              displayText={sleepMinutes == null ? "—" : formatDurationMinutes(sleepMinutes)}
+              pct={sleepPct}
+              color="var(--sleep-color)"
+              sublabel={sleepMinutes == null ? "Pending" : `${sleepPct}% of 8h`}
+              onClick={() => setSleepDetailOpen((v) => !v)}
+            />
           </div>
-          <div className="split-row" style={{ alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: ".35rem" }}>
-              <strong className="num" style={{ fontSize: "2.1rem", lineHeight: 1, color: "var(--text)" }}>
-                {strain.overallStrain == null ? "0.0" : strain.overallStrain.toFixed(1)}
-              </strong>
-              <span style={{ fontSize: ".9rem", color: "var(--muted)" }}>/ 100</span>
-            </div>
-            <div style={{ display: "flex", gap: ".45rem", flexWrap: "wrap" }}>
-              <span className="pill teal-soft">
-                Cardio <strong className="num">{strain.cardioStrain == null ? "0.0" : strain.cardioStrain.toFixed(1)}</strong>
-              </span>
-              <span className="pill protein-soft">
-                Muscular <strong className="num">{strain.muscularStrain == null ? "0.0" : strain.muscularStrain.toFixed(1)}</strong>
-              </span>
-              <span className="pill accent-soft">
-                Walking <strong className="num">+{(strain.walkingPoints ?? 0).toFixed(1)}</strong>
-              </span>
-            </div>
-          </div>
-        </button>
-      )}
-
-      {/* Stage 7: Recovery Insights (separated from Strain, Fitbit/wearable mode only on Home) */}
-      {isFitbitMode && <RecoveryCard recovery={recoveryInsights} />}
-
-      {/* Bevel Segmented Calorie Hero Card */}
-      <section className="card card-hero" aria-label="Daily calorie summary">
-        <div className="ring-layout">
-          <div className="ring-wrap">
-            <BevelSegmentedRing pct={pct} overTarget={overTarget} />
-            <div className="ring-center">
-              <strong className="num">{fmtKcal(intake ?? 0)}</strong>
-              <span>{intake == null ? "no meals yet" : `of ${fmtKcal(target)} kcal`}</span>
-            </div>
-          </div>
-
-          <div className="hero-stats">
-            <div className="split-row">
-              <div>
-                <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
-                  {isBulkMode ? "Bulk target status" : "Allowance status"}
-                </div>
-                <strong
-                  className="num"
-                  style={{
-                    fontSize: "1.18rem",
-                    color: goalMet === null ? "var(--text)" : goalMet ? "var(--accent)" : "var(--danger-fg)",
-                  }}
-                >
-                  {remainingLabel}
-                </strong>
-              </div>
-              <button
-                type="button"
-                className={`pill score-pill-${score.grade ?? "none"}`}
-                style={{ minHeight: "36px", cursor: "pointer" }}
-                onClick={() => onNavigate("Nutrition")}
-              >
-                <span>Score</span>
-                <strong className="num">
-                  {score.score == null ? "—" : `${score.score}/100`}
-                </strong>
-                {score.grade && <span>· {score.grade}</span>}
-              </button>
-            </div>
-
-            <div className="hero-figures">
-              <div className="stat-mini">
-                <span>Consumed</span>
-                <strong className="num">{intake == null ? "—" : fmtKcal(intake)}</strong>
-              </div>
-              <div className="stat-mini">
-                <span>Target</span>
-                <strong className="num">{fmtKcal(target)}</strong>
-              </div>
-              <div className="stat-mini">
-                <span>Meals</span>
-                <strong className="num">{daily.meals.length}</strong>
-              </div>
-            </div>
-
-            {daily.totals.calMin != null && daily.totals.calMax != null && (
-              <div className="meal-meta">
-                <span>
-                  Uncertainty range:{" "}
-                  <strong className="num">
-                    {fmtKcal(daily.totals.calMin)}–{fmtKcal(daily.totals.calMax)} kcal
-                  </strong>
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {/* Priority Macros: Protein & Fibre ABOVE Carbs & Fat */}
-      <section className="macro-grid" aria-label="Daily macronutrients">
-        {macroCards.map((m) => {
-          const fillPct = m.val == null ? 0 : Math.min(100, Math.round((m.val / m.goal) * 100));
-          return (
-            <article className={`macro-tile ${m.priority ? "priority" : ""}`} key={m.label}>
-              <div className="macro-head">
-                <div>
-                  <div className="macro-top" style={{ gap: ".35rem", justifyContent: "flex-start" }}>
-                    <span style={{ fontWeight: m.priority ? 700 : 600, color: m.priority ? "var(--text)" : "var(--muted)" }}>
-                      {m.label}
-                    </span>
-                    <span className="num">· ~{m.goal}g</span>
-                  </div>
-                  <div className="macro-val num" style={{ marginTop: ".15rem" }}>
-                    {fmtGram(m.val)}
-                  </div>
-                </div>
-                <BevelDotGauge pct={fillPct} color={m.color} />
-              </div>
-              <div className="macro-bar">
-                <i style={{ width: `${fillPct}%`, background: m.color }} />
-              </div>
-            </article>
-          );
-        })}
-      </section>
-
-      {/* Compact Nutrition Quality Score Strip (viewDay-scoped, links to Nutrition) */}
-      <section className="card score-card" aria-label="Nutrition quality score">
-        <div className="split-row">
-          <div>
-            <h2>Nutrition Score</h2>
-            <p style={{ fontSize: ".76rem" }}>
-              {score.coverage === "empty"
-                ? "Log meals to score food quality, whole foods, protein & fibre"
-                : score.coverage === "early"
-                  ? `Early estimate (${daily.meals.length} ${daily.meals.length === 1 ? "meal" : "meals"} logged)`
-                  : `Food quality, macro balance & fibre · ${daily.meals.length} ${daily.meals.length === 1 ? "meal" : "meals"}`}
-            </p>
-          </div>
+        ) : (
           <button
             type="button"
-            className={`score-badge score-grade-${score.grade ?? "none"}`}
-            onClick={() => onNavigate("Nutrition")}
-            title="View full nutrition diary & trends"
+            className="compact-row-btn"
+            aria-label="Overall Strain summary"
+            onClick={openTrainingView}
+            style={{ padding: 0, borderTop: 0 }}
           >
-            <strong className="num">{score.score ?? "—"}</strong>
-            <span>{score.grade ? `Grade ${score.grade}` : "No data"}</span>
-          </button>
-        </div>
-
-        <div className="score-pillars">
-          <div className="energy-cell">
-            <span>Fibre</span>
-            <strong className="num">{score.fibreSubscore == null ? "—" : `${score.fibreSubscore}/100`}</strong>
-            <small className="num">{fmtGram(daily.totals.fibreG)} / {fibreGoal}g</small>
-          </div>
-          <div className="energy-cell">
-            <span>Protein</span>
-            <strong className="num">{score.proteinSubscore == null ? "—" : `${score.proteinSubscore}/100`}</strong>
-            <small className="num">{fmtGram(daily.totals.proteinG)} / {proteinGoal}g</small>
-          </div>
-          <div className="energy-cell">
-            <span>Whole foods</span>
-            <strong className="num">{score.wholeFoodPct == null ? "—" : `${score.wholeFoodPct}%`}</strong>
-            <small>NOVA 1–2 share</small>
-          </div>
-          <div className="energy-cell">
-            <span>Food quality</span>
-            <strong className="num">{score.qualitySubscore == null ? "—" : `${score.qualitySubscore}/100`}</strong>
-            <small>FSA + processing</small>
-          </div>
-        </div>
-      </section>
-
-      {/* Energy Balance & Activity Card (strictly viewDay-scoped and mode-adaptive) */}
-      <section className="card" aria-label="Energy balance and activity">
-        <div className="split-row">
-          <div style={{ display: "flex", alignItems: "center", gap: ".55rem", minWidth: 0 }}>
-            {isFitbitMode ? <FitbitPulseIcon size={20} className="accent" /> : <FlameBurnIcon size={20} className="accent" />}
-            <div style={{ minWidth: 0 }}>
-              <h2>{isFitbitMode ? "Energy & Activity" : "Energy Balance"}</h2>
-              <p style={{ fontSize: ".76rem" }}>
-                {isFitbitMode ? (
-                  <>
-                    Google Health · Fitbit Air
-                    {google.connected && ` · ${fmtRelativeSync(google.lastSync)}`}
-                    {settings.googleTwoWaySync && google.connected && " · 2-way on"}
-                  </>
-                ) : (
-                  manualSourceLabel
-                )}
-              </p>
+            <div style={{ display: "flex", alignItems: "center", gap: ".9rem" }}>
+              <BevelScoreRing
+                label=""
+                value={overallStrain}
+                displayText={overallStrain == null ? "—" : Math.round(overallStrain).toString()}
+                pct={overallStrain ?? 0}
+                color="var(--strain-color)"
+                size={76}
+                strokeWidth={7.5}
+              />
+              <div>
+                <span className="eyebrow">Overall Strain</span>
+                <div style={{ fontSize: ".84rem", color: "var(--muted)", marginTop: ".15rem" }}>
+                  {strain?.muscularStrain != null
+                    ? `Muscular ${Math.round(strain.muscularStrain)} · Cardio ${Math.round(strain.cardioStrain ?? 0)}`
+                    : "Tap to view Training & Strain"}
+                </div>
+              </div>
             </div>
-          </div>
-          <div className="header-actions">
-            {isFitbitMode ? (
-              google.connected ? (
-                <>
-                  <button type="button" className="secondary compact" disabled={busy} onClick={onSyncGoogle}>
-                    <RefreshCw size={14} /> Sync
-                  </button>
-                  {(google.canWriteNutrition || google.canWriteWeights) && (
-                    <button
-                      type="button"
-                      className="secondary compact"
-                      disabled={busy}
-                      onClick={onPushGoogle}
-                      title="Push meals & weights to Google Health"
-                    >
-                      <TwoWaySyncIcon size={14} /> Push
-                    </button>
-                  )}
-                </>
-              ) : (
-                <button type="button" className="secondary compact" onClick={() => onNavigate("More")}>
-                  Connect Fitbit
-                </button>
-              )
-            ) : (
-              <button type="button" className="secondary compact" onClick={() => onNavigate("More")}>
-                {daily.energy?.totalKcal != null ? "Edit TDEE" : "Add TDEE"}
+            <ChevronRight size={18} style={{ color: "var(--muted)" }} />
+          </button>
+        )}
+
+        {/* Hidden semantic hook for Fitbit mode so tapping Strain opens Training */}
+        {isFitbitMode && (
+          <button
+            type="button"
+            className="sr-only"
+            aria-label="Overall Strain summary"
+            onClick={openTrainingView}
+          >
+            Open Training &amp; Strain
+          </button>
+        )}
+
+        {vitalsPending && (
+          <div className="bevel-awaiting-strip">
+            <span>Awaiting morning vitals sync</span>
+            {google.connected && (
+              <button
+                type="button"
+                className="secondary compact"
+                style={{ minHeight: "28px", padding: ".15rem .5rem", fontSize: ".72rem" }}
+                disabled={busy}
+                onClick={onSyncGoogle}
+              >
+                Refresh
               </button>
             )}
           </div>
-        </div>
+        )}
 
-        <div className={`energy-strip ${isFitbitMode || showManualSteps || showManualActiveBurn ? "" : "energy-strip-compact"}`}>
-          <div className="energy-cell">
-            <span>
-              <FlameBurnIcon size={14} /> Total TDEE
-            </span>
-            <strong className="num">
-              {daily.energy?.totalKcal != null ? `${fmtKcal(daily.energy.totalKcal)} kcal` : "—"}
-            </strong>
+        {isFitbitMode && sleepDetailOpen && daily.sleep && (
+          <div className="muscle-detail-bar" style={{ marginTop: ".1rem" }}>
+            <div className="split-row" style={{ fontSize: ".8rem" }}>
+              <strong>Sleep Breakdown</strong>
+              <span className="num">{formatDurationMinutes(daily.sleep.minutesAsleep)}</span>
+            </div>
+            <div className="split-row" style={{ fontSize: ".75rem", color: "var(--muted)" }}>
+              <span>Deep {daily.sleep.deepMinutes != null ? formatDurationMinutes(daily.sleep.deepMinutes) : "—"}</span>
+              <span>REM {daily.sleep.remMinutes != null ? formatDurationMinutes(daily.sleep.remMinutes) : "—"}</span>
+              <span>Light {daily.sleep.lightMinutes != null ? formatDurationMinutes(daily.sleep.lightMinutes) : "—"}</span>
+            </div>
           </div>
-
-          {isFitbitMode ? (
-            <>
-              <div className="energy-cell">
-                <span>Active burn</span>
-                <strong className="num">
-                  {daily.energy?.activeKcal != null ? `${fmtKcal(daily.energy.activeKcal)} kcal` : "—"}
-                </strong>
-              </div>
-              <div className="energy-cell">
-                <span>
-                  <FootstepsIcon size={14} /> Steps
-                </span>
-                <strong className="num">
-                  {daily.energy?.steps != null ? daily.energy.steps.toLocaleString("en-GB") : "—"}
-                </strong>
-              </div>
-              <div className="energy-cell">
-                <span>Zone mins</span>
-                <strong className="num">
-                  {daily.energy?.activeZoneMinutes != null ? `${daily.energy.activeZoneMinutes} min` : "—"}
-                </strong>
-              </div>
-              <div className="energy-cell">
-                <span>Distance</span>
-                <strong className="num">
-                  {daily.energy?.distanceMeters != null ? `${(daily.energy.distanceMeters / 1000).toFixed(1)} km` : "—"}
-                </strong>
-              </div>
-              {daily.energy?.floors != null && (
-                <div className="energy-cell">
-                  <span>Floors</span>
-                  <strong className="num">{daily.energy.floors}</strong>
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              {showManualSteps && (
-                <div className="energy-cell">
-                  <span>
-                    <FootstepsIcon size={14} /> Steps
-                  </span>
-                  <strong className="num">{daily.energy!.steps!.toLocaleString("en-GB")}</strong>
-                </div>
-              )}
-              {showManualActiveBurn && (
-                <div className="energy-cell">
-                  <span>Active burn</span>
-                  <strong className="num">{fmtKcal(daily.energy!.activeKcal)} kcal</strong>
-                </div>
-              )}
-            </>
-          )}
-
-          <div className="energy-cell">
-            <span>
-              <WeightScaleIcon size={14} /> Weight
-            </span>
-            <strong className="num">
-              {displayWeight != null ? `${Number(displayWeight.toFixed(1))} kg` : "—"}
-            </strong>
-            {weightChange7d != null && (
-              <small style={{ fontSize: ".7rem", color: "var(--muted)" }} className="num">
-                7d {weightChange7d > 0 ? "+" : ""}
-                {weightChange7d.toFixed(1)} kg
-              </small>
-            )}
-          </div>
-          <div className="energy-cell">
-            <span>Net balance</span>
-            <strong className="num" style={{ color: daily.deficit != null && daily.deficit >= 0 ? "var(--teal)" : "var(--text)" }}>
-              {daily.deficit == null
-                ? "—"
-                : daily.deficit >= 0
-                  ? `${fmtKcal(daily.deficit)} deficit`
-                  : `${fmtKcal(Math.abs(daily.deficit))} surplus`}
-            </strong>
-          </div>
-        </div>
-        <p style={{ fontSize: ".74rem", marginTop: ".6rem" }}>
-          Total TDEE already includes resting metabolism.
-          {daily.provisional &&
-            (daily.diaryComplete
-              ? " Add TDEE to lock net balance for this day."
-              : " Net balance updates as you log meals and locks at midnight.")}
-        </p>
+        )}
       </section>
 
-      {/* Fitbit-Only Cards: Sleep and Workouts (viewDay-scoped) */}
-      {isFitbitMode && (
-        <>
-          <section className="card sleep-card" aria-label="Sleep summary">
-            <div className="split-row">
-              <div>
-                <h2>Sleep</h2>
-                <p style={{ fontSize: ".76rem" }}>
-                  {daily.sleep
-                    ? bedClock && wakeClock
-                      ? `Slept ${bedClock} → woke ${wakeClock}`
-                      : "Synced from Fitbit Air"
-                    : "No Fitbit sleep recorded for this date"}
-                </p>
-              </div>
-              <div className="button-row">
-                {daily.sleep?.sleepEfficiencyPct != null && (
-                  <span className="pill accent-soft num">{daily.sleep.sleepEfficiencyPct}% efficiency</span>
-                )}
-                <span className={`pill ${daily.sleep ? "teal-soft" : ""}`}>
-                  {daily.sleep ? formatDurationMinutes(daily.sleep.minutesAsleep) : "—"}
+      {/* Bevel-Style Calorie Intake Linear Slider Card */}
+      <CalorieSlider
+        title="Calorie Intake"
+        consumedText={intake == null ? "0" : fmtKcal(intake)}
+        targetText={`${fmtKcal(target)} kcal`}
+        statusText={remainingLabel}
+        fillPct={calPct}
+        isOnTarget={goalMet}
+        isBulkMode={isBulkMode}
+        macros={macroBars}
+        onClick={() => onNavigate("Nutrition")}
+      />
+
+      {/* Compact Today's Activity & Snapshot Card (Click-to-Expand, Zero Bloat) */}
+      <section className="card" style={{ display: "grid", gap: ".1rem" }} aria-label="Daily snapshot">
+        {primaryWorkout && (
+          <button type="button" className="compact-row-btn" onClick={openTrainingView}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: ".45rem" }}>
+                <strong style={{ fontSize: ".92rem" }}>{primaryWorkout.title}</strong>
+                <span className="pill" style={{ fontSize: ".68rem", padding: ".1rem .45rem" }}>
+                  {primaryWorkout.source}
                 </span>
               </div>
+              <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".15rem" }}>
+                {formatDurationSeconds(primaryWorkout.durationSeconds) ?? "—"}
+                {primaryWorkout.mRaw > 0 ? ` · Muscular ${Math.round(strain?.muscularStrain ?? 0)}` : ""}
+                {primaryWorkout.cRaw > 0 ? ` · Cardio ${Math.round(strain?.cardioStrain ?? 0)}` : ""}
+              </div>
             </div>
-            {daily.sleep && (
-              <div className="sleep-stages">
-                <div className="energy-cell">
-                  <span>Deep</span>
-                  <strong className="num">{daily.sleep.deepMinutes != null ? `${daily.sleep.deepMinutes}m` : "—"}</strong>
-                </div>
-                <div className="energy-cell">
-                  <span>REM</span>
-                  <strong className="num">{daily.sleep.remMinutes != null ? `${daily.sleep.remMinutes}m` : "—"}</strong>
-                </div>
-                <div className="energy-cell">
-                  <span>Light</span>
-                  <strong className="num">{daily.sleep.lightMinutes != null ? `${daily.sleep.lightMinutes}m` : "—"}</strong>
-                </div>
-                <div className="energy-cell">
-                  <span>Awake</span>
-                  <strong className="num">{daily.sleep.minutesAwake != null ? `${daily.sleep.minutesAwake}m` : "—"}</strong>
-                </div>
-              </div>
+            <ChevronRight size={16} style={{ color: "var(--muted)" }} />
+          </button>
+        )}
+
+        <button
+          type="button"
+          className="compact-row-btn"
+          onClick={() => setMealsExpanded((v) => !v)}
+          aria-expanded={mealsExpanded}
+        >
+          <div>
+            <strong style={{ fontSize: ".92rem" }}>Meals</strong>
+            <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem" }}>
+              {daily.meals.length === 0
+                ? "No meals logged yet"
+                : `${daily.meals.length} ${daily.meals.length === 1 ? "meal" : "meals"} · ${fmtKcal(intake)} kcal`}
+            </div>
+          </div>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: ".35rem", color: "var(--muted)" }}>
+            {daily.nutritionScore.grade && (
+              <span className={`pill score-pill-${daily.nutritionScore.grade}`} style={{ fontSize: ".7rem" }}>
+                {daily.nutritionScore.grade}
+              </span>
             )}
-          </section>
-
-          {daily.workouts.length > 0 && (
-            <section className="card" aria-label="Workouts">
-              <div className="split-row" style={{ marginBottom: ".65rem" }}>
-                <h2>Workouts</h2>
-                <span className="pill teal-soft num">{daily.workouts.length} logged</span>
-              </div>
-              <div className="meal-list">
-                {daily.workouts.map((w) => {
-                  const dur = formatDurationSeconds(w.durationSeconds);
-                  const startClock = formatIsoClock(w.startTime, daily.timezone);
-                  return (
-                    <div className="meal-card" key={w.sessionId}>
-                      <div className="meal-head">
-                        <div>
-                          <div className="meal-title-row">
-                            <strong>{w.title}</strong>
-                            {w.exerciseType && w.exerciseType !== w.title && (
-                              <span className="pill">{w.exerciseType}</span>
-                            )}
-                          </div>
-                          <div className="meal-meta" style={{ marginTop: ".3rem" }}>
-                            {startClock && <span className="num">{startClock}</span>}
-                            {dur && <span className="num">{dur}</span>}
-                            {w.avgHrBpm != null && <span className="num">{Math.round(w.avgHrBpm)} bpm avg</span>}
-                            {w.activeZoneMinutes != null && <span className="pill accent-soft num">{w.activeZoneMinutes} AZM</span>}
-                            {w.distanceMeters != null && <span className="num">{(w.distanceMeters / 1000).toFixed(2)} km</span>}
-                          </div>
-                        </div>
-                        <div className="meal-kcal">
-                          <strong className="num">
-                            {w.caloriesKcal != null ? `${fmtKcal(w.caloriesKcal)} kcal` : "—"}
-                          </strong>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-        </>
-      )}
-
-      {/* Viewed Day Meal Timeline */}
-      <section className="card">
-        <div className="split-row" style={{ marginBottom: ".65rem" }}>
-          <h2>{viewDay === calendarToday ? "Today\u2019s Meals" : `Meals · ${viewTitle}`}</h2>
-          <div className="button-row">
-            <button type="button" className="secondary compact" onClick={onLogMeal}>
-              <Plus size={14} /> Add meal
-            </button>
-            <button type="button" className="secondary compact" onClick={() => onNavigate("Nutrition")}>
-              Full diary
-            </button>
+            {mealsExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </div>
-        </div>
-        {daily.meals.length === 0 ? (
-          <p style={{ fontSize: ".88rem" }}>
-            No meals logged for this day yet. Tap <strong>Log meal</strong> or send a meal photo through your ChatGPT MCP connector.
-          </p>
-        ) : (
-          <div className="meal-list">
-            {daily.meals.map((m) => {
-              const method = mealMethodSummary(m);
-              return (
-                <div className="meal-card" key={m.id}>
-                  <div className="meal-head">
-                    <div>
-                      <div className="meal-title-row">
-                        <span className="pill">
-                          <MealCategoryIcon category={m.category} size={13} />
-                          {CATEGORY_LABELS[m.category]}
-                        </span>
-                        <strong>{m.name}</strong>
+        </button>
+
+        {mealsExpanded && (
+          <div style={{ display: "grid", gap: ".4rem", paddingBottom: ".5rem" }}>
+            {daily.meals.length === 0 ? (
+              <p className="empty" style={{ padding: ".4rem 0", fontSize: ".8rem" }}>
+                Tap + below to log a meal or scan a barcode.
+              </p>
+            ) : (
+              daily.meals.map((meal) => (
+                <button
+                  key={meal.id}
+                  type="button"
+                  className="compact-row-btn"
+                  style={{ padding: ".45rem .6rem", background: "var(--surface-soft)", borderRadius: "10px", borderTop: 0 }}
+                  onClick={() => onEditMeal(meal)}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: ".45rem", minWidth: 0 }}>
+                    <MealCategoryIcon category={meal.category} size={14} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: ".84rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {meal.name}
                       </div>
-                      <div className="meal-meta" style={{ marginTop: ".3rem" }}>
-                        <span className="num">{m.localTime}</span>
-                        <span>{m.items.length} {m.items.length === 1 ? "item" : "items"}</span>
-                        <span className={`pill ${method === "weighed" ? "accent-soft" : method === "photo_estimate" ? "amber-soft" : ""}`}>
-                          {method === "weighed" ? <ScaleWeighedIcon size={12} /> : <SparklePhotoIcon size={12} />}
-                          {METHOD_LABELS[method]}
-                        </span>
-                        <span className={`pill score-pill-${m.qualityScore.grade}`}>
-                          Score {m.qualityScore.score} · {m.qualityScore.grade}
-                        </span>
+                      <div style={{ fontSize: ".72rem", color: "var(--muted)" }}>
+                        {CATEGORY_LABELS[meal.category]} · {meal.localTime}
                       </div>
-                    </div>
-                    <div className="meal-kcal">
-                      <strong className="num">{fmtKcal(m.totals.calories)} kcal</strong>
-                      <small className="num">
-                        P {fmtGram(m.totals.proteinG)} · Fib {fmtGram(m.totals.fibreG)}
-                      </small>
                     </div>
                   </div>
-                  <div className="button-row">
-                    <button type="button" className="secondary compact" onClick={() => onEditMeal(m)}>
-                      Edit / details
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+                  <strong className="num" style={{ fontSize: ".86rem" }}>
+                    {fmtKcal(meal.totals.calories)}
+                  </strong>
+                </button>
+              ))
+            )}
           </div>
+        )}
+
+        <button
+          type="button"
+          className="compact-row-btn"
+          onClick={() => onNavigate("More")}
+        >
+          <div>
+            <strong style={{ fontSize: ".92rem" }}>Body Weight</strong>
+            <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem" }}>
+              {displayWeight != null ? `${displayWeight.toFixed(1)} kg` : "No weight logged"}
+              {weightChange7d != null ? ` · ${weightChange7d > 0 ? "+" : ""}${weightChange7d.toFixed(1)} kg (7d)` : ""}
+            </div>
+          </div>
+          <ChevronRight size={16} style={{ color: "var(--muted)" }} />
+        </button>
+
+        {isFitbitMode && daily.energy?.steps != null && (
+          <button
+            type="button"
+            className="compact-row-btn"
+            onClick={openTrainingView}
+          >
+            <div>
+              <strong style={{ fontSize: ".92rem" }}>Daily Steps</strong>
+              <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem" }}>
+                <span className="num">{daily.energy.steps.toLocaleString("en-GB")}</span> steps
+                {daily.energy.totalKcal != null ? ` · ${fmtKcal(daily.energy.totalKcal)} kcal burn` : ""}
+              </div>
+            </div>
+            <ChevronRight size={16} style={{ color: "var(--muted)" }} />
+          </button>
         )}
       </section>
     </>

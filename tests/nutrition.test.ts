@@ -343,6 +343,15 @@ test("resolveActiveHomeDay rolls over cleanly at midnight and trackingMode stric
     resolveActiveHomeDay({ calendarToday: "2026-11-25" }),
     { activeDay: "2026-11-25", waitingForSleep: false },
   );
+  // Sleep-gated rollover: holds on yesterday until Google Health sleep or today's activity arrives
+  assert.deepEqual(
+    resolveActiveHomeDay({ calendarToday: "2026-11-25", sleepGated: true, hasTodaySleep: false, hasTodayActivity: false }),
+    { activeDay: "2026-11-24", waitingForSleep: true },
+  );
+  assert.deepEqual(
+    resolveActiveHomeDay({ calendarToday: "2026-11-25", sleepGated: true, hasTodaySleep: true, hasTodayActivity: false }),
+    { activeDay: "2026-11-25", waitingForSleep: false },
+  );
   assert.equal(isDayComplete("2026-11-24", "2026-11-25"), true);
   assert.equal(isDayComplete("2026-11-25", "2026-11-25"), false);
   assert.equal(isDayComplete("2026-11-26", "2026-11-25"), false);
@@ -541,10 +550,21 @@ test("resolveActiveHomeDay rolls over cleanly at midnight and trackingMode stric
 
   const afterNyMidnight = await u3.homeState({ now: new Date("2026-11-25T05:00:30.000Z") });
   assert.equal(afterNyMidnight.calendarToday, "2026-11-25");
-  assert.equal(afterNyMidnight.activeDay, "2026-11-25");
-  assert.equal(afterNyMidnight.waitingForSleep, false);
+  assert.equal(afterNyMidnight.activeDay, "2026-11-24");
+  assert.equal(afterNyMidnight.waitingForSleep, true);
 
-  // In fitbit mode: no pre-sleep holding even when today's sleep is absent, and Fitbit metrics are surfaced
+  // Once today's Google Health sleep syncs, activeDay rolls over cleanly to today
+  await db.insert(schema.dailySleep).values({
+    userId: "U3",
+    day: today,
+    source: "google",
+    minutesAsleep: 430,
+    minutesAwake: 20,
+    deepMinutes: 90,
+    remMinutes: 100,
+    lightMinutes: 240,
+  });
+
   const tokFitbitBefore = await u3.syncToken();
   const fitbitHome = await u3.homeSnapshot(today, { canReadSleep: true });
   assert.equal(fitbitHome.activeDay, today);

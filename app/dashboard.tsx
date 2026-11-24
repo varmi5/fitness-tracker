@@ -93,6 +93,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
+  const lastAutoSyncRef = useRef(Date.now());
   useEffect(() => {
     if (!google.connected || (!google.mealSync?.pending && !google.mealSync?.failed)) return;
     const controller = new AbortController();
@@ -105,6 +106,34 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     }, 5000);
     return () => { clearInterval(timer); controller.abort(); };
   }, [google.connected, google.mealSync?.pending, google.mealSync?.failed]);
+
+  // Frequent background auto-sync (every 3 minutes while active/visible) for fresh sleep & vitals
+  useEffect(() => {
+    if (!google.connected) return;
+    let active = true;
+    const triggerAutoSync = () => {
+      if (!active || document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastAutoSyncRef.current < 3 * 60 * 1000) return;
+      lastAutoSyncRef.current = now;
+      void fetch("/api/integrations/google/sync", { method: "POST", cache: "no-store" })
+        .then(async (res) => (res.ok ? res.json() : null))
+        .then((payload) => {
+          if (payload?.status && active) setGoogle(payload.status);
+        })
+        .catch(() => undefined);
+    };
+    const timer = window.setInterval(triggerAutoSync, 60_000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") triggerAutoSync();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [google.connected]);
   const [audit, setAudit] = useState(initial.audit);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ id: number; text: string; kind: "success" | "error" | "info" } | null>(null);
@@ -949,25 +978,34 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         />
       )}
 
-      {!composerOpen && (
-        <button
-          className="log-meal-fab"
-          type="button"
-          onClick={() => openNewMeal(tab === "Home" ? homeDay : tab === "Nutrition" ? selectedDay : today)}
-        >
-          <Plus size={20} aria-hidden="true" />
-          Log meal
-        </button>
-      )}
       <nav className="tabs" aria-label="FitnessTrackr views">
-        {tabs.map(({ title, icon: Icon }) => (
+        {tabs.slice(0, 2).map(({ title, icon: Icon }) => (
           <button
             key={title}
             type="button"
             aria-current={tab === title ? "page" : undefined}
             onClick={() => navigate(title)}
           >
-            <Icon size={22} />
+            <Icon size={20} />
+            <span>{title}</span>
+          </button>
+        ))}
+        <button
+          className="nav-center-log"
+          type="button"
+          aria-label="Log meal"
+          onClick={() => openNewMeal(tab === "Home" ? homeDay : tab === "Nutrition" ? selectedDay : today)}
+        >
+          <Plus size={22} aria-hidden="true" />
+        </button>
+        {tabs.slice(2).map(({ title, icon: Icon }) => (
+          <button
+            key={title}
+            type="button"
+            aria-current={tab === title ? "page" : undefined}
+            onClick={() => navigate(title)}
+          >
+            <Icon size={20} />
             <span>{title}</span>
           </button>
         ))}
