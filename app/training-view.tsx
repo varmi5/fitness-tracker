@@ -2,10 +2,11 @@
 
 import { useEffect, useState, type ChangeEvent } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, RefreshCw, SlidersHorizontal, Upload } from "lucide-react";
-import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BevelSegmentedRing, FitbitPulseIcon, FlameBurnIcon, FootstepsIcon } from "../components/icons";
 import type { StrainActivityBreakdown } from "../lib/strain-data";
-import type { TrainingLoadSummary } from "../lib/training-load";
+import { computeTargetStrain } from "../lib/strain-engine";
+import type { LoadStatusAssessment, TrainingLoadSummary } from "../lib/training-load";
 import { addDays } from "../lib/nutrition-model";
 import { RecoveryCard } from "./recovery-card";
 import {
@@ -43,6 +44,14 @@ function fmtDur(seconds: number | null): string {
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function statusPillClass(tone: LoadStatusAssessment["tone"]): string {
+  if (tone === "teal") return "teal-soft";
+  if (tone === "blue") return "protein-soft";
+  if (tone === "amber") return "amber-soft";
+  if (tone === "danger") return "danger-soft";
+  return "";
 }
 
 export function TrainingView({
@@ -208,48 +217,58 @@ export function TrainingView({
       </div>
 
       {/* Overall Strain Hero */}
-      <section className="card card-hero" aria-label="Overall Strain summary">
-        <div className="ring-layout">
-          <div className="ring-wrap">
-            <BevelSegmentedRing pct={pct} overTarget={false} />
-            <div className="ring-center">
-              <strong className="num">{overall == null ? "—" : overall.toFixed(1)}</strong>
-              <span>of 100 Strain</span>
-            </div>
-          </div>
+      {(() => {
+        const target = computeTargetStrain(recoveryInsights?.score);
+        const inZone = overall != null && overall >= target.min && overall <= target.max;
+        const overZone = overall != null && overall > target.max;
+        return (
+          <section className="card card-hero" aria-label="Overall Strain summary">
+            <div className="ring-layout">
+              <div className="ring-wrap">
+                <BevelSegmentedRing pct={pct} overTarget={overZone} />
+                <div className="ring-center">
+                  <strong className="num">{overall == null ? "—" : overall.toFixed(1)}</strong>
+                  <span>of 100 Strain</span>
+                </div>
+              </div>
 
-          <div className="hero-stats">
-            <div className="hero-figures">
-              <div className="stat-mini">
-                <span>Cardio Strain</span>
-                <strong className="num" style={{ color: "var(--blue)" }}>
-                  {strain.cardioStrain == null ? "—" : strain.cardioStrain.toFixed(1)}
-                </strong>
-              </div>
-              <div className="stat-mini">
-                <span>Muscular Strain</span>
-                <strong className="num" style={{ color: "var(--purple)" }}>
-                  {strain.muscularStrain == null ? "—" : strain.muscularStrain.toFixed(1)}
-                </strong>
-              </div>
-              <div className="stat-mini">
-                <span>Walking Bonus</span>
-                <strong className="num" style={{ color: "var(--teal)" }}>
-                  +{strain.walkingPoints.toFixed(1)}
-                </strong>
+              <div className="hero-stats">
+                <div className="split-row" style={{ alignItems: "center", gap: ".4rem", flexWrap: "wrap" }}>
+                  <span className={`pill ${inZone ? "teal-soft" : overZone ? "amber-soft" : "accent-soft"}`}>
+                    Target {target.min}–{target.max} · {target.label}
+                  </span>
+                </div>
+                <div className="hero-figures">
+                  <div className="stat-mini">
+                    <span>Cardio Strain</span>
+                    <strong className="num" style={{ color: "var(--blue)" }}>
+                      {strain.cardioStrain == null ? "—" : strain.cardioStrain.toFixed(1)}
+                    </strong>
+                  </div>
+                  <div className="stat-mini">
+                    <span>Muscular Strain</span>
+                    <strong className="num" style={{ color: "var(--purple)" }}>
+                      {strain.muscularStrain == null ? "—" : strain.muscularStrain.toFixed(1)}
+                    </strong>
+                  </div>
+                  <div className="stat-mini">
+                    <span>Walking Bonus</span>
+                    <strong className="num" style={{ color: "var(--teal)" }}>
+                      +{strain.walkingPoints.toFixed(1)}
+                    </strong>
+                  </div>
+                </div>
+                <p style={{ fontSize: ".78rem", color: "var(--muted)" }}>
+                  Cardio TRIMP: <strong className="num">{strain.cRaw}</strong> · Muscular Load:{" "}
+                  <strong className="num">{strain.mRaw}</strong> · Threshold:{" "}
+                  <strong className="num">{strainSettings.walkingStepThreshold.toLocaleString("en-GB")}</strong> steps
+                </p>
+                <p style={{ fontSize: ".74rem", color: "var(--muted)" }}>{target.guidance}</p>
               </div>
             </div>
-            <p style={{ fontSize: ".78rem", color: "var(--muted)" }}>
-              Raw TRIMP: <strong className="num">{strain.cRaw}</strong> · Raw Muscular:{" "}
-              <strong className="num">{strain.mRaw}</strong> · Threshold:{" "}
-              <strong className="num">{strainSettings.walkingStepThreshold.toLocaleString("en-GB")}</strong> steps
-            </p>
-            <p style={{ fontSize: ".72rem", color: "var(--muted)" }}>
-              Exertion estimate for personal tracking; not a medical measure of fatigue or injury risk.
-            </p>
-          </div>
-        </div>
-      </section>
+          </section>
+        );
+      })()}
 
       {/* Daily Contributing Activities */}
       <section className="card" aria-label="Daily Strain Breakdown" style={{ display: "grid", gap: ".65rem" }}>
@@ -410,13 +429,20 @@ export function TrainingView({
         )}
       </section>
 
-      {/* Long-term Cardio Load & Muscular Load (Separate EWMAs) */}
+      {/* Long-term Cardio Load & Muscular Load (Separate EWMAs + Bevel-style Training Status) */}
       <section className="two-col" aria-label="Long-term training loads">
         <div className="unlock-gate">
           <article className={`card unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}>
             <div className="split-row">
-              <h2>Cardio Load (TRIMP EWMA)</h2>
-              <span className="pill teal-soft">7d / 42d</span>
+              <h2>Cardio Load</h2>
+              {loads?.cardioStatus ? (
+                <span className={`pill ${statusPillClass(loads.cardioStatus.tone)}`}>
+                  {loads.cardioStatus.label}
+                  {loads.cardioStatus.acwr != null ? ` · ${loads.cardioStatus.acwr}×` : ""}
+                </span>
+              ) : (
+                <span className="pill teal-soft">7d / 42d</span>
+              )}
             </div>
             {loadsBusy && !loads ? (
               <p className="empty">Loading Cardio Load…</p>
@@ -424,6 +450,11 @@ export function TrainingView({
               <p className="empty">No cardio TRIMP history yet.</p>
             ) : (
               <>
+                {loads.cardioStatus && (
+                  <p style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".35rem" }}>
+                    {loads.cardioStatus.guidance}
+                  </p>
+                )}
                 <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
                   <div className="energy-cell">
                     <span>Daily</span>
@@ -439,16 +470,24 @@ export function TrainingView({
                   </div>
                 </div>
                 {loads.cardioSeries.length > 1 && (
-                  <div className="chart" style={{ height: 150, marginTop: ".65rem" }}>
+                  <div className="chart" style={{ height: 155, marginTop: ".65rem" }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={loads.cardioSeries.slice(-28)}>
+                      <ComposedChart data={loads.cardioSeries.slice(-28)}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                         <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10 }} />
                         <YAxis tick={{ fontSize: 10 }} width={32} />
                         <Tooltip />
+                        <Area
+                          type="monotone"
+                          dataKey="optimalMax"
+                          name="Optimal Ceiling"
+                          stroke="none"
+                          fill="var(--teal-soft)"
+                          fillOpacity={0.35}
+                        />
                         <Line type="monotone" dataKey="acute7d" name="7d Acute" stroke="var(--blue)" dot={false} strokeWidth={2} />
                         <Line type="monotone" dataKey="chronic42d" name="42d Chronic" stroke="var(--teal)" dot={false} strokeWidth={2} />
-                      </LineChart>
+                      </ComposedChart>
                     </ResponsiveContainer>
                   </div>
                 )}
@@ -475,8 +514,15 @@ export function TrainingView({
         <div className="unlock-gate">
           <article className={`card unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}>
             <div className="split-row">
-              <h2>Muscular Load (Sets EWMA)</h2>
-              <span className="pill protein-soft">7d / 42d</span>
+              <h2>Muscular Load</h2>
+              {loads?.muscularStatus ? (
+                <span className={`pill ${statusPillClass(loads.muscularStatus.tone)}`}>
+                  {loads.muscularStatus.label}
+                  {loads.muscularStatus.acwr != null ? ` · ${loads.muscularStatus.acwr}×` : ""}
+                </span>
+              ) : (
+                <span className="pill protein-soft">7d / 42d</span>
+              )}
             </div>
             {loadsBusy && !loads ? (
               <p className="empty">Loading Muscular Load…</p>
@@ -484,6 +530,11 @@ export function TrainingView({
               <p className="empty">No muscular training history yet.</p>
             ) : (
               <>
+                {loads.muscularStatus && (
+                  <p style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".35rem" }}>
+                    {loads.muscularStatus.guidance}
+                  </p>
+                )}
                 <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
                   <div className="energy-cell">
                     <span>Daily</span>
@@ -499,16 +550,24 @@ export function TrainingView({
                   </div>
                 </div>
                 {loads.muscularSeries.length > 1 && (
-                  <div className="chart" style={{ height: 150, marginTop: ".65rem" }}>
+                  <div className="chart" style={{ height: 155, marginTop: ".65rem" }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={loads.muscularSeries.slice(-28)}>
+                      <ComposedChart data={loads.muscularSeries.slice(-28)}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                         <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10 }} />
                         <YAxis tick={{ fontSize: 10 }} width={32} />
                         <Tooltip />
+                        <Area
+                          type="monotone"
+                          dataKey="optimalMax"
+                          name="Optimal Ceiling"
+                          stroke="none"
+                          fill="var(--purple-soft, rgba(139,92,246,0.14))"
+                          fillOpacity={0.35}
+                        />
                         <Line type="monotone" dataKey="acute7d" name="7d Acute" stroke="var(--purple)" dot={false} strokeWidth={2} />
                         <Line type="monotone" dataKey="chronic42d" name="42d Chronic" stroke="var(--accent)" dot={false} strokeWidth={2} />
-                      </LineChart>
+                      </ComposedChart>
                     </ResponsiveContainer>
                   </div>
                 )}

@@ -21,6 +21,7 @@ import {
   computeWalkingContribution,
   DEFAULT_STRAIN_SETTINGS,
   STRAIN_ALGORITHM_VERSION,
+  STRENGTH_CARDIO_FACTOR,
   trainingPreferenceInput,
   type StrainSettings,
   type TrimpZoneBreakdown,
@@ -299,12 +300,20 @@ export function strainData(db: AuthDatabase, userId: string) {
         fallbackActiveZoneMinutes: matchedG?.activeZoneMinutes ?? null,
       });
       const muscular = computeMuscularWorkload(sets);
+      // Intermittent resistance-training HR (rest intervals, sympathetic/Valsalva spikes) is not
+      // equivalent to continuous aerobic cardiac output; weight at 30% aerobic equivalent.
+      const effectiveCRaw = Math.round(trimp.cRaw * STRENGTH_CARDIO_FACTOR * 100) / 100;
 
-      totalCRaw += trimp.cRaw;
+      totalCRaw += effectiveCRaw;
       totalMRaw += muscular.mRaw;
       for (const g of MUSCLE_GROUPS) totalMuscleLoads[g] += muscular.muscleLoads[g];
 
       const notes: string[] = [];
+      if (trimp.cRaw > 0) {
+        notes.push(
+          `Strength HR weighted at ${Math.round(STRENGTH_CARDIO_FACTOR * 100)}% aerobic equivalent (${trimp.cRaw} raw HR TRIMP → ${effectiveCRaw} Cardio TRIMP) so lifting HR does not inflate Cardio Strain.`,
+        );
+      }
       if (muscular.assumedRpeSetCount > 0) {
         notes.push(`${muscular.assumedRpeSetCount} set(s) used provisional default RPE assumption.`);
       }
@@ -331,7 +340,7 @@ export function strainData(db: AuthDatabase, userId: string) {
         distanceMeters: matchedG?.distanceMeters ?? null,
         caloriesKcal: matchedG?.caloriesKcal ?? null,
         avgHrBpm: avgHr,
-        cRaw: trimp.cRaw,
+        cRaw: effectiveCRaw,
         mRaw: muscular.mRaw,
         overallPointsContribution: 0,
         status: trimp.status === "unavailable" ? "partial" : "complete",
@@ -365,10 +374,14 @@ export function strainData(db: AuthDatabase, userId: string) {
             })
           : [];
 
+      const isStrength = isStrengthGoogleWorkout(gw.title, gw.exerciseType);
       const trimp = computeEdwardsTrimp(windowHr, settings.maxHrBpm, {
         fallbackActiveZoneMinutes: gw.activeZoneMinutes,
       });
-      totalCRaw += trimp.cRaw;
+      const effectiveCRaw = isStrength
+        ? Math.round(trimp.cRaw * STRENGTH_CARDIO_FACTOR * 100) / 100
+        : trimp.cRaw;
+      totalCRaw += effectiveCRaw;
       if (trimp.status === "unavailable") hasIncompleteWorkout = true;
 
       const avgHr =
@@ -376,7 +389,6 @@ export function strainData(db: AuthDatabase, userId: string) {
           ? Math.round((windowHr.reduce((a, b) => a + b.bpm, 0) / windowHr.length) * 10) / 10
           : gw.avgHrBpm;
 
-      const isStrength = isStrengthGoogleWorkout(gw.title, gw.exerciseType);
       const durSec =
         gw.durationSeconds ?? (endMs > startMs ? Math.round((endMs - startMs) / 1000) : null);
       const strengthEst = isStrength ? estimateMuscularFromGoogleStrength(gw.title, durSec) : null;
@@ -386,6 +398,11 @@ export function strainData(db: AuthDatabase, userId: string) {
       }
 
       const gwNotes = [trimp.note];
+      if (isStrength && trimp.cRaw > 0) {
+        gwNotes.push(
+          `Strength HR weighted at ${Math.round(STRENGTH_CARDIO_FACTOR * 100)}% aerobic equivalent (${trimp.cRaw} raw HR TRIMP → ${effectiveCRaw} Cardio TRIMP).`,
+        );
+      }
       if (strengthEst) {
         gwNotes.push(
           `Provisional muscular load (${strengthEst.mRaw} pts, ~${strengthEst.estimatedSets} working sets) estimated from Google Health strength session duration. Sync Hevy for exact set-by-set muscular load.`,
@@ -403,7 +420,7 @@ export function strainData(db: AuthDatabase, userId: string) {
         distanceMeters: gw.distanceMeters,
         caloriesKcal: gw.caloriesKcal,
         avgHrBpm: avgHr,
-        cRaw: trimp.cRaw,
+        cRaw: effectiveCRaw,
         mRaw: strengthEst ? strengthEst.mRaw : 0,
         overallPointsContribution: 0,
         status:
@@ -615,6 +632,7 @@ export function strainData(db: AuthDatabase, userId: string) {
       const latestSync = latestSourceSyncByDay.get(d) ?? 0;
       const isStale =
         !existing ||
+        existing.algorithmVersion !== STRAIN_ALGORITHM_VERSION ||
         latestSync > existing.computedAt.getTime() ||
         (hasStrengthByDay.has(d) && existing.mRaw === 0);
 
