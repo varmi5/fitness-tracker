@@ -1,9 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState, type FormEvent } from "react";
-import { ArrowLeft, ChevronRight, Plus } from "lucide-react";
-import { MoonThemeIcon, SunThemeIcon } from "../components/icons";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { ArrowLeft, Camera, ChevronRight, Plus, TrendingUp } from "lucide-react";
 import { Button } from "../components/ui/button";
 import {
   displayUnit,
@@ -15,7 +14,10 @@ import {
   type Metric,
 } from "../lib/metrics";
 import type { DailyNutritionView } from "../lib/nutrition-data";
-import type { NutritionHistory, NutritionSettings, ThemeMode, TrackerSnapshot } from "./types";
+import { addDays } from "../lib/nutrition-model";
+import type { TrendMetricKind } from "./metric-trends-modal";
+import { PhysiqueCheckinView } from "./physique-checkin-view";
+import type { NutritionHistory, NutritionSettings, TrackerSnapshot } from "./types";
 
 const TrendChart = dynamic(() => import("./trends").then((m) => m.TrendChart), {
   ssr: false,
@@ -32,13 +34,15 @@ interface MeasurementsViewProps {
   history30?: NutritionHistory;
   daily?: DailyNutritionView;
   today: string;
-  theme: ThemeMode;
   busy: boolean;
-  onToggleTheme: () => void;
+  initialSubPage?: "physique" | null;
+  onClearInitialSubPage?: () => void;
+  onOpenTrends: (metric: TrendMetricKind) => void;
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
+  onMessage: (msg: string) => void;
 }
 
-type MeasurePage = null | "trends" | "log";
+type MeasurePage = null | "trends" | "log" | "physique";
 
 export function MeasurementsView({
   snapshot,
@@ -46,15 +50,24 @@ export function MeasurementsView({
   history30,
   daily,
   today,
-  theme,
   busy,
-  onToggleTheme,
+  initialSubPage,
+  onClearInitialSubPage,
+  onOpenTrends,
   onSaveTracker,
+  onMessage,
 }: MeasurementsViewProps) {
-  const [page, setPage] = useState<MeasurePage>(null);
+  const [page, setPage] = useState<MeasurePage>(initialSubPage ?? null);
   const [date, setDate] = useState(today);
   const [localMsg, setLocalMsg] = useState("");
   const { readings, settings } = snapshot;
+
+  useEffect(() => {
+    if (initialSubPage) {
+      setPage(initialSubPage);
+      onClearInitialSubPage?.();
+    }
+  }, [initialSubPage, onClearInitialSubPage]);
 
   const isFitbitMode =
     (nutritionSettings?.trackingMode ?? history30?.trackingMode ?? daily?.trackingMode) === "fitbit";
@@ -71,6 +84,29 @@ export function MeasurementsView({
   const latestVo2Max = isFitbitMode
     ? (recoveryRecords.find((r) => r.vo2Max != null)?.vo2Max ?? null)
     : null;
+
+  const weightMetric = metrics.find((m) => m.key === "weight")!;
+  const weightSummary = summary(readingsFor(readings, weightMetric), today);
+  const latestWeightKg = daily?.energy?.weightKg ?? weightSummary.latest?.value ?? null;
+
+  const weightSparkPoints = useMemo(() => {
+    const from14 = addDays(today, -13);
+    const byDay = new Map<string, number>();
+    for (const d of history30?.days ?? []) {
+      if (d.day >= from14 && d.day <= today && d.energy?.weightKg != null) byDay.set(d.day, d.energy.weightKg);
+    }
+    for (const r of readingsFor(readings, weightMetric)) {
+      if (r.date >= from14 && r.date <= today) byDay.set(r.date, r.value);
+    }
+    const vals = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);
+    if (vals.length < 2) return "";
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const span = max - min || 1;
+    return vals
+      .map((v, i) => `${((i / (vals.length - 1)) * 124 + 3).toFixed(1)},${(30 - ((v - min) / span) * 24).toFixed(1)}`)
+      .join(" ");
+  }, [history30?.days, readings, today, weightMetric]);
 
   const selected = readings.filter((r) => r.date === date);
   const [waistMetric, leftMetric, rightMetric] = metrics;
@@ -112,7 +148,18 @@ export function MeasurementsView({
     ).then(() => setPage(null));
   }
 
-  // Full-page Trends Drill-Down
+  if (page === "physique") {
+    return (
+      <PhysiqueCheckinView
+        today={today}
+        latestWeight={latestWeightKg}
+        latestBodyFat={latestBodyFat}
+        onBack={() => setPage(null)}
+        onMessage={onMessage}
+      />
+    );
+  }
+
   if (page === "trends") {
     return (
       <>
@@ -134,7 +181,6 @@ export function MeasurementsView({
     );
   }
 
-  // Full-page Log & History Drill-Down
   if (page === "log") {
     return (
       <>
@@ -231,32 +277,86 @@ export function MeasurementsView({
     );
   }
 
-  // Main Bevel Measurements Overview
   return (
     <>
-      <div className="page-header" style={{ marginBottom: ".15rem" }}>
+      <div className="page-header" style={{ marginBottom: ".1rem" }}>
         <div className="page-header-title">
-          <h1 style={{ fontSize: "1.45rem", letterSpacing: "-0.03em" }}>Measurements</h1>
+          <h1 style={{ fontSize: "1.45rem", letterSpacing: "-0.03em" }}>Body</h1>
         </div>
         <div className="header-actions">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-            onClick={onToggleTheme}
-          >
-            {theme === "light" ? <MoonThemeIcon size={17} /> : <SunThemeIcon size={17} />}
-          </button>
           <button type="button" className="compact" onClick={() => setPage("log")}>
             <Plus size={15} /> Log
           </button>
         </div>
       </div>
 
-      {/* Primary Metrics Grid (Tap any metric → Full-Page Trends) */}
+      {/* Weight Telemetry Hero with 14-day sparkline */}
+      <button
+        type="button"
+        className="card card-interactive"
+        onClick={() => onOpenTrends("weight")}
+        style={{ gap: ".4rem" }}
+      >
+        <div className="split-row">
+          <span className="eyebrow">Weight Telemetry</span>
+          <span className="silk-chip-btn">
+            <TrendingUp size={12} /> Trends <ChevronRight size={12} />
+          </span>
+        </div>
+        <div className="split-row" style={{ alignItems: "flex-end" }}>
+          <div>
+            <div className="reading" style={{ margin: 0 }}>
+              {latestWeightKg != null ? numFmt.format(displayValue(latestWeightKg, weightMetric, settings.units)) : "—"}{" "}
+              <small>{displayUnit(weightMetric, settings.units)}</small>
+            </div>
+            <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".15rem" }}>
+              7d avg {readout(weightSummary.weekly, weightMetric, settings.units)} {displayUnit(weightMetric, settings.units)}
+              {weightSummary.change != null
+                ? ` · ${weightSummary.change > 0 ? "+" : ""}${readout(weightSummary.change, weightMetric, settings.units)}`
+                : ""}
+            </div>
+          </div>
+          {weightSparkPoints && (
+            <svg width="130" height="34" viewBox="0 0 130 34" aria-hidden="true">
+              <polyline
+                fill="none"
+                stroke="var(--accent-2)"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                points={weightSparkPoints}
+              />
+            </svg>
+          )}
+        </div>
+      </button>
+
+      {/* Physique Check-in & Timelapse Launcher */}
+      <button
+        type="button"
+        className="card card-interactive"
+        onClick={() => setPage("physique")}
+      >
+        <div className="split-row">
+          <div style={{ display: "flex", alignItems: "center", gap: ".65rem" }}>
+            <span className="brand-badge" style={{ width: 38, height: 38, borderRadius: 12 }}>
+              <Camera size={18} />
+            </span>
+            <div>
+              <strong style={{ fontSize: ".96rem" }}>Physique Check-in &amp; Timelapse</strong>
+              <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
+                Front / Side / Back progress photos &amp; timelapse player
+              </div>
+            </div>
+          </div>
+          <ChevronRight size={18} style={{ color: "var(--muted)" }} />
+        </div>
+      </button>
+
+      {/* 2x2 Circumferences Grid */}
       <div className="measure-grid">
         {metrics
-          .filter((metric, index) => index < 4 || readingsFor(readings, metric).length > 0)
+          .filter((metric, index) => metric.key !== "weight" && (index < 4 || readingsFor(readings, metric).length > 0))
           .map((metric) => {
             const { latest, change, weekly } = summary(readingsFor(readings, metric), today);
             return (
@@ -265,17 +365,17 @@ export function MeasurementsView({
                 className="card card-interactive metric-card"
                 key={metric.key}
                 onClick={() => setPage("trends")}
-                style={{ textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
+                style={{ textAlign: "left" }}
               >
                 <div className="split-row">
                   <span className="eyebrow">{metric.label}</span>
                   <ChevronRight size={14} style={{ color: "var(--muted)" }} />
                 </div>
-                <div className="reading" style={{ marginTop: ".25rem" }}>
+                <div className="reading" style={{ marginTop: ".25rem", fontSize: "clamp(1.4rem, 5vw, 1.9rem)" }}>
                   {readout(latest?.value, metric, settings.units)}{" "}
                   <small>{displayUnit(metric, settings.units)}</small>
                 </div>
-                <div className="split-row" style={{ fontSize: ".74rem", color: "var(--muted)", marginTop: ".2rem" }}>
+                <div className="split-row" style={{ fontSize: ".74rem", color: "var(--muted)", marginTop: ".15rem" }}>
                   <span>7d avg {readout(weekly, metric, settings.units)}</span>
                   <span className="num" style={{ fontWeight: 600, color: change != null && change < 0 ? "var(--status-good)" : "var(--text)" }}>
                     {change != null && change > 0 ? "+" : ""}
@@ -287,7 +387,7 @@ export function MeasurementsView({
           })}
       </div>
 
-      {/* Fitbit Body Fat & VO2 Max (when connected) */}
+      {/* Fitbit Body Fat & VO2 Max */}
       {isFitbitMode && (latestBodyFat != null || latestVo2Max != null) && (
         <section className="card" aria-label="Fitbit body and cardio">
           <div className="split-row" style={{ marginBottom: ".5rem" }}>
@@ -307,10 +407,10 @@ export function MeasurementsView({
         </section>
       )}
 
-      {/* Compact Ratios & Recomp Card */}
+      {/* Ratios & Recomp Card */}
       <section className="card" style={{ display: "grid", gap: ".55rem" }} aria-label="Body insights">
         <div className="split-row">
-          <span className="eyebrow">Recomp &amp; Ratios</span>
+          <span className="eyebrow">Cardiovascular Ratios &amp; Recomp</span>
           <button
             type="button"
             className="secondary compact"

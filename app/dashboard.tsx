@@ -1,30 +1,30 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Plus } from "lucide-react";
+import { ArrowLeft, CalendarDays, Plus, RefreshCw, Scale, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   FitbitPulseIcon,
   HomeRingIcon,
+  McpBrandMark,
   NutritionBowlIcon,
-  SettingsSlidersIcon,
 } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
-import { addDays, localDay } from "../lib/nutrition-model";
+import { addDays, localDay, localTime } from "../lib/nutrition-model";
 import { HomeView } from "./home-view";
+import type { TrendMetricKind } from "./metric-trends-modal";
+import type { QuickLogSavedFood } from "./quick-log-modal";
 import type {
   AppTab,
   DailyStrainView,
   HevyIntegrationStatus,
   InitialAppData,
-  MoreSection,
   RecoveryInsightView,
   StrainSettings,
-  ThemeMode,
 } from "./types";
 
 const MeasurementsView = dynamic(() => import("./measurements-view").then((m) => m.MeasurementsView), {
-  loading: () => <p role="status">Loading measurements…</p>,
+  loading: () => <p role="status">Loading body…</p>,
 });
 const TrainingView = dynamic(() => import("./training-view").then((m) => m.TrainingView), {
   loading: () => <p role="status">Loading training…</p>,
@@ -39,22 +39,29 @@ const SettingsView = dynamic(() => import("./settings-view").then((m) => m.Setti
 const MealComposer = dynamic(() => import("./meal-composer").then((m) => m.MealComposer), {
   ssr: false,
 });
+const QuickLogModal = dynamic(() => import("./quick-log-modal").then((m) => m.QuickLogModal), {
+  ssr: false,
+});
+const MetricTrendsModal = dynamic(() => import("./metric-trends-modal").then((m) => m.MetricTrendsModal), {
+  ssr: false,
+});
+const ConsistencyCalendarModal = dynamic(
+  () => import("./consistency-calendar-modal").then((m) => m.ConsistencyCalendarModal),
+  { ssr: false },
+);
 
-const tabs: { title: AppTab; icon: typeof HomeRingIcon }[] = [
-  { title: "Home", icon: HomeRingIcon },
+const tabs: { title: AppTab; icon: typeof HomeRingIcon | typeof Scale }[] = [
+  { title: "Today", icon: HomeRingIcon },
   { title: "Training", icon: FitbitPulseIcon },
   { title: "Nutrition", icon: NutritionBowlIcon },
-  { title: "More", icon: SettingsSlidersIcon },
+  { title: "Body", icon: Scale },
 ];
-
-const THEME_STORAGE_KEY = "fitnesstrackr_theme";
 
 export function Dashboard({ initial }: { initial: InitialAppData }) {
   const initialCalendarToday = initial.calendarToday ?? initial.today;
   const initialActiveDay = initial.activeDay ?? initial.daily.day ?? initialCalendarToday;
 
-  const [tab, setTab] = useState<AppTab>("Home");
-  const [theme, setThemeState] = useState<ThemeMode>("light");
+  const [tab, setTab] = useState<AppTab>("Today");
   const [tracker, setTracker] = useState(initial.tracker);
   const [settings, setSettings] = useState(initial.settings);
   const [today, setToday] = useState(initialCalendarToday);
@@ -80,7 +87,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const lastToday = useRef(initialCalendarToday);
   const [selectedDay, setSelectedDay] = useState(initialActiveDay);
   const [selectedDaily, setSelectedDaily] = useState<DailyNutritionView>(initial.daily);
-  const [moreSection, setMoreSection] = useState<MoreSection>("Measurements");
   const [homeStrain, setHomeStrain] = useState<DailyStrainView | undefined>(initial.strain);
   const [trainingDay, setTrainingDay] = useState(initialActiveDay);
   const trainingDayRef = useRef(initialActiveDay);
@@ -94,17 +100,40 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
   const lastAutoSyncRef = useRef(Date.now());
+
+  const [audit, setAudit] = useState(initial.audit);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<{ id: number; text: string; kind: "success" | "error" | "info" } | null>(null);
+  const toastSeq = useRef(0);
+
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [composerBarcode, setComposerBarcode] = useState(false);
+  const [composerDay, setComposerDay] = useState(initialCalendarToday);
+  const [editingMeal, setEditingMeal] = useState<MealRecord | null>(null);
+
+  // Silk modals & stack overlays
+  const [quickLogOpen, setQuickLogOpen] = useState(false);
+  const [trendsMetric, setTrendsMetric] = useState<TrendMetricKind | null>(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [bodySubPage, setBodySubPage] = useState<"physique" | null>(null);
+
   useEffect(() => {
     if (!google.connected || (!google.mealSync?.pending && !google.mealSync?.failed)) return;
     const controller = new AbortController();
     const timer = setInterval(() => {
       if (document.visibilityState !== "visible") return;
       void fetch("/api/integrations/google/push", { cache: "no-store", signal: controller.signal })
-        .then(async (response) => response.ok ? response.json() : null)
-        .then((payload) => { if (payload?.status && !controller.signal.aborted) setGoogle(payload.status); })
+        .then(async (response) => (response.ok ? response.json() : null))
+        .then((payload) => {
+          if (payload?.status && !controller.signal.aborted) setGoogle(payload.status);
+        })
         .catch(() => undefined);
     }, 5000);
-    return () => { clearInterval(timer); controller.abort(); };
+    return () => {
+      clearInterval(timer);
+      controller.abort();
+    };
   }, [google.connected, google.mealSync?.pending, google.mealSync?.failed]);
 
   // Automatic background sync on app open (if stale > 2m) and every 3 minutes while visible
@@ -166,7 +195,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       }
     };
 
-    // Fire on app open if stale
     void runSilentSync(true);
 
     const timer = window.setInterval(() => void runSilentSync(false), 60_000);
@@ -180,13 +208,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [google.connected, hevy?.connected]);
-  const [audit, setAudit] = useState(initial.audit);
-  const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<{ id: number; text: string; kind: "success" | "error" | "info" } | null>(null);
-  const toastSeq = useRef(0);
-  const [composerOpen, setComposerOpen] = useState(false);
-  const [composerDay, setComposerDay] = useState(initialCalendarToday);
-  const [editingMeal, setEditingMeal] = useState<MealRecord | null>(null);
 
   function showToast(text: string, kind?: "success" | "error" | "info") {
     if (!text) {
@@ -207,43 +228,23 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  function applyTheme(next: ThemeMode) {
-    setThemeState(next);
-    document.documentElement.dataset.theme = next;
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, next);
-    } catch {
-      // ignore private-mode storage restrictions
-    }
-    const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", next === "dark" ? "#0A0B0F" : "#F5F7FA");
-  }
-
-  function toggleTheme() {
-    applyTheme(theme === "light" ? "dark" : "light");
-  }
-
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(THEME_STORAGE_KEY) ?? window.localStorage.getItem("mcplogger_theme");
-      if (saved === "dark" || saved === "light") {
-        applyTheme(saved);
-      }
-    } catch {
-      // ignore storage errors
-    }
+    document.documentElement.dataset.theme = "light";
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", "#E8EAF0");
 
     const params = new URLSearchParams(window.location.search);
     const reqTab = params.get("tab");
     if (reqTab === "Settings") {
-      setTab("More");
-      setMoreSection("Settings");
-    } else if (reqTab === "Measurements") {
-      setTab("More");
-      setMoreSection("Measurements");
+      setSettingsOpen(true);
+    } else if (reqTab === "Measurements" || reqTab === "Body") {
+      setTab("Body");
+    } else if (reqTab === "Home" || reqTab === "Today") {
+      setTab("Today");
     } else if (reqTab && tabs.some((t) => t.title === reqTab)) {
       setTab(reqTab as AppTab);
     }
+
     const googleState = params.get("google");
     if (googleState === "connected") {
       showToast(
@@ -325,6 +326,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       await refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current);
     })().catch(() => showToast("Could not refresh the diary. Try again.", "error"));
   }, [today]);
+
   useEffect(() => () => {
     dayRequest.current?.abort();
     homeRequest.current?.abort();
@@ -332,6 +334,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   function navigate(next: AppTab) {
     setToast(null);
+    setSettingsOpen(false);
+    if (next !== "Body") setBodySubPage(null);
     setTab(next);
     window.scrollTo({ top: 0, behavior: "instant" });
   }
@@ -415,7 +419,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       syncTokenRef.current = token;
       window.dispatchEvent(new Event("fitnesstrackr:sync"));
     } catch {
-      // ignore transient network errors while offline or waking from iOS suspension
+      // ignore transient network errors
     } finally {
       syncInFlight.current = false;
     }
@@ -572,10 +576,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Could not import Hevy data.");
       if (json?.status) setHevy(json.status);
-      await Promise.all([
-        selectTrainingDay(trainingDayRef.current),
-        selectHomeDay(homeDayRef.current),
-      ]);
+      await Promise.all([selectTrainingDay(trainingDayRef.current), selectHomeDay(homeDayRef.current)]);
       showToast(`Imported ${json.imported ?? 0} Hevy workout(s).`, "success");
       return true;
     } catch (error) {
@@ -593,10 +594,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Hevy sync failed.");
       if (json?.status) setHevy(json.status);
-      await Promise.all([
-        selectTrainingDay(trainingDayRef.current),
-        selectHomeDay(homeDayRef.current),
-      ]);
+      await Promise.all([selectTrainingDay(trainingDayRef.current), selectHomeDay(homeDayRef.current)]);
       showToast(`Synced ${json.synced ?? 0} Hevy workout(s).`, "success");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Hevy sync failed.", "error");
@@ -621,11 +619,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     }
   }
 
-  function openMore(section: MoreSection = "Measurements") {
-    setMoreSection(section);
-    navigate("More");
-  }
-
   function openTrainingForDay(day: string) {
     navigate("Training");
     void selectTrainingDay(day);
@@ -635,7 +628,11 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     dayRequest.current?.abort();
     selectedDayRef.current = day;
     setSelectedDay(day);
-    if (day === homeDaily.day) { setSelectedDaily(homeDaily); setDayLoading(false); return; }
+    if (day === homeDaily.day) {
+      setSelectedDaily(homeDaily);
+      setDayLoading(false);
+      return;
+    }
     const controller = new AbortController();
     dayRequest.current = controller;
     setDayLoading(true);
@@ -695,7 +692,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message ?? "Could not save.");
 
-      // Use the committed response immediately, even if a later refresh is unavailable.
       const savedDay = typeof payload.day === "object" ? payload.day : payload.meals ? payload : null;
       if (savedDay) {
         if (savedDay.day === homeDayRef.current) setHomeDaily(savedDay);
@@ -710,7 +706,9 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         setAudit([]);
       }
       let refreshed = true;
-      await refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current).catch(() => { refreshed = false; });
+      await refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current).catch(() => {
+        refreshed = false;
+      });
       if (action.action === "energy" || action.action === "energy-import" || action.action === "import-health-file") {
         if (action.action === "import-health-file") await refreshAccountAndMeta().catch(() => null);
         await refreshTracker().catch(() => null);
@@ -737,6 +735,41 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       actionLock.current = false;
       setBusy(false);
     }
+  }
+
+  async function quickLogFood(food: QuickLogSavedFood, day: string): Promise<boolean> {
+    const time = localTime(new Date(), settings.timezone);
+    const category = food.foodType === "drink" ? "drinks" : "snacks";
+    return runNutritionAction(
+      {
+        action: "log",
+        data: {
+          day,
+          time,
+          name: food.name,
+          category,
+          cookingMethod: food.cookingMethod ?? "",
+          ingredients: food.ingredients ?? "",
+          notes: "Quick logged",
+          idempotencyKey: crypto.randomUUID(),
+          items: [
+            {
+              name: food.name,
+              amount: food.defaultAmount ?? 100,
+              unit: food.defaultUnit ?? "g",
+              calories: food.calories ?? 0,
+              proteinG: food.proteinG ?? null,
+              carbsG: food.carbsG ?? null,
+              fatG: food.fatG ?? null,
+              fibreG: food.fibreG ?? null,
+              estimationMethod: "pack_label",
+              savedFoodId: food.id,
+            },
+          ],
+        },
+      },
+      `Logged ${food.name}.`,
+    );
   }
 
   async function syncGoogle(days = 14) {
@@ -831,21 +864,65 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     }
   }
 
-  function openNewMeal(day = todayRef.current) {
+  function openNewMeal(day = todayRef.current, openBarcode = false) {
     setComposerDay(day);
     setEditingMeal(null);
+    setComposerBarcode(openBarcode);
     setComposerOpen(true);
   }
 
   function openEditMeal(meal: MealRecord) {
     setEditingMeal(meal);
+    setComposerBarcode(false);
     setComposerOpen(true);
   }
 
+  const activeFocusDay = tab === "Today" ? homeDay : tab === "Nutrition" ? selectedDay : today;
+  const isFitbitMode = (settings.trackingMode ?? (settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit";
+
   return (
     <main className="shell">
+      <header className="silk-topbar">
+        <div className="brand-lockup">
+          <span className="brand-badge">
+            <McpBrandMark size={15} />
+          </span>
+          <span style={{ fontSize: ".9rem", letterSpacing: "-0.015em" }}>FitnessTrackr</span>
+        </div>
+        <div className="silk-topbar-actions">
+          {isFitbitMode && google.connected && (
+            <button
+              type="button"
+              className="secondary compact"
+              style={{ minHeight: "38px", padding: ".2rem .6rem", fontSize: ".74rem" }}
+              disabled={busy}
+              onClick={() => void syncGoogle(14)}
+              aria-label="Sync Google Health"
+            >
+              <RefreshCw size={13} /> Sync
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Open consistency calendar"
+            onClick={() => setCalendarOpen(true)}
+          >
+            <CalendarDays size={18} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Open settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <User size={18} />
+          </button>
+        </div>
+      </header>
+
       <div className="screen" key={tab}>
-        {tab === "Home" && (
+        {tab === "Today" && (
           <HomeView
             calendarToday={today}
             activeDay={activeHomeDay}
@@ -858,15 +935,12 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             settings={settings}
             strain={homeStrain}
             recoveryInsights={homeRecovery}
-            theme={theme}
             busy={busy}
-            onToggleTheme={toggleTheme}
             onSelectHomeDay={(d) => void selectHomeDay(d)}
             onOpenTraining={openTrainingForDay}
-            onLogMeal={() => openNewMeal(homeDay)}
+            onOpenTrends={(m) => setTrendsMetric(m)}
             onEditMeal={openEditMeal}
             onSyncGoogle={() => void syncGoogle(14)}
-            onPushGoogle={() => void pushGoogle(14)}
             onNavigate={navigate}
           />
         )}
@@ -880,14 +954,14 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             strainSettings={strainSettings}
             hevy={hevy}
             google={google}
-            theme={theme}
+            theme="light"
             busy={busy}
             loading={trainingLoading}
             onSelectDay={(d) => void selectTrainingDay(d)}
             onRecomputeDay={(d) => void recomputeStrainDay(d)}
             onImportHevy={importHevy}
             onSyncHevy={syncHevy}
-            onOpenSettings={(section = "Settings") => openMore(section)}
+            onOpenSettings={() => setSettingsOpen(true)}
           />
         )}
 
@@ -899,10 +973,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             history30={history30}
             tracker={tracker}
             settings={settings}
-            theme={theme}
             busy={busy}
             loading={dayLoading || selectedDaily.day !== selectedDay}
-            onToggleTheme={toggleTheme}
             onSelectDay={(d) => void selectDay(d)}
             onLogMeal={() => openNewMeal(selectedDay)}
             onEditMeal={openEditMeal}
@@ -918,98 +990,133 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           />
         )}
 
-        {tab === "More" && (
-          <div style={{ display: "grid", gap: "1rem" }}>
-            <div className="segmented" role="tablist" aria-label="More sections">
-              {(["Measurements", "Settings"] as MoreSection[]).map((section) => (
-                <button
-                  key={section}
-                  type="button"
-                  role="tab"
-                  aria-selected={moreSection === section}
-                  className={moreSection === section ? "active" : ""}
-                  onClick={() => setMoreSection(section)}
-                >
-                  {section}
-                </button>
-              ))}
-            </div>
-
-            {moreSection === "Measurements" && (
-              <MeasurementsView
-                snapshot={tracker}
-                nutritionSettings={settings}
-                history30={history30}
-                daily={homeDaily}
-                today={today}
-                theme={theme}
-                busy={busy}
-                onToggleTheme={toggleTheme}
-                onSaveTracker={saveTracker}
-              />
-            )}
-
-            {moreSection === "Settings" && (
-              <SettingsView
-                today={today}
-                tracker={tracker}
-                settings={settings}
-                google={google}
-                hevy={hevy}
-                strainSettings={strainSettings}
-                audit={audit}
-                mcpEnabled={initial.mcpEnabled}
-                theme={theme}
-                busy={busy}
-                onSetTheme={applyTheme}
-                onToggleTheme={toggleTheme}
-                onSaveTracker={saveTracker}
-                onNutritionAction={(action, msg) => runNutritionAction(action as { action: string }, msg)}
-                onSaveStrainSettings={saveStrainSettings}
-                onImportHevy={importHevy}
-                onSyncHevy={syncHevy}
-                onDisconnectHevy={disconnectHevy}
-                onSyncGoogle={syncGoogle}
-                onPushGoogle={pushGoogle}
-                onDisconnectGoogle={disconnectGoogle}
-                onMessage={(msg) => showToast(msg)}
-              />
-            )}
-          </div>
+        {tab === "Body" && (
+          <MeasurementsView
+            snapshot={tracker}
+            nutritionSettings={settings}
+            history30={history30}
+            daily={homeDaily}
+            today={today}
+            busy={busy}
+            initialSubPage={bodySubPage}
+            onClearInitialSubPage={() => setBodySubPage(null)}
+            onOpenTrends={(m) => setTrendsMetric(m)}
+            onSaveTracker={saveTracker}
+            onMessage={(msg) => showToast(msg)}
+          />
         )}
       </div>
 
+      {settingsOpen && (
+        <div className="silk-overlay" role="dialog" aria-label="Settings & Integrations">
+          <div className="silk-overlay-inner">
+            <div className="page-header">
+              <button
+                type="button"
+                className="secondary compact"
+                style={{ minHeight: "38px" }}
+                onClick={() => setSettingsOpen(false)}
+              >
+                <ArrowLeft size={16} /> Back
+              </button>
+              <h1 style={{ fontSize: "1.2rem", margin: 0, flex: 1, textAlign: "center" }}>Settings &amp; Profile</h1>
+              <div style={{ minWidth: "64px" }} />
+            </div>
+            <SettingsView
+              today={today}
+              tracker={tracker}
+              settings={settings}
+              google={google}
+              hevy={hevy}
+              strainSettings={strainSettings}
+              audit={audit}
+              mcpEnabled={initial.mcpEnabled}
+              busy={busy}
+              onSaveTracker={saveTracker}
+              onNutritionAction={(action, msg) => runNutritionAction(action as { action: string }, msg)}
+              onSaveStrainSettings={saveStrainSettings}
+              onImportHevy={importHevy}
+              onSyncHevy={syncHevy}
+              onDisconnectHevy={disconnectHevy}
+              onSyncGoogle={syncGoogle}
+              onPushGoogle={pushGoogle}
+              onDisconnectGoogle={disconnectGoogle}
+              onMessage={(msg) => showToast(msg)}
+            />
+          </div>
+        </div>
+      )}
+
       {toast && (
-        <div
-          className="toast-region"
-          aria-live={toast.kind === "error" ? "assertive" : "polite"}
-          aria-atomic="true"
-        >
-          <div
-            className={`feedback toast-${toast.kind}`}
-            role={toast.kind === "error" ? "alert" : "status"}
-          >
+        <div className="toast-region" aria-live={toast.kind === "error" ? "assertive" : "polite"} aria-atomic="true">
+          <div className={`feedback toast-${toast.kind}`} role={toast.kind === "error" ? "alert" : "status"}>
             <span className="toast-text">{toast.text}</span>
-            <button
-              type="button"
-              className="toast-dismiss"
-              aria-label="Dismiss notification"
-              onClick={() => setToast(null)}
-            >
+            <button type="button" className="toast-dismiss" aria-label="Dismiss notification" onClick={() => setToast(null)}>
               ×
             </button>
           </div>
         </div>
       )}
 
+      {quickLogOpen && (
+        <QuickLogModal
+          open={quickLogOpen}
+          defaultDay={activeFocusDay}
+          tracker={tracker}
+          google={google}
+          hevy={hevy}
+          busy={busy}
+          onClose={() => setQuickLogOpen(false)}
+          onOpenMealComposer={(opts) => openNewMeal(activeFocusDay, Boolean(opts?.openBarcode))}
+          onQuickLogFood={quickLogFood}
+          onSaveTracker={saveTracker}
+          onSyncHevy={syncHevy}
+          onSyncGoogle={() => syncGoogle(14)}
+          onOpenTraining={() => navigate("Training")}
+          onOpenPhysiqueCheckin={() => {
+            setBodySubPage("physique");
+            navigate("Body");
+          }}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+      )}
+
+      {trendsMetric && (
+        <MetricTrendsModal
+          open={trendsMetric != null}
+          initialMetric={trendsMetric}
+          today={today}
+          history30={history30}
+          tracker={tracker}
+          settings={settings}
+          recoveryInsights={homeRecovery}
+          onClose={() => setTrendsMetric(null)}
+        />
+      )}
+
+      {calendarOpen && (
+        <ConsistencyCalendarModal
+          open={calendarOpen}
+          today={today}
+          settings={settings}
+          onClose={() => setCalendarOpen(false)}
+          onJumpToDay={(day) => {
+            navigate("Today");
+            void selectHomeDay(day);
+          }}
+        />
+      )}
+
       {composerOpen && (
         <MealComposer
           defaultDay={composerDay}
           editingMeal={editingMeal}
+          initialBarcodeOpen={composerBarcode}
           busy={busy}
           timezone={settings.timezone}
           onClose={() => {
             setComposerOpen(false);
+            setComposerBarcode(false);
             setEditingMeal(null);
           }}
           onSaveMeal={async ({ mode, data }) => {
@@ -1039,8 +1146,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         <button
           className="nav-center-log"
           type="button"
-          aria-label="Log meal"
-          onClick={() => openNewMeal(tab === "Home" ? homeDay : tab === "Nutrition" ? selectedDay : today)}
+          aria-label="Quick log"
+          onClick={() => setQuickLogOpen(true)}
         >
           <Plus size={22} aria-hidden="true" />
         </button>

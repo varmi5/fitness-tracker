@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight, RefreshCw, TrendingUp } from "lucide-react";
 import { BevelScoreRing, CalorieSlider } from "../components/bevel-widgets";
-import { McpBrandMark, MealCategoryIcon } from "../components/icons";
+import { MealCategoryIcon } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
 import { addDays, isCalorieGoalMet } from "../lib/nutrition-model";
 import { computeTargetStrain } from "../lib/strain-engine";
 import { metrics, readingsFor, summary } from "../lib/metrics";
+import type { TrendMetricKind } from "./metric-trends-modal";
 import {
   CATEGORY_LABELS,
   fmtGram,
@@ -18,7 +19,6 @@ import {
   type NutritionHistory,
   type NutritionSettings,
   type RecoveryInsightView,
-  type ThemeMode,
   type TrackerSnapshot,
 } from "./types";
 
@@ -34,15 +34,12 @@ interface HomeViewProps {
   settings: NutritionSettings;
   strain?: DailyStrainView;
   recoveryInsights?: RecoveryInsightView;
-  theme: ThemeMode;
   busy: boolean;
-  onToggleTheme: () => void;
   onSelectHomeDay: (day: string) => void;
   onOpenTraining?: (day: string) => void;
-  onLogMeal: () => void;
+  onOpenTrends: (metric: TrendMetricKind) => void;
   onEditMeal: (meal: MealRecord) => void;
   onSyncGoogle: () => void;
-  onPushGoogle: () => void;
   onNavigate: (tab: AppTab) => void;
 }
 
@@ -55,6 +52,20 @@ function formatDurationMinutes(minutes: number): string {
 function formatDurationSeconds(seconds: number | null): string | null {
   if (seconds == null || seconds <= 0) return null;
   return formatDurationMinutes(Math.round(seconds / 60));
+}
+
+function buildSparklinePoints(values: number[], width = 104, height = 28): string {
+  if (values.length < 2) return "";
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  return values
+    .map((v, i) => {
+      const x = (i / (values.length - 1)) * (width - 4) + 2;
+      const y = height - 3 - ((v - min) / span) * (height - 6);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
 }
 
 export function HomeView({
@@ -71,11 +82,11 @@ export function HomeView({
   busy,
   onSelectHomeDay,
   onOpenTraining,
+  onOpenTrends,
   onEditMeal,
   onSyncGoogle,
   onNavigate,
 }: HomeViewProps) {
-  const [mealsExpanded, setMealsExpanded] = useState(false);
   const [sleepDetailOpen, setSleepDetailOpen] = useState(false);
 
   const isFitbitMode = settings.trackingMode === "fitbit";
@@ -138,7 +149,7 @@ export function HomeView({
     },
   ];
 
-  // Weight resolution scoped strictly to viewDay
+  // Weight resolution & 14-day sparkline scoped strictly to viewDay
   const weightMetric = metrics.find((m) => m.key === "weight")!;
   const weightReadings = readingsFor(tracker.readings, weightMetric);
   const weightSummary = summary(weightReadings, viewDay);
@@ -149,6 +160,21 @@ export function HomeView({
   const displayWeight =
     daily.energy?.weightKg ?? weightSummary.latest?.value ?? latestEnergyWeightUpToViewDay;
   const weightChange7d = weightSummary.change;
+
+  const weightSparkPoints = useMemo(() => {
+    const from14 = addDays(viewDay, -13);
+    const byDay = new Map<string, number>();
+    for (const d of history30.days) {
+      if (d.day >= from14 && d.day <= viewDay && d.energy?.weightKg != null) {
+        byDay.set(d.day, d.energy.weightKg);
+      }
+    }
+    for (const r of weightReadings) {
+      if (r.date >= from14 && r.date <= viewDay) byDay.set(r.date, r.value);
+    }
+    const vals = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);
+    return buildSparklinePoints(vals);
+  }, [history30.days, weightReadings, viewDay]);
 
   const viewDateDisplay = new Date(`${viewDay}T12:00:00Z`).toLocaleDateString("en-GB", {
     timeZone: "UTC",
@@ -172,78 +198,66 @@ export function HomeView({
   const sleepPct = sleepMinutes != null ? Math.min(100, Math.round((sleepMinutes / 480) * 100)) : 0;
   const vitalsPending = isFitbitMode && recoveryScore == null && sleepMinutes == null;
 
-  const primaryWorkout =
-    strain?.activities.find((a) => a.kind === "strength" || a.kind === "cardio") ?? null;
+  const sameDayWorkouts = (strain?.activities ?? [])
+    .filter((a) => a.kind === "strength" || a.kind === "cardio")
+    .slice(0, 2);
+  const cappedMeals = daily.meals.slice(0, 3);
 
   const openTrainingView = () => (onOpenTraining ? onOpenTraining(viewDay) : onNavigate("Training"));
 
   return (
     <>
-      {/* Minimal Bevel Header */}
-      <div className="page-header" style={{ marginBottom: ".15rem" }}>
-        <div className="page-header-title" style={{ width: "100%" }}>
-          <div className="split-row" style={{ alignItems: "center" }}>
-            <div className="brand-lockup">
-              <span className="brand-badge">
-                <McpBrandMark size={15} />
-              </span>
-              <span style={{ fontSize: ".82rem", letterSpacing: "-0.01em" }}>FitnessTrackr</span>
-            </div>
-            {isFitbitMode && google.connected && (
-              <button
-                type="button"
-                className="secondary compact"
-                style={{ minHeight: "32px", padding: ".2rem .6rem", fontSize: ".74rem" }}
-                disabled={busy}
-                onClick={onSyncGoogle}
-                aria-label="Sync Google Health"
-              >
-                <RefreshCw size={12} /> Sync
-              </button>
-            )}
-          </div>
-
-          <div className="home-date-nav" style={{ marginTop: ".25rem" }}>
-            <button
-              type="button"
-              className="secondary compact home-step-btn"
-              aria-label="Previous day"
-              onClick={() => onSelectHomeDay(addDays(viewDay, -1))}
-            >
-              <ChevronLeft size={18} />
-            </button>
-            <div style={{ textAlign: "center" }}>
-              <h1 style={{ fontSize: "1.45rem", letterSpacing: "-0.03em", margin: 0 }}>{viewTitle}</h1>
-              <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>{viewDateDisplay}</div>
-            </div>
-            <button
-              type="button"
-              className="secondary compact home-step-btn"
-              aria-label="Next day"
-              disabled={viewDay >= calendarToday}
-              onClick={() => onSelectHomeDay(addDays(viewDay, 1))}
-            >
-              <ChevronRight size={18} />
-            </button>
-          </div>
-
-          {viewDay !== activeDay && (
-            <div style={{ display: "flex", justifyContent: "center", marginTop: ".25rem" }}>
-              <button
-                type="button"
-                className="secondary compact"
-                style={{ minHeight: "30px", padding: ".18rem .65rem", fontSize: ".74rem" }}
-                onClick={() => onSelectHomeDay(activeDay)}
-              >
-                Back to {activeDay === calendarToday ? "today" : "active day"}
-              </button>
-            </div>
-          )}
+      <div className="home-date-nav" style={{ justifyContent: "space-between", paddingInline: ".1rem" }}>
+        <button
+          type="button"
+          className="secondary compact home-step-btn"
+          aria-label="Previous day"
+          onClick={() => onSelectHomeDay(addDays(viewDay, -1))}
+        >
+          <ChevronLeft size={18} />
+        </button>
+        <div style={{ textAlign: "center" }}>
+          <h1 style={{ fontSize: "1.4rem", letterSpacing: "-0.03em", margin: 0 }}>{viewTitle}</h1>
+          <div style={{ fontSize: ".75rem", color: "var(--muted)" }}>{viewDateDisplay}</div>
         </div>
+        <button
+          type="button"
+          className="secondary compact home-step-btn"
+          aria-label="Next day"
+          disabled={viewDay >= calendarToday}
+          onClick={() => onSelectHomeDay(addDays(viewDay, 1))}
+        >
+          <ChevronRight size={18} />
+        </button>
       </div>
 
-      {/* Bevel-Style Triple-Ring Hero (Strain · Recovery · Sleep) */}
+      {viewDay !== activeDay && (
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <button
+            type="button"
+            className="secondary compact"
+            style={{ minHeight: "30px", padding: ".18rem .65rem", fontSize: ".74rem" }}
+            onClick={() => onSelectHomeDay(activeDay)}
+          >
+            Back to {activeDay === calendarToday ? "today" : "active day"}
+          </button>
+        </div>
+      )}
+
+      {/* Silk Triple-Ring Hero (Strain · Recovery · Sleep) */}
       <section className="card triple-ring-card" aria-label="Daily score rings">
+        <div className="split-row">
+          <span className="eyebrow">Daily Biometrics</span>
+          <button
+            type="button"
+            className="silk-chip-btn"
+            onClick={() => onOpenTrends("strain")}
+            aria-label="Open strain trends"
+          >
+            <TrendingUp size={12} /> Trends <ChevronRight size={12} />
+          </button>
+        </div>
+
         {isFitbitMode ? (
           <div className="triple-ring-grid">
             <BevelScoreRing
@@ -314,7 +328,6 @@ export function HomeView({
           </button>
         )}
 
-        {/* Hidden semantic hook for Fitbit mode so tapping Strain opens Training */}
         {isFitbitMode && (
           <button
             type="button"
@@ -337,7 +350,7 @@ export function HomeView({
                 disabled={busy}
                 onClick={onSyncGoogle}
               >
-                Refresh
+                <RefreshCw size={11} /> Refresh
               </button>
             )}
           </div>
@@ -358,9 +371,9 @@ export function HomeView({
         )}
       </section>
 
-      {/* Bevel-Style Calorie Intake Linear Slider Card */}
+      {/* Calorie Intake Linear Slider */}
       <CalorieSlider
-        title="Calorie Intake"
+        title="Energy Balance & Intake"
         consumedText={intake == null ? "0" : fmtKcal(intake)}
         targetText={`${fmtKcal(target)} kcal`}
         statusText={remainingLabel}
@@ -371,96 +384,48 @@ export function HomeView({
         onClick={() => onNavigate("Nutrition")}
       />
 
-      {/* Compact Today's Activity & Snapshot Card (Click-to-Expand, Zero Bloat) */}
-      <section className="card" style={{ display: "grid", gap: ".1rem" }} aria-label="Daily snapshot">
-        {primaryWorkout && (
-          <button type="button" className="compact-row-btn" onClick={openTrainingView}>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: ".45rem" }}>
-                <strong style={{ fontSize: ".92rem" }}>{primaryWorkout.title}</strong>
-                <span className="pill" style={{ fontSize: ".68rem", padding: ".1rem .45rem" }}>
-                  {primaryWorkout.source}
-                </span>
-              </div>
-              <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".15rem" }}>
-                {formatDurationSeconds(primaryWorkout.durationSeconds) ?? "—"}
-                {primaryWorkout.mRaw > 0 ? ` · Muscular ${Math.round(strain?.muscularStrain ?? 0)}` : ""}
-                {primaryWorkout.cRaw > 0 ? ` · Cardio ${Math.round(strain?.cardioStrain ?? 0)}` : ""}
-              </div>
-            </div>
-            <ChevronRight size={16} style={{ color: "var(--muted)" }} />
-          </button>
-        )}
-
+      {/* Weight Sparkline + Steps + Energy Balance Trends */}
+      <section className="card" style={{ display: "grid", gap: ".15rem" }} aria-label="Weight and steps snapshot">
         <button
           type="button"
           className="compact-row-btn"
-          onClick={() => setMealsExpanded((v) => !v)}
-          aria-expanded={mealsExpanded}
+          onClick={() => onOpenTrends("weight")}
         >
-          <div>
-            <strong style={{ fontSize: ".92rem" }}>Meals</strong>
+          <div style={{ minWidth: 0 }}>
+            <strong style={{ fontSize: ".92rem" }}>Body Weight</strong>
             <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem" }}>
-              {daily.meals.length === 0
-                ? "No meals logged yet"
-                : `${daily.meals.length} ${daily.meals.length === 1 ? "meal" : "meals"} · ${fmtKcal(intake)} kcal`}
+              <span className="num">{displayWeight != null ? `${displayWeight.toFixed(1)} kg` : "No weight logged"}</span>
+              {weightChange7d != null ? ` · ${weightChange7d > 0 ? "+" : ""}${weightChange7d.toFixed(1)} kg (7d)` : ""}
             </div>
           </div>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: ".35rem", color: "var(--muted)" }}>
-            {daily.nutritionScore.grade && (
-              <span className={`pill score-pill-${daily.nutritionScore.grade}`} style={{ fontSize: ".7rem" }}>
-                {daily.nutritionScore.grade}
-              </span>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: ".5rem" }}>
+            {weightSparkPoints && (
+              <svg width="104" height="28" viewBox="0 0 104 28" aria-hidden="true">
+                <polyline
+                  fill="none"
+                  stroke="var(--accent-2)"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  points={weightSparkPoints}
+                />
+              </svg>
             )}
-            {mealsExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            <ChevronRight size={16} style={{ color: "var(--muted)" }} />
           </div>
         </button>
 
-        {mealsExpanded && (
-          <div style={{ display: "grid", gap: ".4rem", paddingBottom: ".5rem" }}>
-            {daily.meals.length === 0 ? (
-              <p className="empty" style={{ padding: ".4rem 0", fontSize: ".8rem" }}>
-                Tap + below to log a meal or scan a barcode.
-              </p>
-            ) : (
-              daily.meals.map((meal) => (
-                <button
-                  key={meal.id}
-                  type="button"
-                  className="compact-row-btn"
-                  style={{ padding: ".45rem .6rem", background: "var(--surface-soft)", borderRadius: "10px", borderTop: 0 }}
-                  onClick={() => onEditMeal(meal)}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: ".45rem", minWidth: 0 }}>
-                    <MealCategoryIcon category={meal.category} size={14} />
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: ".84rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {meal.name}
-                      </div>
-                      <div style={{ fontSize: ".72rem", color: "var(--muted)" }}>
-                        {CATEGORY_LABELS[meal.category]} · {meal.localTime}
-                      </div>
-                    </div>
-                  </div>
-                  <strong className="num" style={{ fontSize: ".86rem" }}>
-                    {fmtKcal(meal.totals.calories)}
-                  </strong>
-                </button>
-              ))
-            )}
-          </div>
-        )}
-
         <button
           type="button"
           className="compact-row-btn"
-          onClick={() => onNavigate("More")}
+          onClick={() => onOpenTrends("energy")}
         >
           <div>
-            <strong style={{ fontSize: ".92rem" }}>Body Weight</strong>
+            <strong style={{ fontSize: ".92rem" }}>Energy Balance Trend</strong>
             <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem" }}>
-              {displayWeight != null ? `${displayWeight.toFixed(1)} kg` : "No weight logged"}
-              {weightChange7d != null ? ` · ${weightChange7d > 0 ? "+" : ""}${weightChange7d.toFixed(1)} kg (7d)` : ""}
+              {daily.energy?.totalKcal != null
+                ? `Burn ${fmtKcal(daily.energy.totalKcal)} kcal · 7D/30D/90D chart`
+                : "7D / 30D / 90D intake vs expenditure"}
             </div>
           </div>
           <ChevronRight size={16} style={{ color: "var(--muted)" }} />
@@ -482,6 +447,94 @@ export function HomeView({
             <ChevronRight size={16} style={{ color: "var(--muted)" }} />
           </button>
         )}
+      </section>
+
+      {/* Capped Fuel (max 3 meals) & Same-Day Workouts (max 2) */}
+      <section className="card" style={{ display: "grid", gap: ".4rem" }} aria-label="Fuel and workouts">
+        <div className="split-row">
+          <span className="eyebrow">Fuel Today</span>
+          {daily.nutritionScore.grade && (
+            <span className={`pill score-pill-${daily.nutritionScore.grade}`} style={{ fontSize: ".7rem" }}>
+              Score {daily.nutritionScore.grade}
+            </span>
+          )}
+        </div>
+
+        {cappedMeals.length === 0 ? (
+          <p className="empty" style={{ padding: ".45rem 0", fontSize: ".8rem" }}>
+            Tap + below to quick-log a meal or scan a barcode.
+          </p>
+        ) : (
+          <div style={{ display: "grid", gap: ".35rem" }}>
+            {cappedMeals.map((meal) => (
+              <button
+                key={meal.id}
+                type="button"
+                className="compact-row-btn"
+                style={{ padding: ".48rem .65rem", background: "var(--surface-soft)", borderRadius: "14px", borderTop: 0 }}
+                onClick={() => onEditMeal(meal)}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: ".45rem", minWidth: 0 }}>
+                  <MealCategoryIcon category={meal.category} size={14} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: ".84rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {meal.name}
+                    </div>
+                    <div style={{ fontSize: ".72rem", color: "var(--muted)" }}>
+                      {CATEGORY_LABELS[meal.category]} · {meal.localTime}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
+                  {meal.qualityScore.grade && (
+                    <span className={`pill score-pill-${meal.qualityScore.grade}`} style={{ fontSize: ".68rem", padding: ".05rem .4rem", minHeight: "20px" }}>
+                      {meal.qualityScore.grade}
+                    </span>
+                  )}
+                  <strong className="num" style={{ fontSize: ".86rem" }}>
+                    {fmtKcal(meal.totals.calories)}
+                  </strong>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {daily.meals.length > 3 && (
+          <button
+            type="button"
+            className="secondary compact"
+            style={{ width: "100%", fontSize: ".76rem", minHeight: "34px" }}
+            onClick={() => onNavigate("Nutrition")}
+          >
+            See all {daily.meals.length} meals in Nutrition <ChevronRight size={14} />
+          </button>
+        )}
+
+        {sameDayWorkouts.map((workout) => (
+          <button
+            key={workout.id}
+            type="button"
+            className="compact-row-btn"
+            style={{ marginTop: ".15rem" }}
+            onClick={openTrainingView}
+          >
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: ".45rem" }}>
+                <strong style={{ fontSize: ".9rem" }}>{workout.title}</strong>
+                <span className="pill" style={{ fontSize: ".68rem", padding: ".1rem .45rem" }}>
+                  {workout.source}
+                </span>
+              </div>
+              <div style={{ fontSize: ".75rem", color: "var(--muted)", marginTop: ".12rem" }}>
+                {formatDurationSeconds(workout.durationSeconds) ?? "—"}
+                {workout.mRaw > 0 ? ` · Muscular ${Math.round(strain?.muscularStrain ?? 0)}` : ""}
+                {workout.cRaw > 0 ? ` · Cardio ${Math.round(strain?.cardioStrain ?? 0)}` : ""}
+              </div>
+            </div>
+            <ChevronRight size={16} style={{ color: "var(--muted)" }} />
+          </button>
+        ))}
       </section>
     </>
   );

@@ -418,3 +418,18 @@ export const reminderDelivery = pgTable("reminder_delivery", {
  state: text().notNull().default("pending"), attempts: integer().notNull().default(0), nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
  leasedUntil: timestamp("leased_until", { withTimezone: true }),
 }, (t) => [primaryKey({ columns: [t.userId, t.day, t.time, t.subscriptionId] })]);
+
+export const physiqueCheckin = pgTable("physique_checkin", {
+  id: text().primaryKey(),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  day: date().notNull(),
+  pose: text().notNull().default("front"),
+  cadence: text().notNull().default("weekly"),
+  photoData: text("photo_data").notNull(),
+  weightKg: doublePrecision("weight_kg"),
+  bodyFatPct: doublePrecision("body_fat_pct"),
+  note: text().notNull().default(""),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index("physique_checkin_user_day_idx").on(t.userId, t.day, t.createdAt),
+]);

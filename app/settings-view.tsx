@@ -4,7 +4,7 @@ import { ReminderSettings } from "./reminder-settings";
 import { MacroTargetEditor } from "./macro-target-editor";
 import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { ArrowDownToLine, ChevronDown, Copy, Fingerprint, RefreshCw, Upload } from "lucide-react";
-import { MoonThemeIcon, SunThemeIcon, TwoWaySyncIcon } from "../components/icons";
+import { TwoWaySyncIcon } from "../components/icons";
 import { Button } from "../components/ui/button";
 import { authClient } from "../lib/auth-client";
 import { displayUnit, displayValue, metrics, type Reading } from "../lib/metrics";
@@ -16,7 +16,6 @@ import {
   type HevyIntegrationStatus,
   type NutritionSettings,
   type StrainSettings,
-  type ThemeMode,
   type TrackerSnapshot,
 } from "./types";
 
@@ -29,10 +28,7 @@ interface SettingsViewProps {
   strainSettings?: StrainSettings;
   audit: AuditEntry[];
   mcpEnabled: boolean;
-  theme: ThemeMode;
   busy: boolean;
-  onSetTheme: (mode: ThemeMode) => void;
-  onToggleTheme: () => void;
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
   onNutritionAction: (action: object, successMessage: string) => Promise<boolean>;
   onSaveStrainSettings?: (data: Partial<StrainSettings>) => Promise<boolean>;
@@ -61,10 +57,7 @@ export function SettingsView({
   strainSettings,
   audit,
   mcpEnabled,
-  theme,
   busy,
-  onSetTheme,
-  onToggleTheme,
   onSaveTracker,
   onNutritionAction,
   onSaveStrainSettings,
@@ -294,38 +287,16 @@ export function SettingsView({
 
   return (
     <>
-      <div className="page-header">
-        <div className="page-header-title">
-          <h1>Settings</h1>
-          <p style={{ fontSize: ".84rem" }}>Tap any section to expand or collapse</p>
+      <section className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".75rem" }}>
+        <div>
+          <strong style={{ fontSize: "1rem" }}>@varmisan</strong>
+          <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
+            Silk Telemetry · {google.connected ? "Google Health connected" : "Local"}
+            {hevy?.connected ? " · Hevy connected" : ""}
+          </div>
         </div>
-        <div className="header-actions">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-            onClick={onToggleTheme}
-          >
-            {theme === "light" ? <MoonThemeIcon size={17} /> : <SunThemeIcon size={17} />}
-          </button>
-        </div>
-      </div>
-
-      {/* Appearance Theme Switcher */}
-      <SettingsDropdown
-        title="Appearance"
-        subtitle="Light clean canvas default or OLED dark mode"
-        badge={theme === "dark" ? "Dark" : "Light"}
-      >
-        <div className="segments" role="group" aria-label="Theme mode">
-          <button type="button" aria-pressed={theme === "light"} onClick={() => onSetTheme("light")}>
-            <SunThemeIcon size={15} /> Light
-          </button>
-          <button type="button" aria-pressed={theme === "dark"} onClick={() => onSetTheme("dark")}>
-            <MoonThemeIcon size={15} /> Dark
-          </button>
-        </div>
-      </SettingsDropdown>
+        <span className="pill accent-soft">Pro</span>
+      </section>
 
       {/* Nutrition Targets */}
       <SettingsDropdown
