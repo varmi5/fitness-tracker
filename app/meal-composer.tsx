@@ -81,6 +81,7 @@ function scale(val: number | null | undefined, ratio: number): string {
 interface MealComposerProps {
   defaultDay: string;
   editingMeal: MealRecord | null;
+  initialBarcodeOpen?: boolean;
   busy: boolean;
   timezone: string;
   onClose: () => void;
@@ -91,6 +92,7 @@ interface MealComposerProps {
 export function MealComposer({
   defaultDay,
   editingMeal,
+  initialBarcodeOpen = false,
   busy,
   timezone,
   onClose,
@@ -152,7 +154,7 @@ export function MealComposer({
   const syncViewportRef = useRef<() => void>(() => {});
   const working = busy || submitting;
   const [barcode, setBarcode] = useState("");
-  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(initialBarcodeOpen);
   const [barcodeDefinition, setBarcodeDefinition] = useState<FoodDefinition | null>(null);
   const [barcodeProduct, setBarcodeProduct] = useState<BarcodeProduct | null>(null);
   const [barcodeGrams, setBarcodeGrams] = useState("100");

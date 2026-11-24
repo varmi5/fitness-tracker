@@ -15,7 +15,6 @@ import {
   type DailyStrainView,
   type GoogleIntegrationStatus,
   type HevyIntegrationStatus,
-  type MoreSection,
   type RecoveryInsightView,
   type StrainSettings,
   type ThemeMode,
@@ -36,7 +35,7 @@ interface TrainingViewProps {
   onRecomputeDay: (day: string) => void;
   onImportHevy: (rawText: string) => Promise<boolean>;
   onSyncHevy: () => Promise<void>;
-  onOpenSettings: (section?: MoreSection) => void;
+  onOpenSettings: () => void;
 }
 
 type DrilldownPage =

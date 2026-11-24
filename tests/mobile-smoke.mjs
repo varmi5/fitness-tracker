@@ -92,12 +92,13 @@ try {
     assert.equal(await nextDayBtn.isDisabled(), true);
 
     const nav = page.getByRole("navigation");
-    const fab = page.getByRole("button", { name: "Log meal", exact: true });
+    const fab = page.getByRole("button", { name: "Quick log", exact: true });
     assert.equal(await nav.evaluate((node) => getComputedStyle(node).position), "fixed");
     const fabBox = await fab.boundingBox(); const navBox = await nav.boundingBox();
     assert.ok(fabBox && navBox && fabBox.x >= navBox.x && fabBox.x + fabBox.width <= navBox.x + navBox.width + 2);
     assert.ok(fabBox.y >= navBox.y - 2 && fabBox.y + fabBox.height <= navBox.y + navBox.height + 2);
     await fab.click();
+    await page.getByRole("button", { name: "Full Meal Composer", exact: true }).click();
     const modal = page.getByRole("dialog");
     await modal.waitFor();
     const search = modal.getByRole("combobox", { name: "Find a food" });
@@ -152,6 +153,7 @@ try {
 
     if (name === "iphone") {
       await fab.click();
+      await page.getByRole("button", { name: "Full Meal Composer", exact: true }).click();
       await modal.waitFor();
       await page.setViewportSize({ width: 390, height: 430 });
       await search.click();
@@ -176,7 +178,7 @@ try {
       await modal.getByRole("button", { name: "Close composer" }).click();
     }
 
-    for (const tab of ["Home", "Training", "Nutrition", "More"]) {
+    for (const tab of ["Today", "Training", "Nutrition", "Body"]) {
       await page.getByRole("navigation").getByRole("button", { name: tab, exact: true }).click();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
       if (tab === "Training") {
@@ -184,9 +186,14 @@ try {
         await page.getByText(/Cardio Load|Daily Walking/).first().waitFor();
         await page.getByText("Unlock Muscular Load").first().waitFor();
       }
-      if (tab === "More") {
-        await page.getByRole("tab", { name: "Measurements", exact: true }).waitFor();
-        await page.getByRole("tab", { name: "Settings", exact: true }).click();
+      if (tab === "Body") {
+        await page.getByRole("heading", { name: "Body", exact: true }).waitFor();
+        await page.getByText("Physique Check-in & Timelapse").waitFor();
+      }
+    }
+
+    await page.getByRole("button", { name: "Open settings", exact: true }).click();
+    {
         const manualHeading = page.getByRole("heading", { name: "Manual Daily Expenditure (TDEE)", exact: true });
         const expSourceHeading = page.getByRole("heading", { name: "Expenditure Source & Timezone", exact: true });
         await manualHeading.waitFor();
@@ -232,14 +239,14 @@ try {
         assert.equal(requests.at(-1).allHistory, true);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
         const feedbackBox = await page.locator(".feedback").boundingBox();
-        const logBox = await page.getByRole("button", { name: "Log meal", exact: true }).boundingBox();
-        assert.ok(feedbackBox.y + feedbackBox.height <= logBox.y || feedbackBox.x + feedbackBox.width <= logBox.x, "Sync feedback must not overlap Log meal");
+        const logBox = await page.getByRole("button", { name: "Quick log", exact: true }).boundingBox();
+        assert.ok(feedbackBox.y + feedbackBox.height <= logBox.y || feedbackBox.x + feedbackBox.width <= logBox.x, "Sync feedback must not overlap Quick log");
         if (screenshotDir) await page.screenshot({ path: `${screenshotDir}/${name}-google-sync.png` });
-      }
+        await page.getByRole("button", { name: "Back", exact: true }).click();
     }
 
-    // Stage 6 & 7: Tapping Overall Strain on Home opens Training, where Recovery Insights is shown
-    await page.getByRole("navigation").getByRole("button", { name: "Home", exact: true }).click();
+    // Stage 6 & 7: Tapping Overall Strain on Today opens Training, where Recovery Insights is shown
+    await page.getByRole("navigation").getByRole("button", { name: "Today", exact: true }).click();
     await page.getByRole("button", { name: "Overall Strain summary", exact: true }).click();
     await page.getByRole("heading", { name: "Training & Strain", exact: true }).waitFor();
     await page.getByRole("region", { name: "Recovery Insights", exact: true }).waitFor();
@@ -266,6 +273,7 @@ try {
 
     // Stage 1 regression: toast auto-dismiss (~3s), manual dismiss, and live camera barcode scanner
     await fab.click();
+    await page.getByRole("button", { name: "Full Meal Composer", exact: true }).click();
     await page.getByRole("button", { name: "Barcode", exact: true }).click();
     await page.evaluate(() => {
       window.__stoppedCameraTracks = 0;
@@ -311,8 +319,7 @@ try {
     await page.getByRole("button", { name: "Close composer", exact: true }).click();
 
     // Verify success toast auto-dismisses after ~3s
-    await page.getByRole("navigation").getByRole("button", { name: "More", exact: true }).click();
-    await page.getByRole("tab", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Open settings", exact: true }).click();
     await page.getByRole("heading", { name: "Expenditure Source & Timezone", exact: true }).click();
     await page.getByRole("button", { name: "Save preferences", exact: true }).click();
     const toast = page.locator(".feedback");

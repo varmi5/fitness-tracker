@@ -8,10 +8,8 @@ import { ArrowLeft, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Chevro
 import { CalorieSlider, EnergyBalanceScale } from "../components/bevel-widgets";
 import {
   MealCategoryIcon,
-  MoonThemeIcon,
   ScaleWeighedIcon,
   SparklePhotoIcon,
-  SunThemeIcon,
 } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
 import { addDays, isCalorieGoalMet } from "../lib/nutrition-model";
@@ -23,7 +21,6 @@ import {
   METHOD_LABELS,
   type NutritionHistory,
   type NutritionSettings,
-  type ThemeMode,
   type TrackerSnapshot,
 } from "./types";
 
@@ -39,10 +36,8 @@ interface NutritionViewProps {
   history30: NutritionHistory;
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
-  theme: ThemeMode;
   busy: boolean;
   loading: boolean;
-  onToggleTheme: () => void;
   onSelectDay: (day: string) => void;
   onLogMeal: () => void;
   onEditMeal: (meal: MealRecord) => void;
@@ -92,10 +87,8 @@ export function NutritionView({
   history30,
   tracker,
   settings,
-  theme,
   busy,
   loading,
-  onToggleTheme,
   onSelectDay,
   onLogMeal,
   onEditMeal,
@@ -471,14 +464,6 @@ export function NutritionView({
           </div>
         </div>
         <div className="header-actions">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-            onClick={onToggleTheme}
-          >
-            {theme === "light" ? <MoonThemeIcon size={17} /> : <SunThemeIcon size={17} />}
-          </button>
           <button
             type="button"
             className="secondary compact"

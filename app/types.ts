@@ -70,9 +70,9 @@ export interface InitialAppData {
   syncToken: string;
 }
 
-export type AppTab = "Home" | "Training" | "Nutrition" | "More";
+export type AppTab = "Today" | "Training" | "Nutrition" | "Body";
 export type MoreSection = "Measurements" | "Settings";
-export type ThemeMode = "light" | "dark";
+export type ThemeMode = "light";
 
 export const METHOD_LABELS: Record<EstimationMethod, string> = {
   weighed: "Weighed",
