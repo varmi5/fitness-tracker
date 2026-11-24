@@ -4,7 +4,8 @@ import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { importHevyWorkouts } from "../lib/hevy";
-import { computeEwmaSeries, estimateEpley1Rm, getTrainingLoadSummary } from "../lib/training-load";
+import { classifyLoadStatus, computeEwmaSeries, estimateEpley1Rm, getTrainingLoadSummary, type EwmaSeriesPoint } from "../lib/training-load";
+import { computeCompositeStrain, computeTargetStrain, STRENGTH_CARDIO_FACTOR } from "../lib/strain-engine";
 import * as schema from "../lib/schema";
 
 const pg = new PGlite();
@@ -74,4 +75,43 @@ test("getTrainingLoadSummary tracks separate Cardio & Muscular loads, muscle wor
   assert.ok(chest && chest.weeklyWorkingSets === 3);
   const bench = summary.exerciseProgression.find((e) => e.exerciseTitle === "Bench Press (Barbell)");
   assert.ok(bench && bench.sessions === 2 && (bench.deltaKg ?? 0) > 0);
+  // With only 4 days of history, status should honestly report calibrating rather than overtraining
+  assert.equal(summary.muscularStatus?.status, "calibrating");
 });
+
+function makeSeries(acute: number, chronic: number, prevChronic = chronic, count = 10): EwmaSeriesPoint[] {
+  return Array.from({ length: count }, (_, i) => ({
+    day: `2026-11-${String(10 + i).padStart(2, "0")}`,
+    rawLoad: i % 2 === 0 ? chronic : 0,
+    acute7d: i === count - 1 ? acute : chronic,
+    chronic42d: i === count - 1 ? chronic : prevChronic,
+    optimalMin: Math.round(chronic * 0.85 * 100) / 100,
+    optimalMax: Math.round(chronic * 1.3 * 100) / 100,
+    confidence: "complete",
+  }));
+}
+
+test("classifyLoadStatus identifies Calibrating, Detraining, Peaking, Maintaining, Productive, Fatigued, and Overtraining", () => {
+  assert.equal(classifyLoadStatus(makeSeries(10, 10, 10, 4), "muscular")?.status, "calibrating");
+  assert.equal(classifyLoadStatus(makeSeries(6.5, 10), "muscular")?.status, "detraining");
+  assert.equal(classifyLoadStatus(makeSeries(8.8, 10, 9.0), "muscular")?.status, "peaking");
+  assert.equal(classifyLoadStatus(makeSeries(9.8, 10), "muscular")?.status, "maintaining");
+  assert.equal(classifyLoadStatus(makeSeries(11.8, 10), "muscular")?.status, "productive");
+  assert.equal(classifyLoadStatus(makeSeries(14.0, 10), "muscular")?.status, "fatigued");
+  assert.equal(classifyLoadStatus(makeSeries(16.5, 10), "muscular")?.status, "overtraining");
+});
+
+test("strain-v2.0 keeps strength-only session Cardio Strain modest and computeTargetStrain adapts to recovery", () => {
+  // Real-world 79-min Upper A strength session: raw HR TRIMP 170.77, muscular 16.65
+  const effectiveCardio = Math.round(170.77 * STRENGTH_CARDIO_FACTOR * 100) / 100;
+  const strain = computeCompositeStrain(effectiveCardio, 16.65, 0.03);
+  assert.ok(strain.cardioStrain < 25, `Strength-only Cardio Strain should be modest (<25), got ${strain.cardioStrain}`);
+  assert.ok(strain.muscularStrain >= 45 && strain.muscularStrain <= 55, `16.65 raw muscular should be ~50, got ${strain.muscularStrain}`);
+  assert.ok(strain.overallStrain >= 50 && strain.overallStrain <= 65, `Overall strain should be ~57, got ${strain.overallStrain}`);
+
+  assert.equal(computeTargetStrain(84).label, "Ready to push");
+  assert.equal(computeTargetStrain(62).label, "Steady training");
+  assert.equal(computeTargetStrain(38).label, "Active recovery");
+  assert.equal(computeTargetStrain(null).label, "Baseline target");
+});
+

@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { distributeMuscleLoad, MUSCLE_GROUPS, resolveExerciseMuscles, type MuscleGroup, type MuscleMapping } from "./muscle-map";
 
-export const STRAIN_ALGORITHM_VERSION = "strain-v1.0-provisional";
-export const CARDIO_REFERENCE_C_RAW = 100;
-export const MUSCULAR_REFERENCE_M_RAW = 12;
+export const STRAIN_ALGORITHM_VERSION = "strain-v2.0";
+export const CARDIO_REFERENCE_C_RAW = 220;
+export const MUSCULAR_REFERENCE_M_RAW = 24;
+export const STRENGTH_CARDIO_FACTOR = 0.30;
 export const COMPOSITE_EXPONENT = 1.3;
 export const PROVISIONAL_MISSING_RPE_WEIGHT = 0.85;
 
@@ -425,3 +426,44 @@ export function computeCompositeStrain(
     attribution: { cardioPoints, muscularPoints, walkingPoints },
   };
 }
+
+export interface TargetStrainRecommendation {
+  min: number;
+  max: number;
+  label: string;
+  guidance: string;
+}
+
+export function computeTargetStrain(recoveryScore: number | null | undefined): TargetStrainRecommendation {
+  if (recoveryScore == null || !Number.isFinite(recoveryScore)) {
+    return {
+      min: 40,
+      max: 60,
+      label: "Baseline target",
+      guidance: "Sync sleep and Resting HR to personalize your daily target strain.",
+    };
+  }
+  if (recoveryScore >= 75) {
+    return {
+      min: 55,
+      max: 75,
+      label: "Ready to push",
+      guidance: "High recovery — good day for a hard strength or cardio session.",
+    };
+  }
+  if (recoveryScore >= 50) {
+    return {
+      min: 35,
+      max: 55,
+      label: "Steady training",
+      guidance: "Moderate recovery — stick to planned volume without pushing to failure.",
+    };
+  }
+  return {
+    min: 15,
+    max: 35,
+    label: "Active recovery",
+    guidance: "Low recovery — prioritize sleep, light walking, or a deload session.",
+  };
+}
+
