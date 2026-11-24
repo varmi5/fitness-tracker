@@ -4,8 +4,8 @@ import { foodEmoji } from "../lib/food-emoji";
 
 import dynamic from "next/dynamic";
 import { useState } from "react";
-import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, Plus, Trash2, TrendingUp } from "lucide-react";
-import { CalorieSlider } from "../components/bevel-widgets";
+import { ArrowLeft, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, Plus, Trash2, TrendingUp } from "lucide-react";
+import { CalorieSlider, EnergyBalanceScale } from "../components/bevel-widgets";
 import {
   MealCategoryIcon,
   MoonThemeIcon,
@@ -107,6 +107,7 @@ export function NutritionView({
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveTargetDay, setMoveTargetDay] = useState(selectedDay);
   const [subView, setSubView] = useState<"diary" | "trends">("diary");
+  const [balanceWindow, setBalanceWindow] = useState<"7d" | "30d">("7d");
 
   const isBulkMode = Boolean(settings.bulkMode);
   const dayGoalMet = isCalorieGoalMet(dayView.totals.calories, dayView.target, isBulkMode);
@@ -386,90 +387,87 @@ export function NutritionView({
     </>
   );
 
-  const trendsAndSummaryContent = (
-    <>
-      {/* Weekly & Monthly Net Calorie Balance & Macro Summary Widgets */}
-      <section className="two-col" aria-label="Weekly and monthly net calorie balance">
-        {[
-          { title: "7-Day Net Balance", stats: weekSummary },
-          { title: "30-Day Net Balance", stats: monthSummary },
-        ].map(({ title, stats }) => {
-          const kgEquiv = stats.netDeficit != null ? (stats.netDeficit / 7700).toFixed(2) : null;
-          const statusBadge =
-            stats.comparableDays > 0
-              ? `${stats.comparableDays} of ${stats.totalDays} paired`
-              : stats.completeNutritionDays > 0
-                ? `${stats.completeNutritionDays} food · add TDEE`
-                : stats.loggedDays > 0
-                  ? `${stats.loggedDays} logged today`
-                  : `0 of ${stats.totalDays} logged`;
-          return (
-            <article className="card" key={title}>
-              <div className="split-row">
-                <h2>{title}</h2>
-                <span className={`pill ${stats.comparableDays > 0 ? "teal-soft" : stats.completeNutritionDays > 0 ? "accent-soft" : ""}`}>
-                  {statusBadge}
-                </span>
-              </div>
-              <div className="reading num" style={{ fontSize: "clamp(1.35rem, 4.2vw, 1.95rem)", margin: ".5rem 0 .25rem" }}>
-                {stats.netDeficit != null ? (
-                  <>
-                    {stats.netDeficit >= 0
-                      ? `${stats.netDeficit.toLocaleString("en-GB")} kcal`
-                      : `${Math.abs(stats.netDeficit).toLocaleString("en-GB")} kcal`}
-                    <small style={{ marginLeft: ".35rem" }}>
-                      {stats.netDeficit >= 0 ? "net deficit" : "net surplus"}
-                    </small>
-                  </>
-                ) : stats.completeNutritionDays > 0 ? (
-                  <small style={{ fontSize: ".9rem" }}>Add TDEE for deficit</small>
-                ) : stats.loggedDays > 0 ? (
-                  <small style={{ fontSize: ".9rem" }}>Completes at midnight</small>
-                ) : (
-                  "—"
-                )}
-              </div>
-              <div className="metric-meta">
-                <span>Daily avg balance</span>
-                <span className="num">
-                  {stats.avgDeficit == null
-                    ? "—"
-                    : `${stats.avgDeficit >= 0 ? "+" : ""}${stats.avgDeficit.toLocaleString("en-GB")} kcal/d`}
-                </span>
-              </div>
-              <div className="metric-meta">
-                <span>Avg intake{stats.usingTodayFallback ? " (today)" : ""} · Avg burn</span>
-                <span className="num">
-                  {fmtKcal(stats.avgIntake)} · {fmtKcal(stats.avgBurn)} kcal
-                </span>
-              </div>
-              <div className="metric-meta">
-                <span>Avg Protein · Fibre</span>
-                <span className="num">
-                  {stats.avgProtein == null ? "—" : `${stats.avgProtein} g`} · {stats.avgFibre == null ? "—" : `${stats.avgFibre} g`}
-                </span>
-              </div>
-              <div className="metric-meta">
-                <span>Est. weight equiv.</span>
-                <span className="num">{kgEquiv == null ? "—" : `~${kgEquiv} kg`}</span>
-              </div>
-            </article>
-          );
-        })}
-      </section>
+  // Dedicated Full-Page Energy Balance & Trends Drill-Down (7d / 30d toggle + Intake vs Output graphs)
+  if (subView === "trends") {
+    const activeStats = balanceWindow === "7d" ? weekSummary : monthSummary;
+    return (
+      <>
+        <div className="page-header" style={{ marginBottom: ".2rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: ".6rem", width: "100%", justifyContent: "space-between" }}>
+            <button
+              type="button"
+              className="secondary compact"
+              onClick={() => setSubView("diary")}
+              style={{ minHeight: "36px" }}
+            >
+              <ArrowLeft size={16} /> Back
+            </button>
+            <h1 style={{ fontSize: "1.2rem", margin: 0, letterSpacing: "-0.02em", flex: 1, textAlign: "center" }}>
+              Energy Balance
+            </h1>
+            <div style={{ minWidth: "56px" }} />
+          </div>
+        </div>
 
-      <NutritionTrends history={history30} tracker={tracker} trackingMode={settings.trackingMode} />
-    </>
-  );
+        <div className="segments" role="tablist" aria-label="Energy balance window">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={balanceWindow === "7d"}
+            aria-pressed={balanceWindow === "7d"}
+            onClick={() => setBalanceWindow("7d")}
+          >
+            7 Days
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={balanceWindow === "30d"}
+            aria-pressed={balanceWindow === "30d"}
+            onClick={() => setBalanceWindow("30d")}
+          >
+            30 Days
+          </button>
+        </div>
+
+        <EnergyBalanceScale
+          title={balanceWindow === "7d" ? "7-Day Energy Balance" : "30-Day Energy Balance"}
+          avgDeficitKcal={activeStats.avgDeficit}
+          isBulkMode={isBulkMode}
+          pairedDays={activeStats.comparableDays}
+          totalDays={activeStats.totalDays}
+        />
+
+        <section className="card" style={{ display: "grid", gap: ".55rem" }}>
+          <span className="eyebrow">{balanceWindow === "7d" ? "7-Day" : "30-Day"} Intake vs Output</span>
+          <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
+            <div className="energy-cell">
+              <span>Avg Intake</span>
+              <strong className="num">{fmtKcal(activeStats.avgIntake)}</strong>
+            </div>
+            <div className="energy-cell">
+              <span>Avg Burn</span>
+              <strong className="num">{fmtKcal(activeStats.avgBurn)}</strong>
+            </div>
+            <div className="energy-cell">
+              <span>Avg Protein</span>
+              <strong className="num">{activeStats.avgProtein == null ? "—" : `${activeStats.avgProtein} g`}</strong>
+            </div>
+          </div>
+        </section>
+
+        <NutritionTrends history={history30} tracker={tracker} trackingMode={settings.trackingMode} />
+      </>
+    );
+  }
 
   return (
     <>
-      <div className="page-header">
+      <div className="page-header" style={{ marginBottom: ".15rem" }}>
         <div className="page-header-title">
-          <h1>Nutrition</h1>
+          <h1 style={{ fontSize: "1.45rem", letterSpacing: "-0.03em" }}>Nutrition</h1>
           <div className="page-sub">
             <span>{formattedDate}</span>
-            <span className="pill">{dayView.timezone}</span>
           </div>
         </div>
         <div className="header-actions">
@@ -484,8 +482,7 @@ export function NutritionView({
           <button
             type="button"
             className="secondary compact"
-            aria-pressed={subView === "trends"}
-            onClick={() => setSubView(subView === "trends" ? "diary" : "trends")}
+            onClick={() => setSubView("trends")}
           >
             <TrendingUp size={15} /> Trends
           </button>
@@ -495,16 +492,7 @@ export function NutritionView({
         </div>
       </div>
 
-      <div className="segments" role="tablist" aria-label="Nutrition views">
-        <button type="button" aria-pressed={subView === "diary"} onClick={() => setSubView("diary")}>
-          Diary
-        </button>
-        <button type="button" aria-pressed={subView === "trends"} onClick={() => setSubView("trends")}>
-          Trends &amp; Summary
-        </button>
-      </div>
-
-      {/* NutriTrace 7-Day Interactive Week Strip + Date Picker */}
+      {/* 7-Day Interactive Week Strip + Date Picker */}
       <section className="card" aria-label="Calendar navigation" style={{ display: "grid", gap: ".65rem" }}>
         <div className="week-strip">
           {weekDays.map((dayStr) => {
@@ -526,7 +514,7 @@ export function NutritionView({
                 <span className="week-cell-dow">{dow}</span>
                 <span className="week-cell-day num">{dom}</span>
                 <span className="week-mini-bar">
-                  <i style={{ width: `${fillPct}%`, background: goalMet === false ? "var(--danger-fg)" : "var(--accent)" }} />
+                  <i style={{ width: `${fillPct}%`, background: goalMet === false ? "var(--status-bad)" : "var(--status-good)" }} />
                 </span>
               </button>
             );
@@ -573,15 +561,18 @@ export function NutritionView({
         <p className="card" role="status">
           Loading diary…
         </p>
-      ) : subView === "trends" ? (
-        <>
-          {trendsAndSummaryContent}
-          {diaryContent}
-        </>
       ) : (
         <>
           {diaryContent}
-          {trendsAndSummaryContent}
+          {/* Sleek Visual 7-Day Energy Balance Scale (Tap → Full-Page 7d/30d Trends & Graphs) */}
+          <EnergyBalanceScale
+            title="7-Day Energy Balance"
+            avgDeficitKcal={weekSummary.avgDeficit}
+            isBulkMode={isBulkMode}
+            pairedDays={weekSummary.comparableDays}
+            totalDays={weekSummary.totalDays}
+            onClick={() => setSubView("trends")}
+          />
         </>
       )}
     </>

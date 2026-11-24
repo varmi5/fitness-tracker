@@ -226,3 +226,183 @@ export function CalorieSlider({
   }
   return <section className="card calorie-slider-card">{body}</section>;
 }
+
+export interface EnergyBalanceScaleProps {
+  title?: string;
+  avgDeficitKcal: number | null; // positive = deficit (burn > intake), negative = surplus (intake > burn)
+  isBulkMode: boolean;
+  pairedDays: number;
+  totalDays: number;
+  onClick?: () => void;
+}
+
+export function evaluateEnergyBalance(avgDeficitKcal: number | null, isBulkMode: boolean): {
+  label: string;
+  tone: "teal" | "amber" | "blue" | "danger" | "neutral";
+  summary: string;
+} {
+  if (avgDeficitKcal == null) {
+    return {
+      label: "Pending",
+      tone: "neutral",
+      summary: "Log meals & sync expenditure to track your balance.",
+    };
+  }
+  if (isBulkMode) {
+    if (avgDeficitKcal <= -150 && avgDeficitKcal >= -500) {
+      return {
+        label: "On Track · Lean Bulk",
+        tone: "teal",
+        summary: `Averaging ~${Math.abs(avgDeficitKcal)} kcal/d surplus — ideal steady gain zone.`,
+      };
+    }
+    if (avgDeficitKcal < -500) {
+      return {
+        label: "High Surplus",
+        tone: "amber",
+        summary: `Averaging ~${Math.abs(avgDeficitKcal)} kcal/d surplus — above typical lean-bulk pace.`,
+      };
+    }
+    if (avgDeficitKcal > 150) {
+      return {
+        label: "Under Target",
+        tone: "danger",
+        summary: `Averaging ~${avgDeficitKcal} kcal/d deficit — eat more to hit your bulk goal.`,
+      };
+    }
+    return {
+      label: "Maintaining",
+      tone: "blue",
+      summary: "Intake closely matches expenditure — add ~200–350 kcal/d for a lean bulk.",
+    };
+  }
+
+  // Cut / Fat-Loss mode (default)
+  if (avgDeficitKcal >= 200 && avgDeficitKcal <= 750) {
+    return {
+      label: "On Track · Fat Loss",
+      tone: "teal",
+      summary: `Averaging ~${avgDeficitKcal} kcal/d deficit — sustainable fat-loss zone.`,
+    };
+  }
+  if (avgDeficitKcal > 750) {
+    return {
+      label: "Aggressive Cut",
+      tone: "amber",
+      summary: `Averaging ~${avgDeficitKcal} kcal/d deficit — steep cut; protect protein & recovery.`,
+    };
+  }
+  if (avgDeficitKcal < -150) {
+    return {
+      label: "Over Target",
+      tone: "danger",
+      summary: `Averaging ~${Math.abs(avgDeficitKcal)} kcal/d surplus — above your cut target.`,
+    };
+  }
+  return {
+    label: "Maintaining",
+    tone: "blue",
+    summary: "Near energy balance — right around maintenance calories.",
+  };
+}
+
+export function EnergyBalanceScale({
+  title = "7-Day Energy Balance",
+  avgDeficitKcal,
+  isBulkMode,
+  pairedDays,
+  totalDays,
+  onClick,
+}: EnergyBalanceScaleProps) {
+  const verdict = evaluateEnergyBalance(avgDeficitKcal, isBulkMode);
+  const pillClass =
+    verdict.tone === "teal"
+      ? "teal-soft"
+      : verdict.tone === "amber"
+        ? "amber-soft"
+        : verdict.tone === "blue"
+          ? "protein-soft"
+          : verdict.tone === "danger"
+            ? "danger-soft"
+            : "";
+
+  // Scale spans from -1000 (left = Deficit) to +1000 (right = Surplus)
+  // Note: avgDeficitKcal > 0 means deficit (left of center), < 0 means surplus (right of center)
+  const netPositionKcal = avgDeficitKcal == null ? 0 : -avgDeficitKcal; // negative = left (deficit), positive = right (surplus)
+  const clampedKcal = Math.max(-1000, Math.min(1000, netPositionKcal));
+  const pinPct = Math.round(((clampedKcal + 1000) / 2000) * 100);
+
+  // Target zone band on the 0..100% scale:
+  // Cut mode: -750 to -200 kcal (12.5% to 40%)
+  // Bulk mode: +150 to +500 kcal (57.5% to 75%)
+  const targetLeftPct = isBulkMode ? 57.5 : 12.5;
+  const targetWidthPct = isBulkMode ? 17.5 : 27.5;
+
+  const pinColor =
+    verdict.tone === "teal"
+      ? "var(--status-good)"
+      : verdict.tone === "amber"
+        ? "var(--amber)"
+        : verdict.tone === "danger"
+          ? "var(--status-bad)"
+          : "var(--text)";
+
+  const inner = (
+    <div style={{ display: "grid", gap: ".55rem", width: "100%" }}>
+      <div className="split-row" style={{ alignItems: "center" }}>
+        <span className="eyebrow">{title}</span>
+        <span className={`pill ${pillClass}`}>{verdict.label}</span>
+      </div>
+
+      {/* Visual Balance Scale */}
+      <div className="balance-scale-wrap">
+        <div className="balance-scale-track">
+          {/* Optimal target zone highlight */}
+          <div
+            className="balance-scale-target"
+            style={{ left: `${targetLeftPct}%`, width: `${targetWidthPct}%` }}
+            title={isBulkMode ? "Target lean bulk zone" : "Target fat-loss zone"}
+          />
+          {/* Center maintenance tick */}
+          <span className="balance-scale-center" />
+          {/* Current position pin */}
+          {avgDeficitKcal != null && (
+            <span
+              className="balance-scale-pin"
+              style={{ left: `${pinPct}%`, background: pinColor }}
+            />
+          )}
+        </div>
+        <div className="split-row" style={{ fontSize: ".7rem", color: "var(--muted)", marginTop: ".3rem" }}>
+          <span>Deficit</span>
+          <span>Maintenance</span>
+          <span>Surplus</span>
+        </div>
+      </div>
+
+      <div className="split-row" style={{ fontSize: ".76rem", color: "var(--muted)", alignItems: "center" }}>
+        <span>{verdict.summary}</span>
+        {onClick && (
+          <span style={{ fontWeight: 600, color: "var(--text)", flexShrink: 0, marginLeft: ".5rem" }}>
+            {pairedDays}/{totalDays}d →
+          </span>
+        )}
+      </div>
+    </div>
+  );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        className="card card-interactive calorie-slider-card"
+        onClick={onClick}
+        aria-label={`${title}: ${verdict.label}`}
+      >
+        {inner}
+      </button>
+    );
+  }
+  return <section className="card">{inner}</section>;
+}
+
