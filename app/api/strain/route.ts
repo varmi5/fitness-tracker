@@ -21,7 +21,7 @@ export async function GET(request: Request) {
   const query = new URL(request.url).searchParams;
 
   try {
-    if (query.get("loads") === "1") {
+    if (query.get("loads") === "1" || query.get("mode") === "loads") {
       const range = historyInput.parse({ from: query.get("from"), to: query.get("to") });
       return json(await getTrainingLoadSummary(db, session.user.id, range.from, range.to));
     }

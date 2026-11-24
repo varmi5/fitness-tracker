@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useState, type FormEvent } from "react";
-import { Activity, ChevronRight, Crosshair, Plus, Ruler } from "lucide-react";
+import { ArrowLeft, ChevronRight, Plus } from "lucide-react";
 import { MoonThemeIcon, SunThemeIcon } from "../components/icons";
 import { Button } from "../components/ui/button";
 import {
@@ -38,6 +38,8 @@ interface MeasurementsViewProps {
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
 }
 
+type MeasurePage = null | "trends" | "log";
+
 export function MeasurementsView({
   snapshot,
   nutritionSettings,
@@ -49,7 +51,7 @@ export function MeasurementsView({
   onToggleTheme,
   onSaveTracker,
 }: MeasurementsViewProps) {
-  const [sub, setSub] = useState<"overview" | "trends" | "log">("overview");
+  const [page, setPage] = useState<MeasurePage>(null);
   const [date, setDate] = useState(today);
   const [localMsg, setLocalMsg] = useState("");
   const { readings, settings } = snapshot;
@@ -76,7 +78,11 @@ export function MeasurementsView({
     (m) => summary(readingsFor(readings, m), today).latest?.value,
   );
   const ratio = (val: number | undefined, base: number | null | undefined) =>
-    val != null && base != null && base > 0 ? (val / base).toFixed(2) : "Insufficient data";
+    val != null && base != null && base > 0 ? (val / base).toFixed(2) : "—";
+
+  const recentDates = [...new Set(readings.map((r) => r.date))]
+    .sort((a, b) => b.localeCompare(a))
+    .slice(0, 12);
 
   function submitLog(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -103,15 +109,134 @@ export function MeasurementsView({
         data: { date, values, note: note || (form.get("clearNotes") ? "" : undefined) },
       },
       "Measurements saved.",
+    ).then(() => setPage(null));
+  }
+
+  // Full-page Trends Drill-Down
+  if (page === "trends") {
+    return (
+      <>
+        <div className="page-header" style={{ marginBottom: ".2rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: ".6rem", width: "100%", justifyContent: "space-between" }}>
+            <button type="button" className="secondary compact" onClick={() => setPage(null)} style={{ minHeight: "36px" }}>
+              <ArrowLeft size={16} /> Back
+            </button>
+            <h1 style={{ fontSize: "1.2rem", margin: 0, letterSpacing: "-0.02em", flex: 1, textAlign: "center" }}>
+              Measurement Trends
+            </h1>
+            <button type="button" className="compact" onClick={() => setPage("log")} style={{ minHeight: "36px" }}>
+              <Plus size={15} /> Log
+            </button>
+          </div>
+        </div>
+        <TrendChart readings={readings} today={today} units={settings.units} height={settings.heightCm} />
+      </>
     );
   }
 
+  // Full-page Log & History Drill-Down
+  if (page === "log") {
+    return (
+      <>
+        <div className="page-header" style={{ marginBottom: ".2rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: ".6rem", width: "100%", justifyContent: "space-between" }}>
+            <button type="button" className="secondary compact" onClick={() => setPage(null)} style={{ minHeight: "36px" }}>
+              <ArrowLeft size={16} /> Back
+            </button>
+            <h1 style={{ fontSize: "1.2rem", margin: 0, letterSpacing: "-0.02em", flex: 1, textAlign: "center" }}>
+              Log Measurement
+            </h1>
+            <div style={{ minWidth: "56px" }} />
+          </div>
+        </div>
+
+        <form className="card" key={date + JSON.stringify(selected)} onSubmit={submitLog} method="post" style={{ display: "grid", gap: ".75rem" }}>
+          <label>
+            Date
+            <input
+              type="date"
+              required
+              value={date}
+              max={today}
+              onChange={(e) => {
+                if (e.target.value) setDate(e.target.value);
+              }}
+            />
+          </label>
+          <div className="input-grid">
+            {metrics.map((metric) => {
+              const value = readingsFor(selected, metric)[0]?.value;
+              return (
+                <label key={metric.key}>
+                  {metric.label} ({displayUnit(metric, settings.units)})
+                  <input
+                    name={metric.key}
+                    inputMode="decimal"
+                    placeholder="—"
+                    defaultValue={
+                      value == null ? "" : String(Number(displayValue(value, metric, settings.units).toFixed(4)))
+                    }
+                  />
+                </label>
+              );
+            })}
+          </div>
+          <label>
+            Notes
+            <input
+              name="note"
+              type="text"
+              placeholder="Optional note (e.g. morning fasted)"
+              defaultValue={selected.find((r) => r.note)?.note ?? ""}
+            />
+          </label>
+          {localMsg && <p role="alert" style={{ color: "var(--danger-fg)", fontSize: ".82rem", margin: 0 }}>{localMsg}</p>}
+          <Button type="submit" disabled={busy}>
+            {busy ? "Saving…" : "Save measurements"}
+          </Button>
+        </form>
+
+        {recentDates.length > 0 && (
+          <section className="card" style={{ display: "grid", gap: ".2rem" }}>
+            <h2 style={{ fontSize: "1rem", margin: "0 0 .25rem" }}>Recent Entries</h2>
+            {recentDates.map((d) => {
+              const dayReadings = readings.filter((r) => r.date === d);
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  className="compact-row-btn"
+                  onClick={() => setDate(d)}
+                >
+                  <div>
+                    <strong className="num" style={{ fontSize: ".86rem" }}>{d}</strong>
+                    <div style={{ fontSize: ".74rem", color: "var(--muted)" }}>
+                      {dayReadings
+                        .slice(0, 3)
+                        .map((r) => {
+                          const m = metrics.find((x) => x.key === r.metric);
+                          return m ? `${m.label}: ${readout(r.value, m, settings.units)} ${displayUnit(m, settings.units)}` : "";
+                        })
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </div>
+                  </div>
+                  <ChevronRight size={15} style={{ color: "var(--muted)" }} />
+                </button>
+              );
+            })}
+          </section>
+        )}
+      </>
+    );
+  }
+
+  // Main Bevel Measurements Overview
   return (
     <>
-      <div className="page-header">
+      <div className="page-header" style={{ marginBottom: ".15rem" }}>
         <div className="page-header-title">
-          <h1>Measurements</h1>
-          <p style={{ fontSize: ".84rem" }}>Waist, weight, and circumference tracking</p>
+          <h1 style={{ fontSize: "1.45rem", letterSpacing: "-0.03em" }}>Measurements</h1>
         </div>
         <div className="header-actions">
           <button
@@ -122,199 +247,96 @@ export function MeasurementsView({
           >
             {theme === "light" ? <MoonThemeIcon size={17} /> : <SunThemeIcon size={17} />}
           </button>
-          <button type="button" className="compact" onClick={() => setSub(sub === "log" ? "overview" : "log")}>
-            <Plus size={16} /> {sub === "log" ? "Back" : "Log"}
+          <button type="button" className="compact" onClick={() => setPage("log")}>
+            <Plus size={15} /> Log
           </button>
         </div>
       </div>
 
-      <div className="segments" role="tablist" aria-label="Measurement views">
-        {(
-          [
-            ["overview", "Overview"],
-            ["trends", "Trends"],
-            ["log", "Log & History"],
-          ] as const
-        ).map(([key, label]) => (
-          <button key={key} type="button" aria-pressed={sub === key} onClick={() => setSub(key)}>
-            {label}
-          </button>
-        ))}
+      {/* Primary Metrics Grid (Tap any metric → Full-Page Trends) */}
+      <div className="measure-grid">
+        {metrics
+          .filter((metric, index) => index < 4 || readingsFor(readings, metric).length > 0)
+          .map((metric) => {
+            const { latest, change, weekly } = summary(readingsFor(readings, metric), today);
+            return (
+              <button
+                type="button"
+                className="card card-interactive metric-card"
+                key={metric.key}
+                onClick={() => setPage("trends")}
+                style={{ textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
+              >
+                <div className="split-row">
+                  <span className="eyebrow">{metric.label}</span>
+                  <ChevronRight size={14} style={{ color: "var(--muted)" }} />
+                </div>
+                <div className="reading" style={{ marginTop: ".25rem" }}>
+                  {readout(latest?.value, metric, settings.units)}{" "}
+                  <small>{displayUnit(metric, settings.units)}</small>
+                </div>
+                <div className="split-row" style={{ fontSize: ".74rem", color: "var(--muted)", marginTop: ".2rem" }}>
+                  <span>7d avg {readout(weekly, metric, settings.units)}</span>
+                  <span className="num" style={{ fontWeight: 600, color: change != null && change < 0 ? "var(--status-good)" : "var(--text)" }}>
+                    {change != null && change > 0 ? "+" : ""}
+                    {readout(change, metric, settings.units)}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
       </div>
 
-      {sub === "overview" && (
-        <>
-          <div className="measure-grid">
-            {metrics
-              .filter((metric, index) => index < 3 || readingsFor(readings, metric).length > 0)
-              .map((metric) => {
-                const { latest, change, weekly } = summary(readingsFor(readings, metric), today);
-                return (
-                  <article className="card metric-card" key={metric.key}>
-                    <h2>{metric.label}</h2>
-                    <div className="reading">
-                      {readout(latest?.value, metric, settings.units)}{" "}
-                      <small>{displayUnit(metric, settings.units)}</small>
-                    </div>
-                    <div className="metric-meta">
-                      <span>7-day change</span>
-                      <span className="num">
-                        {change != null && change > 0 ? "+" : ""}
-                        {readout(change, metric, settings.units)}
-                      </span>
-                    </div>
-                    <div className="metric-meta">
-                      <span>7-day average</span>
-                      <span className="num">{readout(weekly, metric, settings.units)}</span>
-                    </div>
-                  </article>
-                );
-              })}
+      {/* Fitbit Body Fat & VO2 Max (when connected) */}
+      {isFitbitMode && (latestBodyFat != null || latestVo2Max != null) && (
+        <section className="card" aria-label="Fitbit body and cardio">
+          <div className="split-row" style={{ marginBottom: ".5rem" }}>
+            <span className="eyebrow">Body Composition &amp; Fitness</span>
+            <span className="pill teal-soft">Google Health</span>
           </div>
-
-          {isFitbitMode && (latestBodyFat != null || latestVo2Max != null) && (
-            <section className="card" aria-label="Fitbit body and cardio">
-              <div className="split-row" style={{ marginBottom: ".6rem" }}>
-                <h2>Fitbit Body &amp; Cardio</h2>
-                <span className="pill teal-soft">Fitbit Air</span>
-              </div>
-              <div className="macro-grid">
-                <div className="energy-cell">
-                  <span>Body fat %</span>
-                  <strong className="num">
-                    {latestBodyFat != null ? `${Number(latestBodyFat.toFixed(1))}%` : "—"}
-                  </strong>
-                </div>
-                <div className="energy-cell">
-                  <span>Cardio Fitness VO2 max</span>
-                  <strong className="num">
-                    {latestVo2Max != null ? `${Number(latestVo2Max.toFixed(1))} ml/kg/min` : "—"}
-                  </strong>
-                </div>
-              </div>
-            </section>
-          )}
-
-          <h2 className="section-title">Insights</h2>
-          <div className="insight-grid">
-            <article className="card">
-              <Ruler className="accent" size={20} />
-              <h3>Waist-to-height</h3>
-              <strong className="num">{ratio(waist, settings.heightCm)}</strong>
-            </article>
-            <article className="card">
-              <Activity className="accent" size={20} />
-              <h3>Arm-to-waist</h3>
-              <strong className="num">
-                {ratio(left == null || right == null ? undefined : (left + right) / 2, waist)}
-              </strong>
-            </article>
-            <article className="card recomp">
-              <Crosshair className="accent" size={20} />
-              <h3>Recomp direction</h3>
-              <strong>{recomp(readings, today)}</strong>
-              <p>
-                Compares the last 4 weeks with the 4 weeks before. Changes up to 0.5 cm count as flat. Each period needs two readings per metric.
-              </p>
-            </article>
-          </div>
-        </>
-      )}
-
-      {sub === "trends" && (
-        <TrendChart readings={readings} today={today} units={settings.units} height={settings.heightCm} />
-      )}
-
-      {sub === "log" && (
-        <>
-          <form className="card" key={date + JSON.stringify(selected)} onSubmit={submitLog} method="post">
-            <label>
-              Date
-              <input
-                type="date"
-                required
-                value={date}
-                max={today}
-                onChange={(e) => {
-                  if (e.target.value) setDate(e.target.value);
-                }}
-              />
-            </label>
-            <div className="input-grid">
-              {metrics.map((metric) => {
-                const value = readingsFor(selected, metric)[0]?.value;
-                return (
-                  <label key={metric.key}>
-                    {metric.label} ({displayUnit(metric, settings.units)})
-                    <input
-                      name={metric.key}
-                      inputMode="decimal"
-                      placeholder="—"
-                      defaultValue={
-                        value == null ? "" : String(Number(displayValue(value, metric, settings.units).toFixed(4)))
-                      }
-                    />
-                  </label>
-                );
-              })}
+          <div className="energy-strip" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))", marginTop: 0 }}>
+            <div className="energy-cell">
+              <span>Body Fat</span>
+              <strong className="num">{latestBodyFat != null ? `${Number(latestBodyFat.toFixed(1))}%` : "—"}</strong>
             </div>
-            <label>
-              Note <small>Optional</small>
-              <textarea name="note" rows={2} maxLength={1000} placeholder="Leave blank to keep existing notes" />
-            </label>
-            {selected.some((r) => r.note) && (
-              <label className="check-row">
-                <input type="checkbox" name="clearNotes" /> Clear existing notes when the note field is blank
-              </label>
-            )}
-            {localMsg && <p role="alert">{localMsg}</p>}
-            <Button disabled={busy} type="submit">
-              Save measurements
-            </Button>
-          </form>
-
-          {readings.length > 0 && (
-            <section className="card">
-              <h2>Recent entries</h2>
-              {[...new Set(readings.map((r) => r.date))].slice(0, 10).map((day) => (
-                <button type="button" className="list-item" key={day} onClick={() => setDate(day)}>
-                  <span className="num">{day}</span>
-                  <ChevronRight size={18} />
-                </button>
-              ))}
-            </section>
-          )}
-
-          {selected.length > 0 && (
-            <section className="card">
-              <h2>Entries on {date}</h2>
-              {selected.map((row) => {
-                const metric = metrics.find((m) => m.metric === row.metric && m.side === row.side)!;
-                return (
-                  <div className="list-item" key={row.id}>
-                    <span>
-                      {metric.label}: <strong className="num">{readout(row.value, metric, settings.units)} {displayUnit(metric, settings.units)}</strong>
-                      {row.note && <small className="row-note">{row.note}</small>}
-                    </span>
-                    <button
-                      type="button"
-                      className="secondary compact"
-                      disabled={busy}
-                      onClick={() => {
-                        if (window.confirm(`Delete ${metric.label} for ${date}?`)) {
-                          void onSaveTracker({ action: "delete-reading", id: row.id }, "Measurement deleted.");
-                        }
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                );
-              })}
-            </section>
-          )}
-        </>
+            <div className="energy-cell">
+              <span>VO2 Max</span>
+              <strong className="num">{latestVo2Max != null ? `${Number(latestVo2Max.toFixed(1))}` : "—"}</strong>
+            </div>
+          </div>
+        </section>
       )}
+
+      {/* Compact Ratios & Recomp Card */}
+      <section className="card" style={{ display: "grid", gap: ".55rem" }} aria-label="Body insights">
+        <div className="split-row">
+          <span className="eyebrow">Recomp &amp; Ratios</span>
+          <button
+            type="button"
+            className="secondary compact"
+            style={{ minHeight: "28px", padding: ".15rem .55rem", fontSize: ".72rem" }}
+            onClick={() => setPage("trends")}
+          >
+            View charts
+          </button>
+        </div>
+        <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
+          <div className="energy-cell">
+            <span>Waist/Height</span>
+            <strong className="num">{ratio(waist, settings.heightCm)}</strong>
+          </div>
+          <div className="energy-cell">
+            <span>Arm/Waist</span>
+            <strong className="num">
+              {ratio(left == null || right == null ? undefined : (left + right) / 2, waist)}
+            </strong>
+          </div>
+          <div className="energy-cell">
+            <span>4-Wk Trend</span>
+            <strong style={{ fontSize: ".82rem" }}>{recomp(readings, today)}</strong>
+          </div>
+        </div>
+      </section>
     </>
   );
 }
