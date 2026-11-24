@@ -375,10 +375,40 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     return rows.filter((r) => r.source === "google" || r.source === "manual");
   }
 
+  async function resolveSleepGatedActiveDay(
+    calendarToday: string,
+    prefs: Awaited<ReturnType<typeof getPrefs>>,
+  ): Promise<{ activeDay: string; waitingForSleep: boolean }> {
+    const sleepGated = prefs.trackingMode === "fitbit" && prefs.hasGoogleConnected && prefs.sleepRolloverEnabled;
+    if (!sleepGated) {
+      return resolveActiveHomeDay({ calendarToday });
+    }
+    const [todaySleep, todayMeals] = await Promise.all([
+      db
+        .select({ minutesAsleep: dailySleep.minutesAsleep })
+        .from(dailySleep)
+        .where(and(eq(dailySleep.userId, userId), eq(dailySleep.day, calendarToday)))
+        .limit(1),
+      db
+        .select({ id: meal.id })
+        .from(meal)
+        .where(and(eq(meal.userId, userId), eq(meal.localDay, calendarToday)))
+        .limit(1),
+    ]);
+    const hasTodaySleep = todaySleep.some((r) => (r.minutesAsleep ?? 0) > 0);
+    const hasTodayActivity = todayMeals.length > 0;
+    return resolveActiveHomeDay({
+      calendarToday,
+      sleepGated: true,
+      hasTodaySleep,
+      hasTodayActivity,
+    });
+  }
+
   async function daily(day: string, options: { calendarToday?: string; now?: Date } = {}): Promise<DailyNutritionView> {
     const prefs = await getPrefs();
     const calendarToday = options.calendarToday ?? localDay(options.now ?? new Date(), prefs.timezone);
-    const { activeDay } = resolveActiveHomeDay({ calendarToday });
+    const { activeDay } = await resolveSleepGatedActiveDay(calendarToday, prefs);
 
     const [mealRows, energyRows, sleepRows] = await Promise.all([
       db.select().from(meal)
@@ -474,7 +504,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     historyInput.parse({ from, to });
     const prefs = await getPrefs();
     const calendarToday = options.calendarToday ?? localDay(options.now ?? new Date(), prefs.timezone);
-    const { activeDay } = resolveActiveHomeDay({ calendarToday });
+    const { activeDay } = await resolveSleepGatedActiveDay(calendarToday, prefs);
 
     const [mealRows, itemRows, energyRows] = await Promise.all([
       db.select().from(meal)
@@ -1517,7 +1547,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       workoutsByDay.set(w.day, list);
     }
 
-    const { activeDay, waitingForSleep } = resolveActiveHomeDay({ calendarToday });
+    const { activeDay, waitingForSleep } = await resolveSleepGatedActiveDay(calendarToday, prefs);
     const showSleep = prefs.trackingMode === "fitbit";
 
     const calendarDays = dayRange(from, calendarToday);
@@ -1656,7 +1686,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const prefs = await getPrefs();
     const tz = options.timezone ?? prefs.timezone;
     const calendarToday = options.calendarToday ?? localDay(options.now ?? new Date(), tz);
-    const { activeDay, waitingForSleep } = resolveActiveHomeDay({ calendarToday });
+    const { activeDay, waitingForSleep } = await resolveSleepGatedActiveDay(calendarToday, prefs);
     const showSleep = prefs.trackingMode === "fitbit";
     return {
       calendarToday,

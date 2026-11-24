@@ -99,7 +99,16 @@ export function dayRange(from: string, to: string): string[] {
 
 export function resolveActiveHomeDay(input: {
   calendarToday: string;
+  sleepGated?: boolean;
+  hasTodaySleep?: boolean;
+  hasTodayActivity?: boolean;
 }): { activeDay: string; waitingForSleep: boolean } {
+  if (input.sleepGated && !input.hasTodaySleep && !input.hasTodayActivity) {
+    return {
+      activeDay: addDays(input.calendarToday, -1),
+      waitingForSleep: true,
+    };
+  }
   return { activeDay: input.calendarToday, waitingForSleep: false };
 }
 

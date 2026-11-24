@@ -70,7 +70,7 @@ try {
   const loggedIn = await fetch(url("/"), { headers: { Cookie: cookie } });
   assert.equal(loggedIn.status, 200);
   const dashboard = await loggedIn.text();
-  assert.match(dashboard, /Energy Balance/);
+  assert.match(dashboard, /Calorie Intake/);
   assert.match(dashboard, /Training/);
   assert.doesNotMatch(dashboard, /class="masthead"/);
   const result = await post("/api/tracker", {

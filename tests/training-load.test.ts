@@ -77,6 +77,10 @@ test("getTrainingLoadSummary tracks separate Cardio & Muscular loads, muscle wor
   assert.ok(bench && bench.sessions === 2 && (bench.deltaKg ?? 0) > 0);
   // With only 4 days of history, status should honestly report calibrating rather than overtraining
   assert.equal(summary.muscularStatus?.status, "calibrating");
+  const chestFresh = summary.muscleFreshness.find((m) => m.muscle === "Chest");
+  const quadsFresh = summary.muscleFreshness.find((m) => m.muscle === "Quads");
+  assert.ok(chestFresh && chestFresh.freshnessPct < 100, "Trained Chest should have <100% freshness");
+  assert.ok(quadsFresh && quadsFresh.freshnessPct === 100 && quadsFresh.status === "fresh", "Untrained Quads should be 100% fresh");
 });
 
 function makeSeries(acute: number, chronic: number, prevChronic = chronic, count = 10): EwmaSeriesPoint[] {
@@ -101,13 +105,13 @@ test("classifyLoadStatus identifies Calibrating, Detraining, Peaking, Maintainin
   assert.equal(classifyLoadStatus(makeSeries(16.5, 10), "muscular")?.status, "overtraining");
 });
 
-test("strain-v2.0 keeps strength-only session Cardio Strain modest and computeTargetStrain adapts to recovery", () => {
+test("strain-v2.1 keeps strength-only session Cardio Strain modest, muscular ~60, and computeTargetStrain adapts to recovery", () => {
   // Real-world 79-min Upper A strength session: raw HR TRIMP 170.77, muscular 16.65
   const effectiveCardio = Math.round(170.77 * STRENGTH_CARDIO_FACTOR * 100) / 100;
   const strain = computeCompositeStrain(effectiveCardio, 16.65, 0.03);
   assert.ok(strain.cardioStrain < 25, `Strength-only Cardio Strain should be modest (<25), got ${strain.cardioStrain}`);
-  assert.ok(strain.muscularStrain >= 45 && strain.muscularStrain <= 55, `16.65 raw muscular should be ~50, got ${strain.muscularStrain}`);
-  assert.ok(strain.overallStrain >= 50 && strain.overallStrain <= 65, `Overall strain should be ~57, got ${strain.overallStrain}`);
+  assert.ok(strain.muscularStrain >= 55 && strain.muscularStrain <= 66, `16.65 raw muscular should be ~60, got ${strain.muscularStrain}`);
+  assert.ok(strain.overallStrain >= 60 && strain.overallStrain <= 72, `Overall strain should be ~65, got ${strain.overallStrain}`);
 
   assert.equal(computeTargetStrain(84).label, "Ready to push");
   assert.equal(computeTargetStrain(62).label, "Steady training");

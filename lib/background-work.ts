@@ -1,11 +1,16 @@
-import { and, inArray, lte } from "drizzle-orm";
+import { and, eq, inArray, lte } from "drizzle-orm";
 import { authConfigured, getDatabase } from "./runtime";
 import { googleConfigured, syncGoogleAllUsers } from "./google-health";
 import { processGoogleMeals } from "./google-meal-worker";
+import { hevyOAuthConfigured, syncHevyOAuth } from "./hevy";
 import { processReminders, pushConfigured } from "./reminders";
 import * as schema from "./schema";
 
-const state = globalThis as typeof globalThis & { __fitnessWorker?: ReturnType<typeof setInterval>; __lastGooglePull?: number };
+const state = globalThis as typeof globalThis & {
+  __fitnessWorker?: ReturnType<typeof setInterval>;
+  __lastGooglePull?: number;
+  __lastHevyPull?: number;
+};
 
 export async function processBackgroundGoogleMeals(db: Parameters<typeof processGoogleMeals>[0], limit = 10) {
   const pendingRows = await db
@@ -39,12 +44,23 @@ export function startBackgroundWork() {
     if (running) return; running = true;
     try {
       const db = getDatabase();
+      const now = Date.now();
       if (googleConfigured()) {
         await processBackgroundGoogleMeals(db).catch(() => undefined);
-        const now = Date.now();
-        if (!state.__lastGooglePull || now - state.__lastGooglePull >= 15 * 60 * 1000) {
+        if (!state.__lastGooglePull || now - state.__lastGooglePull >= 3 * 60 * 1000) {
           state.__lastGooglePull = now;
           await syncGoogleAllUsers(db).catch(() => undefined);
+        }
+      }
+      if (hevyOAuthConfigured() && (!state.__lastHevyPull || now - state.__lastHevyPull >= 5 * 60 * 1000)) {
+        state.__lastHevyPull = now;
+        const hevyUsers = await db
+          .select({ userId: schema.healthIntegration.userId })
+          .from(schema.healthIntegration)
+          .where(and(eq(schema.healthIntegration.provider, "hevy"), eq(schema.healthIntegration.status, "connected")))
+          .catch(() => []);
+        for (const row of hevyUsers) {
+          await syncHevyOAuth(db, row.userId).catch(() => undefined);
         }
       }
       if (pushConfigured()) await processReminders(db).catch(() => undefined);

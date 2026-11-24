@@ -5,6 +5,7 @@ import { foodEmoji } from "../lib/food-emoji";
 import dynamic from "next/dynamic";
 import { useState } from "react";
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, Plus, Trash2, TrendingUp } from "lucide-react";
+import { CalorieSlider } from "../components/bevel-widgets";
 import {
   MealCategoryIcon,
   MoonThemeIcon,
@@ -126,104 +127,92 @@ export function NutritionView({
   const weekSummary = summarizeWindow(history30, addDays(today, -6));
   const monthSummary = summarizeWindow(history30, addDays(today, -29));
 
+  const calPct =
+    dayView.totals.calories == null || dayView.target <= 0
+      ? 0
+      : Math.round((dayView.totals.calories / dayView.target) * 100);
+  const sliderStatus =
+    dayView.remaining == null
+      ? isBulkMode
+        ? `${fmtKcal(dayView.target)} to target`
+        : `${fmtKcal(dayView.target)} left`
+      : isBulkMode
+        ? dayView.remaining > 0
+          ? `${fmtKcal(dayView.remaining)} under`
+          : `${fmtKcal(Math.abs(dayView.remaining))} over · met`
+        : dayView.remaining >= 0
+          ? `${fmtKcal(dayView.remaining)} left`
+          : `${fmtKcal(Math.abs(dayView.remaining))} over`;
+
   const diaryContent = (
     <>
-      {/* Daily Summary Card: Protein & Fibre above Carbs & Fat */}
-      <section className="card">
-        <div className="split-row" style={{ marginBottom: ".65rem" }}>
-          <div>
-            <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
-              Intake vs {fmtKcal(dayView.target)} kcal {isBulkMode ? "bulk target" : "target"}
-            </div>
-            <strong className="num" style={{ fontSize: "1.45rem" }}>
-              {dayView.totals.calories == null ? "—" : `${fmtKcal(dayView.totals.calories)} kcal`}
-            </strong>{" "}
-            <span
-              style={{
-                fontSize: ".85rem",
-                color: dayGoalMet === null ? "var(--muted)" : dayGoalMet ? "var(--accent)" : "var(--danger-fg)",
-                fontWeight: dayGoalMet === null ? 400 : 600,
-              }}
-            >
-              · {dayView.remaining == null
-                ? isBulkMode
-                  ? `${fmtKcal(dayView.target)} to target`
-                  : `${fmtKcal(dayView.target)} remaining`
-                : isBulkMode
-                  ? dayView.remaining > 0
-                    ? `${fmtKcal(dayView.remaining)} under target`
-                    : `${fmtKcal(Math.abs(dayView.remaining))} over · target met`
-                  : dayView.remaining >= 0
-                    ? `${fmtKcal(dayView.remaining)} remaining`
-                    : `${fmtKcal(Math.abs(dayView.remaining))} over`}
-            </span>
-          </div>
-          <div className="button-row">
-            {isBulkMode && <span className="pill accent-soft">Bulk mode</span>}
-            {dayGoalMet !== null && (
-              <span className={`pill ${dayGoalMet ? "accent-soft" : "danger-soft"}`}>
-                {isBulkMode
-                  ? dayGoalMet
-                    ? "Target met"
-                    : "Under target"
-                  : dayGoalMet
-                    ? "Under target"
-                    : "Over target"}
+      {/* Sleek Bevel Calorie Intake Linear Slider */}
+      <CalorieSlider
+        title="Calorie Intake"
+        consumedText={dayView.totals.calories == null ? "0" : fmtKcal(dayView.totals.calories)}
+        targetText={`${fmtKcal(dayView.target)} kcal`}
+        statusText={sliderStatus}
+        fillPct={calPct}
+        isOnTarget={dayGoalMet}
+        isBulkMode={isBulkMode}
+        headerRight={
+          <div style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
+            {dayView.nutritionScore.grade && (
+              <span className={`pill score-pill-${dayView.nutritionScore.grade}`} style={{ fontSize: ".7rem" }}>
+                Score {dayView.nutritionScore.score} ({dayView.nutritionScore.grade})
               </span>
             )}
-            <span className={`pill ${dayView.diaryComplete ? "teal-soft" : ""}`}>
-              {dayView.diaryComplete ? "Past day" : "Active day"}
-            </span>
-          </div>
-        </div>
-
-        <div className="button-row" style={{ marginBottom: ".6rem" }}>
-          <span className={`pill score-pill-${dayView.nutritionScore.grade ?? "none"}`}>
-            Nutrition Score:{" "}
-            <strong className="num">
-              {dayView.nutritionScore.score == null ? "—" : `${dayView.nutritionScore.score}/100 (${dayView.nutritionScore.grade})`}
-            </strong>
-          </span>
-          {dayView.nutritionScore.wholeFoodPct != null && (
-            <span className="pill">
-              Whole food {dayView.nutritionScore.wholeFoodPct}%
-            </span>
-          )}
-          {dayView.nutritionScore.contributors.slice(0, 3).map((c) => (
             <span
-              key={`${c.impact}-${c.key}`}
-              className={`pill ${c.impact === "positive" ? "teal-soft" : "amber-soft"}`}
-              title={c.detail}
+              className="num"
+              style={{
+                fontSize: ".8rem",
+                fontWeight: 650,
+                color: dayGoalMet === null ? "var(--muted)" : dayGoalMet ? "var(--status-good)" : "var(--status-bad)",
+              }}
             >
-              {c.impact === "positive" ? "+" : "−"} {c.label}
+              {sliderStatus}
             </span>
-          ))}
-        </div>
-
-        <div className="macro-grid">
-          <div className="energy-cell" style={{ borderColor: "var(--accent-border)" }}>
-            <span style={{ color: "var(--macro-protein)", fontWeight: 700 }}>Protein</span>
-            <strong className="num">{fmtGram(dayView.totals.proteinG)}</strong><small>of {fmtGram(dayView.macroTargets.proteinG)} target</small>
           </div>
-          <div className="energy-cell" style={{ borderColor: "var(--accent-border)" }}>
-            <span style={{ color: "var(--macro-fibre)", fontWeight: 700 }}>Fibre</span>
-            <strong className="num">{fmtGram(dayView.totals.fibreG)}</strong><small>of {fmtGram(dayView.macroTargets.fibreG)} target</small>
-          </div>
-          <div className="energy-cell">
-            <span>Carbs</span>
-            <strong className="num">{fmtGram(dayView.totals.carbsG)}</strong><small>of {fmtGram(dayView.macroTargets.carbsG)} target</small>
-          </div>
-          <div className="energy-cell">
-            <span>Fat</span>
-            <strong className="num">{fmtGram(dayView.totals.fatG)}</strong><small>of {fmtGram(dayView.macroTargets.fatG)} target</small>
-          </div>
-        </div>
-        {dayView.totals.hasUnknownValues && dayView.meals.length > 0 && (
-          <p style={{ fontSize: ".74rem", marginTop: ".5rem" }}>
-            Some items have unrecorded micronutrients/fibre; missing values stay blank rather than being counted as zero.
-          </p>
-        )}
-      </section>
+        }
+        macros={[
+          {
+            label: "Protein",
+            valueText: fmtGram(dayView.totals.proteinG),
+            pct:
+              dayView.totals.proteinG != null && dayView.macroTargets.proteinG > 0
+                ? Math.round((dayView.totals.proteinG / dayView.macroTargets.proteinG) * 100)
+                : 0,
+            color: "var(--macro-protein)",
+          },
+          {
+            label: "Fibre",
+            valueText: fmtGram(dayView.totals.fibreG),
+            pct:
+              dayView.totals.fibreG != null && dayView.macroTargets.fibreG > 0
+                ? Math.round((dayView.totals.fibreG / dayView.macroTargets.fibreG) * 100)
+                : 0,
+            color: "var(--macro-fibre)",
+          },
+          {
+            label: "Carbs",
+            valueText: fmtGram(dayView.totals.carbsG),
+            pct:
+              dayView.totals.carbsG != null && dayView.macroTargets.carbsG > 0
+                ? Math.round((dayView.totals.carbsG / dayView.macroTargets.carbsG) * 100)
+                : 0,
+            color: "var(--macro-carbs)",
+          },
+          {
+            label: "Fat",
+            valueText: fmtGram(dayView.totals.fatG),
+            pct:
+              dayView.totals.fatG != null && dayView.macroTargets.fatG > 0
+                ? Math.round((dayView.totals.fatG / dayView.macroTargets.fatG) * 100)
+                : 0,
+            color: "var(--macro-fat)",
+          },
+        ]}
+      />
 
       {/* Chronological Meal Diary */}
       <section style={{ display: "grid", gap: ".65rem" }} aria-label="Meal diary">
