@@ -135,9 +135,14 @@ try {
     await page.getByRole("navigation").getByRole("button", { name: "Nutrition", exact: true }).click();
     await page.locator(".meal-card").filter({ hasText: `${name} review meal` }).waitFor();
     const nutritionText = await page.locator("main").innerText();
-    assert.equal(nutritionText.includes("7-Day Net Balance"), true, "Nutrition must show 7-Day Net Balance");
-    assert.equal(nutritionText.includes("30-Day Net Balance"), true, "Nutrition must show 30-Day Net Balance");
+    assert.equal(nutritionText.includes("7-Day Energy Balance"), true, "Nutrition must show 7-Day Energy Balance");
+    assert.equal(nutritionText.includes("30-Day Energy Balance"), false, "30-Day balance must be inside drill-down, not cluttering Diary");
     assert.equal(nutritionText.includes("Finish logging"), false, "Nutrition must not show Finish logging button");
+    await page.getByText("7-Day Energy Balance").click();
+    await page.getByRole("tab", { name: "30 Days", exact: true }).click();
+    await page.getByText("30-Day Energy Balance").waitFor();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await page.locator(".meal-card").filter({ hasText: `${name} review meal` }).waitFor();
     await page.getByRole("button", { name: "Edit", exact: true }).last().click();
     await modal.getByLabel("Food name", { exact: true }).fill("oats");
     await modal.getByRole("option").filter({ hasText: "Porridge oats, unfortified" }).first().click();

@@ -4,8 +4,6 @@ import { useState } from "react";
 import type { MuscleGroup } from "../lib/muscle-map";
 import type { MuscleFreshnessEntry } from "../lib/training-load";
 
-type HeatmapMode = "recovery" | "strain";
-
 function recoveryColor(entry?: MuscleFreshnessEntry): string {
   if (!entry || (entry.weeklyWorkingSets === 0 && entry.recentLoad === 0)) {
     return "var(--muscle-idle)";
@@ -13,14 +11,6 @@ function recoveryColor(entry?: MuscleFreshnessEntry): string {
   if (entry.status === "fresh") return "var(--muscle-fresh)";
   if (entry.status === "recovering") return "var(--muscle-recovering)";
   return "var(--muscle-fatigued)";
-}
-
-function strainHeatColor(entry?: MuscleFreshnessEntry): string {
-  if (!entry || entry.recentLoad <= 0.1) return "var(--muscle-idle)";
-  if (entry.recentLoad >= 8) return "#ef4444"; // intense red
-  if (entry.recentLoad >= 4.5) return "#f97316"; // hot orange
-  if (entry.recentLoad >= 2) return "#f59e0b"; // warm amber
-  return "#38bdf8"; // light stimulus
 }
 
 function statusLabel(entry: MuscleFreshnessEntry): string {
@@ -42,70 +32,27 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
   const mostWorked =
     [...entries].sort((a, b) => a.freshnessPct - b.freshnessPct || b.recentLoad - a.recentLoad)[0]?.muscle ?? "Chest";
   const [selected, setSelected] = useState<MuscleGroup>(mostWorked);
-  const [mode, setMode] = useState<HeatmapMode>("recovery");
   const active = byMuscle.get(selected);
 
-  const fillFor = (m: MuscleGroup) =>
-    mode === "recovery" ? recoveryColor(byMuscle.get(m)) : strainHeatColor(byMuscle.get(m));
+  const fillFor = (m: MuscleGroup) => recoveryColor(byMuscle.get(m));
   const strokeFor = (m: MuscleGroup) => (selected === m ? "var(--text)" : "transparent");
 
   return (
     <div className="muscle-map-wrap">
-      {/* Heatmap Mode Toggle */}
-      <div className="segments" role="tablist" aria-label="Muscle heatmap mode">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === "recovery"}
-          aria-pressed={mode === "recovery"}
-          onClick={() => setMode("recovery")}
-        >
-          Recovery Heatmap
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === "strain"}
-          aria-pressed={mode === "strain"}
-          onClick={() => setMode("strain")}
-        >
-          7d Strain Heatmap
-        </button>
+      {/* Clean Recovery Legend */}
+      <div className="split-row" style={{ fontSize: ".74rem", color: "var(--muted)", paddingInline: ".25rem" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: ".32rem" }}>
+          <span className="muscle-chip-dot" style={{ background: "var(--muscle-fatigued)" }} /> Fatigued
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: ".32rem" }}>
+          <span className="muscle-chip-dot" style={{ background: "var(--muscle-recovering)" }} /> Recovering
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: ".32rem" }}>
+          <span className="muscle-chip-dot" style={{ background: "var(--muscle-fresh)" }} /> Ready (80%+)
+        </span>
       </div>
 
-      {/* Heat Legend */}
-      <div className="split-row" style={{ fontSize: ".72rem", color: "var(--muted)", paddingInline: ".25rem" }}>
-        {mode === "recovery" ? (
-          <>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: ".3rem" }}>
-              <span className="muscle-chip-dot" style={{ background: "var(--muscle-fatigued)" }} /> Fatigued (&lt;45%)
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: ".3rem" }}>
-              <span className="muscle-chip-dot" style={{ background: "var(--muscle-recovering)" }} /> Recovering
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: ".3rem" }}>
-              <span className="muscle-chip-dot" style={{ background: "var(--muscle-fresh)" }} /> Recovered (80%+)
-            </span>
-          </>
-        ) : (
-          <>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: ".3rem" }}>
-              <span className="muscle-chip-dot" style={{ background: "#38bdf8" }} /> Light
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: ".3rem" }}>
-              <span className="muscle-chip-dot" style={{ background: "#f59e0b" }} /> Moderate
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: ".3rem" }}>
-              <span className="muscle-chip-dot" style={{ background: "#f97316" }} /> High
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: ".3rem" }}>
-              <span className="muscle-chip-dot" style={{ background: "#ef4444" }} /> Peak Load
-            </span>
-          </>
-        )}
-      </div>
-
-      <div className="muscle-map-figures" role="group" aria-label="Anatomical muscle heatmap">
+      <div className="muscle-map-figures" role="group" aria-label="Anatomical muscle recovery map">
         {/* Front silhouette */}
         <figure className="muscle-figure">
           <svg viewBox="0 0 120 232" className="muscle-svg" aria-label="Front muscle groups">
@@ -117,26 +64,26 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
             <rect x="38" y="119" width="19" height="98" rx="9" fill="var(--muscle-body)" />
             <rect x="63" y="119" width="19" height="98" rx="9" fill="var(--muscle-body)" />
 
-            {/* Shoulders / Delts */}
+            {/* Shoulders */}
             <g
               className="muscle-zone"
               onClick={() => setSelected("Shoulders")}
               role="button"
               tabIndex={0}
-              aria-label={`Shoulders ${byMuscle.get("Shoulders")?.freshnessPct ?? 100}% fresh`}
+              aria-label={`Shoulders ${byMuscle.get("Shoulders")?.freshnessPct ?? 100}% recovered`}
               onKeyDown={(e) => e.key === "Enter" && setSelected("Shoulders")}
             >
               <ellipse cx="29" cy="52" rx="9" ry="11" fill={fillFor("Shoulders")} stroke={strokeFor("Shoulders")} strokeWidth="2" />
               <ellipse cx="91" cy="52" rx="9" ry="11" fill={fillFor("Shoulders")} stroke={strokeFor("Shoulders")} strokeWidth="2" />
             </g>
 
-            {/* Chest / Pecs */}
+            {/* Chest */}
             <g
               className="muscle-zone"
               onClick={() => setSelected("Chest")}
               role="button"
               tabIndex={0}
-              aria-label={`Chest ${byMuscle.get("Chest")?.freshnessPct ?? 100}% fresh`}
+              aria-label={`Chest ${byMuscle.get("Chest")?.freshnessPct ?? 100}% recovered`}
               onKeyDown={(e) => e.key === "Enter" && setSelected("Chest")}
             >
               <path d="M39 48 C39 45 58 45 58 49 L58 66 C58 68 41 68 39 63 Z" fill={fillFor("Chest")} stroke={strokeFor("Chest")} strokeWidth="2" />
@@ -149,20 +96,20 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
               onClick={() => setSelected("Biceps")}
               role="button"
               tabIndex={0}
-              aria-label={`Biceps ${byMuscle.get("Biceps")?.freshnessPct ?? 100}% fresh`}
+              aria-label={`Biceps ${byMuscle.get("Biceps")?.freshnessPct ?? 100}% recovered`}
               onKeyDown={(e) => e.key === "Enter" && setSelected("Biceps")}
             >
               <rect x="20" y="65" width="10" height="24" rx="5" fill={fillFor("Biceps")} stroke={strokeFor("Biceps")} strokeWidth="2" />
               <rect x="90" y="65" width="10" height="24" rx="5" fill={fillFor("Biceps")} stroke={strokeFor("Biceps")} strokeWidth="2" />
             </g>
 
-            {/* Core / Abs */}
+            {/* Core */}
             <g
               className="muscle-zone"
               onClick={() => setSelected("Core")}
               role="button"
               tabIndex={0}
-              aria-label={`Core ${byMuscle.get("Core")?.freshnessPct ?? 100}% fresh`}
+              aria-label={`Core ${byMuscle.get("Core")?.freshnessPct ?? 100}% recovered`}
               onKeyDown={(e) => e.key === "Enter" && setSelected("Core")}
             >
               <rect x="46" y="71" width="28" height="40" rx="8" fill={fillFor("Core")} stroke={strokeFor("Core")} strokeWidth="2" />
@@ -174,7 +121,7 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
               onClick={() => setSelected("Quads")}
               role="button"
               tabIndex={0}
-              aria-label={`Quads ${byMuscle.get("Quads")?.freshnessPct ?? 100}% fresh`}
+              aria-label={`Quads ${byMuscle.get("Quads")?.freshnessPct ?? 100}% recovered`}
               onKeyDown={(e) => e.key === "Enter" && setSelected("Quads")}
             >
               <rect x="39" y="123" width="17" height="45" rx="8" fill={fillFor("Quads")} stroke={strokeFor("Quads")} strokeWidth="2" />
@@ -195,13 +142,13 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
             <rect x="38" y="119" width="19" height="98" rx="9" fill="var(--muscle-body)" />
             <rect x="63" y="119" width="19" height="98" rx="9" fill="var(--muscle-body)" />
 
-            {/* Back / Lats & Traps */}
+            {/* Back */}
             <g
               className="muscle-zone"
               onClick={() => setSelected("Back")}
               role="button"
               tabIndex={0}
-              aria-label={`Back ${byMuscle.get("Back")?.freshnessPct ?? 100}% fresh`}
+              aria-label={`Back ${byMuscle.get("Back")?.freshnessPct ?? 100}% recovered`}
               onKeyDown={(e) => e.key === "Enter" && setSelected("Back")}
             >
               <path d="M37 45 L83 45 L77 99 L43 99 Z" fill={fillFor("Back")} stroke={strokeFor("Back")} strokeWidth="2" />
@@ -213,7 +160,7 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
               onClick={() => setSelected("Triceps")}
               role="button"
               tabIndex={0}
-              aria-label={`Triceps ${byMuscle.get("Triceps")?.freshnessPct ?? 100}% fresh`}
+              aria-label={`Triceps ${byMuscle.get("Triceps")?.freshnessPct ?? 100}% recovered`}
               onKeyDown={(e) => e.key === "Enter" && setSelected("Triceps")}
             >
               <rect x="20" y="64" width="10" height="25" rx="5" fill={fillFor("Triceps")} stroke={strokeFor("Triceps")} strokeWidth="2" />
@@ -226,7 +173,7 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
               onClick={() => setSelected("Glutes")}
               role="button"
               tabIndex={0}
-              aria-label={`Glutes ${byMuscle.get("Glutes")?.freshnessPct ?? 100}% fresh`}
+              aria-label={`Glutes ${byMuscle.get("Glutes")?.freshnessPct ?? 100}% recovered`}
               onKeyDown={(e) => e.key === "Enter" && setSelected("Glutes")}
             >
               <rect x="39" y="103" width="19" height="22" rx="9" fill={fillFor("Glutes")} stroke={strokeFor("Glutes")} strokeWidth="2" />
@@ -239,7 +186,7 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
               onClick={() => setSelected("Hamstrings")}
               role="button"
               tabIndex={0}
-              aria-label={`Hamstrings ${byMuscle.get("Hamstrings")?.freshnessPct ?? 100}% fresh`}
+              aria-label={`Hamstrings ${byMuscle.get("Hamstrings")?.freshnessPct ?? 100}% recovered`}
               onKeyDown={(e) => e.key === "Enter" && setSelected("Hamstrings")}
             >
               <rect x="40" y="129" width="16" height="38" rx="7" fill={fillFor("Hamstrings")} stroke={strokeFor("Hamstrings")} strokeWidth="2" />
@@ -252,7 +199,7 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
               onClick={() => setSelected("Calves")}
               role="button"
               tabIndex={0}
-              aria-label={`Calves ${byMuscle.get("Calves")?.freshnessPct ?? 100}% fresh`}
+              aria-label={`Calves ${byMuscle.get("Calves")?.freshnessPct ?? 100}% recovered`}
               onKeyDown={(e) => e.key === "Enter" && setSelected("Calves")}
             >
               <rect x="41" y="173" width="14" height="34" rx="7" fill={fillFor("Calves")} stroke={strokeFor("Calves")} strokeWidth="2" />
@@ -272,14 +219,14 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
               <span className={`pill ${statusBadgeClass(active)}`}>{statusLabel(active)}</span>
             </div>
             <strong className="num" style={{ fontSize: "1.05rem" }}>
-              {mode === "recovery" ? `${active.freshnessPct}% fresh` : `Load ${active.recentLoad}`}
+              {active.freshnessPct}% recovered
             </strong>
           </div>
           <div className="muscle-bar-track">
             <div
               className="muscle-bar-fill"
               style={{
-                width: `${mode === "recovery" ? active.freshnessPct : Math.min(100, Math.round((active.recentLoad / 12) * 100))}%`,
+                width: `${active.freshnessPct}%`,
                 background: fillFor(active.muscle),
               }}
             />
@@ -287,21 +234,19 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
           <div className="split-row" style={{ fontSize: ".75rem", color: "var(--muted)" }}>
             <span>
               {active.daysSinceTrained == null
-                ? "Not trained in last 7d"
+                ? "Ready — not trained in last 7d"
                 : active.daysSinceTrained === 0
                   ? "Trained today"
                   : active.daysSinceTrained === 1
                     ? "Trained yesterday"
                     : `Trained ${active.daysSinceTrained}d ago`}
             </span>
-            <span className="num">
-              {active.weeklyWorkingSets} sets · 7d Load {active.recentLoad}
-            </span>
+            <span className="num">{active.weeklyWorkingSets} sets (7d)</span>
           </div>
         </div>
       )}
 
-      {/* Compact clickable pill list of all 10 muscles */}
+      {/* Compact clickable list of all 10 muscles */}
       <div className="muscle-chip-grid">
         {entries.map((entry) => (
           <button
@@ -312,9 +257,7 @@ export function MuscleFreshnessMap({ entries }: { entries: MuscleFreshnessEntry[
           >
             <span className="muscle-chip-dot" style={{ background: fillFor(entry.muscle) }} />
             <span className="muscle-chip-name">{entry.muscle}</span>
-            <span className="num muscle-chip-pct">
-              {mode === "recovery" ? `${entry.freshnessPct}%` : `${entry.weeklyWorkingSets}s`}
-            </span>
+            <span className="num muscle-chip-pct">{entry.freshnessPct}%</span>
           </button>
         ))}
       </div>

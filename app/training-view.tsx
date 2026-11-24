@@ -70,6 +70,25 @@ function statusPillClass(tone: LoadStatusAssessment["tone"]): string {
   return "";
 }
 
+function loadPercent(
+  latest: { daily: number; acute7d: number; chronic42d: number } | null | undefined,
+  status: LoadStatusAssessment | null | undefined,
+  refLoad: number,
+): { pct: number | null; subtitle: string } {
+  if (!latest) return { pct: null, subtitle: "No history yet" };
+  if (status?.acwr != null) {
+    return {
+      pct: Math.round(status.acwr * 100),
+      subtitle: "Optimal 85–130%",
+    };
+  }
+  const indexPct = Math.min(100, Math.round(100 * (1 - Math.exp(-Math.max(0, latest.acute7d) / refLoad))));
+  return {
+    pct: indexPct,
+    subtitle: "Calibrating baseline",
+  };
+}
+
 export function TrainingView({
   today,
   selectedDay,
@@ -160,6 +179,7 @@ export function TrainingView({
 
     if (page.kind === "muscular") {
       const status = loads?.muscularStatus;
+      const mPct = loadPercent(loads?.latestMuscular, status, 9);
       return (
         <>
           {backHeader(
@@ -169,14 +189,12 @@ export function TrainingView({
           <section className="card" style={{ display: "grid", gap: ".75rem" }}>
             <div className="split-row">
               <div>
-                <span className="eyebrow">Training Status</span>
-                <h2 style={{ margin: ".15rem 0 0", fontSize: "1.35rem" }}>
-                  {status?.label ?? "Calibrating"}
-                  {status?.acwr != null && (
-                    <span className="num muted" style={{ fontSize: ".92rem", marginLeft: ".4rem" }}>
-                      {status.acwr}× baseline
-                    </span>
-                  )}
+                <span className="eyebrow">Muscular Load</span>
+                <h2 style={{ margin: ".15rem 0 0", fontSize: "1.55rem", letterSpacing: "-0.03em" }}>
+                  <span className="num">{mPct.pct != null ? `${mPct.pct}%` : "—"}</span>
+                  <span className="muted" style={{ fontSize: ".85rem", fontWeight: 500, marginLeft: ".45rem" }}>
+                    {mPct.subtitle}
+                  </span>
                 </h2>
               </div>
               <button
@@ -194,16 +212,16 @@ export function TrainingView({
               <>
                 <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
                   <div className="energy-cell">
-                    <span>Daily</span>
-                    <strong className="num">{loads.latestMuscular.daily}</strong>
+                    <span>Today</span>
+                    <strong className="num">{Math.min(100, Math.round(100 * (1 - Math.exp(-loads.latestMuscular.daily / 18))))}%</strong>
                   </div>
                   <div className="energy-cell">
-                    <span>7d Acute</span>
-                    <strong className="num">{loads.latestMuscular.acute7d}</strong>
+                    <span>7d Load</span>
+                    <strong className="num">{mPct.pct != null ? `${mPct.pct}%` : "—"}</strong>
                   </div>
                   <div className="energy-cell">
-                    <span>42d Chronic</span>
-                    <strong className="num">{loads.latestMuscular.chronic42d}</strong>
+                    <span>Optimal Zone</span>
+                    <strong className="num">85–130%</strong>
                   </div>
                 </div>
                 {loads.muscularSeries.length > 1 && (
@@ -237,8 +255,8 @@ export function TrainingView({
           {loads?.muscleFreshness?.length ? (
             <section className="card" style={{ display: "grid", gap: ".65rem" }}>
               <div className="split-row">
-                <h2 style={{ fontSize: "1rem", margin: 0 }}>Muscle Recovery &amp; Heat Map</h2>
-                <span className="pill">Hevy 7d</span>
+                <h2 style={{ fontSize: "1rem", margin: 0 }}>Muscle Recovery Map</h2>
+                <span className="pill">Hevy</span>
               </div>
               <MuscleFreshnessMap entries={loads.muscleFreshness} />
             </section>
@@ -249,6 +267,7 @@ export function TrainingView({
 
     if (page.kind === "cardio") {
       const status = loads?.cardioStatus;
+      const cPct = loadPercent(loads?.latestCardio, status, 70);
       return (
         <>
           {backHeader(
@@ -257,14 +276,12 @@ export function TrainingView({
           )}
           <section className="card" style={{ display: "grid", gap: ".75rem" }}>
             <div>
-              <span className="eyebrow">Cardio Status</span>
-              <h2 style={{ margin: ".15rem 0 0", fontSize: "1.35rem" }}>
-                {status?.label ?? "Calibrating"}
-                {status?.acwr != null && (
-                  <span className="num muted" style={{ fontSize: ".92rem", marginLeft: ".4rem" }}>
-                    {status.acwr}× baseline
-                  </span>
-                )}
+              <span className="eyebrow">Cardio Load</span>
+              <h2 style={{ margin: ".15rem 0 0", fontSize: "1.55rem", letterSpacing: "-0.03em" }}>
+                <span className="num">{cPct.pct != null ? `${cPct.pct}%` : "—"}</span>
+                <span className="muted" style={{ fontSize: ".85rem", fontWeight: 500, marginLeft: ".45rem" }}>
+                  {cPct.subtitle}
+                </span>
               </h2>
             </div>
             {status && <p style={{ fontSize: ".82rem", color: "var(--muted)", margin: 0 }}>{status.guidance}</p>}
@@ -273,16 +290,16 @@ export function TrainingView({
               <>
                 <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
                   <div className="energy-cell">
-                    <span>Daily TRIMP</span>
-                    <strong className="num">{loads.latestCardio.daily}</strong>
+                    <span>Today</span>
+                    <strong className="num">{Math.min(100, Math.round(100 * (1 - Math.exp(-loads.latestCardio.daily / 220))))}%</strong>
                   </div>
                   <div className="energy-cell">
-                    <span>7d Acute</span>
-                    <strong className="num">{loads.latestCardio.acute7d}</strong>
+                    <span>7d Load</span>
+                    <strong className="num">{cPct.pct != null ? `${cPct.pct}%` : "—"}</strong>
                   </div>
                   <div className="energy-cell">
-                    <span>42d Chronic</span>
-                    <strong className="num">{loads.latestCardio.chronic42d}</strong>
+                    <span>Optimal Zone</span>
+                    <strong className="num">85–130%</strong>
                   </div>
                 </div>
                 {loads.cardioSeries.length > 1 && (
@@ -309,7 +326,7 @@ export function TrainingView({
                 )}
               </>
             ) : (
-              <p className="empty">No cardio TRIMP history synced yet.</p>
+              <p className="empty">No cardio history synced yet.</p>
             )}
           </section>
         </>
@@ -645,95 +662,101 @@ export function TrainingView({
         </div>
       </section>
 
-      {/* Long-Term Cardio & Muscular Load Cards (Tap → Full-Page Drill-Down) */}
-      <section className="two-col" aria-label="Long-term training loads">
-        <div className="unlock-gate">
-          <button
-            type="button"
-            className={`card card-interactive unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}
-            onClick={() => setPage({ kind: "cardio" })}
-            style={{ width: "100%", textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
-          >
-            <div className="split-row">
-              <span className="eyebrow">Cardio Load</span>
-              {loads?.cardioStatus ? (
-                <span className={`pill ${statusPillClass(loads.cardioStatus.tone)}`}>
-                  {loads.cardioStatus.label}
-                </span>
-              ) : (
-                <span className="pill teal-soft">7d / 42d</span>
+      {/* Long-Term Cardio & Muscular Load Cards (Percentage display → Full-Page Drill-Down) */}
+      {(() => {
+        const cPct = loadPercent(loads?.latestCardio, loads?.cardioStatus, 70);
+        const mPct = loadPercent(loads?.latestMuscular, loads?.muscularStatus, 9);
+        return (
+          <section className="two-col" aria-label="Long-term training loads">
+            <div className="unlock-gate">
+              <button
+                type="button"
+                className={`card card-interactive unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}
+                onClick={() => setPage({ kind: "cardio" })}
+                style={{ width: "100%", textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
+              >
+                <div className="split-row">
+                  <span className="eyebrow">Cardio Load</span>
+                  {loads?.cardioStatus ? (
+                    <span className={`pill ${statusPillClass(loads.cardioStatus.tone)}`}>
+                      {loads.cardioStatus.label}
+                    </span>
+                  ) : (
+                    <span className="pill teal-soft">%</span>
+                  )}
+                </div>
+                <div className="split-row" style={{ marginTop: ".45rem", alignItems: "baseline" }}>
+                  <strong className="num" style={{ fontSize: "1.55rem", letterSpacing: "-0.03em" }}>
+                    {loadsBusy && !loads ? "…" : cPct.pct != null ? `${cPct.pct}%` : "—"}
+                  </strong>
+                  <span style={{ fontSize: ".74rem", color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: ".2rem" }}>
+                    {cPct.subtitle} <ChevronRight size={14} />
+                  </span>
+                </div>
+              </button>
+              {google && !google.connected && (
+                <div className="unlock-overlay">
+                  <h3>Unlock Cardio Load</h3>
+                  <p>Connect Google Health to track heart-rate load.</p>
+                  {google.available ? (
+                    <a className="unlock-btn" href="/api/integrations/google/connect">
+                      Connect Google Health
+                    </a>
+                  ) : (
+                    <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
+                      Open Settings
+                    </button>
+                  )}
+                </div>
               )}
             </div>
-            <div className="split-row" style={{ marginTop: ".45rem", alignItems: "baseline" }}>
-              <strong className="num" style={{ fontSize: "1.45rem" }}>
-                {loadsBusy && !loads ? "…" : loads?.latestCardio ? loads.latestCardio.acute7d : "—"}
-              </strong>
-              <span style={{ fontSize: ".76rem", color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: ".2rem" }}>
-                42d {loads?.latestCardio ? loads.latestCardio.chronic42d : "—"} <ChevronRight size={14} />
-              </span>
-            </div>
-          </button>
-          {google && !google.connected && (
-            <div className="unlock-overlay">
-              <h3>Unlock Cardio Load</h3>
-              <p>Connect Google Health to track 7d &amp; 42d heart-rate load.</p>
-              {google.available ? (
-                <a className="unlock-btn" href="/api/integrations/google/connect">
-                  Connect Google Health
-                </a>
-              ) : (
-                <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
-                  Open Settings
-                </button>
-              )}
-            </div>
-          )}
-        </div>
 
-        <div className="unlock-gate">
-          <button
-            type="button"
-            className={`card card-interactive unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
-            onClick={() => setPage({ kind: "muscular" })}
-            style={{ width: "100%", textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
-          >
-            <div className="split-row">
-              <span className="eyebrow">Muscular Load</span>
-              {loads?.muscularStatus ? (
-                <span className={`pill ${statusPillClass(loads.muscularStatus.tone)}`}>
-                  {loads.muscularStatus.label}
-                </span>
-              ) : (
-                <span className="pill protein-soft">7d / 42d</span>
+            <div className="unlock-gate">
+              <button
+                type="button"
+                className={`card card-interactive unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
+                onClick={() => setPage({ kind: "muscular" })}
+                style={{ width: "100%", textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
+              >
+                <div className="split-row">
+                  <span className="eyebrow">Muscular Load</span>
+                  {loads?.muscularStatus ? (
+                    <span className={`pill ${statusPillClass(loads.muscularStatus.tone)}`}>
+                      {loads.muscularStatus.label}
+                    </span>
+                  ) : (
+                    <span className="pill protein-soft">%</span>
+                  )}
+                </div>
+                <div className="split-row" style={{ marginTop: ".45rem", alignItems: "baseline" }}>
+                  <strong className="num" style={{ fontSize: "1.55rem", letterSpacing: "-0.03em" }}>
+                    {loadsBusy && !loads ? "…" : mPct.pct != null ? `${mPct.pct}%` : "—"}
+                  </strong>
+                  <span style={{ fontSize: ".74rem", color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: ".2rem" }}>
+                    {mPct.subtitle} <ChevronRight size={14} />
+                  </span>
+                </div>
+              </button>
+              {!hevy.connected && (
+                <div className="unlock-overlay">
+                  <h3>Unlock Muscular Load</h3>
+                  <p>Connect Hevy to track set-level Muscular Load and training status.</p>
+                  {hevy.oauthAvailable ? (
+                    <a className="unlock-btn" href="/api/integrations/hevy/connect">
+                      Connect Hevy to Unlock
+                    </a>
+                  ) : (
+                    <label className="unlock-btn" style={{ cursor: "pointer" }}>
+                      <Upload size={14} /> Import Hevy CSV / JSON
+                      <input type="file" accept=".csv,.json,text/csv,application/json" style={{ display: "none" }} onChange={handleFileImport} />
+                    </label>
+                  )}
+                </div>
               )}
             </div>
-            <div className="split-row" style={{ marginTop: ".45rem", alignItems: "baseline" }}>
-              <strong className="num" style={{ fontSize: "1.45rem" }}>
-                {loadsBusy && !loads ? "…" : loads?.latestMuscular ? loads.latestMuscular.acute7d : "—"}
-              </strong>
-              <span style={{ fontSize: ".76rem", color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: ".2rem" }}>
-                42d {loads?.latestMuscular ? loads.latestMuscular.chronic42d : "—"} <ChevronRight size={14} />
-              </span>
-            </div>
-          </button>
-          {!hevy.connected && (
-            <div className="unlock-overlay">
-              <h3>Unlock Muscular Load</h3>
-              <p>Connect Hevy to track set-level Muscular Load and training status.</p>
-              {hevy.oauthAvailable ? (
-                <a className="unlock-btn" href="/api/integrations/hevy/connect">
-                  Connect Hevy to Unlock
-                </a>
-              ) : (
-                <label className="unlock-btn" style={{ cursor: "pointer" }}>
-                  <Upload size={14} /> Import Hevy CSV / JSON
-                  <input type="file" accept=".csv,.json,text/csv,application/json" style={{ display: "none" }} onChange={handleFileImport} />
-                </label>
-              )}
-            </div>
-          )}
-        </div>
-      </section>
+          </section>
+        );
+      })()}
 
       {/* Muscle Recovery & Heat Map Card (Tap → Full-Page Anatomical Heatmap) */}
       <div className="unlock-gate">
