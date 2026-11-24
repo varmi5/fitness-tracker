@@ -343,13 +343,17 @@ test("resolveActiveHomeDay rolls over cleanly at midnight and trackingMode stric
     resolveActiveHomeDay({ calendarToday: "2026-11-25" }),
     { activeDay: "2026-11-25", waitingForSleep: false },
   );
-  // Sleep-gated rollover: holds on yesterday until Google Health sleep or today's activity arrives
+  // Sleep-gated rollover: holds on yesterday before 6 AM until Google Health sleep or today's activity arrives, then rolls over at 6 AM
   assert.deepEqual(
-    resolveActiveHomeDay({ calendarToday: "2026-11-25", sleepGated: true, hasTodaySleep: false, hasTodayActivity: false }),
+    resolveActiveHomeDay({ calendarToday: "2026-11-25", sleepGated: true, hasTodaySleep: false, hasTodayActivity: false, localHour: 3 }),
     { activeDay: "2026-11-24", waitingForSleep: true },
   );
   assert.deepEqual(
-    resolveActiveHomeDay({ calendarToday: "2026-11-25", sleepGated: true, hasTodaySleep: true, hasTodayActivity: false }),
+    resolveActiveHomeDay({ calendarToday: "2026-11-25", sleepGated: true, hasTodaySleep: false, hasTodayActivity: false, localHour: 6 }),
+    { activeDay: "2026-11-25", waitingForSleep: false },
+  );
+  assert.deepEqual(
+    resolveActiveHomeDay({ calendarToday: "2026-11-25", sleepGated: true, hasTodaySleep: true, hasTodayActivity: false, localHour: 4 }),
     { activeDay: "2026-11-25", waitingForSleep: false },
   );
   assert.equal(isDayComplete("2026-11-24", "2026-11-25"), true);

@@ -107,25 +107,71 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     return () => { clearInterval(timer); controller.abort(); };
   }, [google.connected, google.mealSync?.pending, google.mealSync?.failed]);
 
-  // Frequent background auto-sync (every 3 minutes while active/visible) for fresh sleep & vitals
+  // Automatic background sync on app open (if stale > 2m) and every 3 minutes while visible
   useEffect(() => {
-    if (!google.connected) return;
+    if (!google.connected && !hevy?.connected) return;
     let active = true;
-    const triggerAutoSync = () => {
-      if (!active || document.visibilityState !== "visible") return;
-      const now = Date.now();
-      if (now - lastAutoSyncRef.current < 3 * 60 * 1000) return;
-      lastAutoSyncRef.current = now;
-      void fetch("/api/integrations/google/sync", { method: "POST", cache: "no-store" })
-        .then(async (res) => (res.ok ? res.json() : null))
-        .then((payload) => {
-          if (payload?.status && active) setGoogle(payload.status);
-        })
-        .catch(() => undefined);
+    let running = false;
+
+    const isStale = (iso?: string | null, minAgeMs = 2 * 60 * 1000) => {
+      if (!iso) return true;
+      const t = Date.parse(iso);
+      return Number.isNaN(t) || Date.now() - t >= minAgeMs;
     };
-    const timer = window.setInterval(triggerAutoSync, 60_000);
+
+    const runSilentSync = async (isAppOpen = false) => {
+      if (!active || running || document.visibilityState !== "visible") return;
+      const now = Date.now();
+      const minGap = isAppOpen ? 0 : 3 * 60 * 1000;
+      if (!isAppOpen && now - lastAutoSyncRef.current < minGap) return;
+      const shouldSyncGoogle = google.connected && (isAppOpen ? isStale(google.lastSync, 2 * 60 * 1000) : true);
+      const shouldSyncHevy = Boolean(hevy?.connected) && (isAppOpen ? isStale(hevy?.lastSync, 2 * 60 * 1000) : true);
+      if (!shouldSyncGoogle && !shouldSyncHevy) return;
+
+      running = true;
+      lastAutoSyncRef.current = now;
+      try {
+        const jobs: Promise<boolean>[] = [];
+        if (shouldSyncGoogle) {
+          jobs.push(
+            fetch("/api/integrations/google/sync", { method: "POST", cache: "no-store" })
+              .then(async (res) => (res.ok ? res.json() : null))
+              .then((payload) => {
+                if (payload?.status && active) setGoogle(payload.status);
+                return Boolean(payload);
+              })
+              .catch(() => false),
+          );
+        }
+        if (shouldSyncHevy) {
+          jobs.push(
+            fetch("/api/integrations/hevy/sync", { method: "POST", cache: "no-store" })
+              .then(async (res) => (res.ok ? res.json() : null))
+              .then((payload) => {
+                if (payload?.status && active) setHevy(payload.status);
+                return Boolean(payload);
+              })
+              .catch(() => false),
+          );
+        }
+        const results = await Promise.all(jobs);
+        if (active && results.some(Boolean)) {
+          await Promise.all([
+            refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
+            selectTrainingDay(trainingDayRef.current),
+          ]).catch(() => undefined);
+        }
+      } finally {
+        running = false;
+      }
+    };
+
+    // Fire on app open if stale
+    void runSilentSync(true);
+
+    const timer = window.setInterval(() => void runSilentSync(false), 60_000);
     const onVis = () => {
-      if (document.visibilityState === "visible") triggerAutoSync();
+      if (document.visibilityState === "visible") void runSilentSync(false);
     };
     document.addEventListener("visibilitychange", onVis);
     return () => {
@@ -133,7 +179,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [google.connected]);
+  }, [google.connected, hevy?.connected]);
   const [audit, setAudit] = useState(initial.audit);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ id: number; text: string; kind: "success" | "error" | "info" } | null>(null);

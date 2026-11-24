@@ -102,8 +102,10 @@ export function resolveActiveHomeDay(input: {
   sleepGated?: boolean;
   hasTodaySleep?: boolean;
   hasTodayActivity?: boolean;
+  localHour?: number;
 }): { activeDay: string; waitingForSleep: boolean } {
-  if (input.sleepGated && !input.hasTodaySleep && !input.hasTodayActivity) {
+  const beforeSixAm = input.localHour == null || input.localHour < 6;
+  if (input.sleepGated && !input.hasTodaySleep && !input.hasTodayActivity && beforeSixAm) {
     return {
       activeDay: addDays(input.calendarToday, -1),
       waitingForSleep: true,

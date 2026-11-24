@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ChangeEvent } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, RefreshCw, SlidersHorizontal, Upload } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, RefreshCw, SlidersHorizontal, Upload } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BevelScoreRing } from "../components/bevel-widgets";
 import { FitbitPulseIcon, FlameBurnIcon, FootstepsIcon } from "../components/icons";
@@ -10,7 +10,6 @@ import type { StrainActivityBreakdown } from "../lib/strain-data";
 import { computeTargetStrain } from "../lib/strain-engine";
 import type { LoadStatusAssessment, TrainingLoadSummary } from "../lib/training-load";
 import { addDays } from "../lib/nutrition-model";
-import { RecoveryCard } from "./recovery-card";
 import {
   fmtRelativeSync,
   type DailyStrainView,
@@ -40,11 +39,26 @@ interface TrainingViewProps {
   onOpenSettings: (section?: MoreSection) => void;
 }
 
+type DrilldownPage =
+  | null
+  | { kind: "muscular" }
+  | { kind: "cardio" }
+  | { kind: "muscles" }
+  | { kind: "recovery" }
+  | { kind: "activity"; id: string };
+
 function fmtDur(seconds: number | null): string {
   if (seconds == null || seconds <= 0) return "—";
   const mins = Math.round(seconds / 60);
   const h = Math.floor(mins / 60);
   const m = mins % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function fmtSleep(minutes: number | null): string {
+  if (minutes == null) return "—";
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
@@ -61,7 +75,6 @@ export function TrainingView({
   selectedDay,
   strain,
   recoveryInsights,
-  strainSettings,
   hevy,
   google,
   busy,
@@ -72,7 +85,7 @@ export function TrainingView({
   onSyncHevy,
   onOpenSettings,
 }: TrainingViewProps) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [page, setPage] = useState<DrilldownPage>(null);
   const [loads, setLoads] = useState<TrainingLoadSummary | null>(null);
   const [loadsBusy, setLoadsBusy] = useState(false);
 
@@ -80,7 +93,7 @@ export function TrainingView({
     const controller = new AbortController();
     setLoadsBusy(true);
     const from = addDays(selectedDay, -27);
-    fetch(`/api/strain?mode=loads&from=${from}&to=${selectedDay}`, {
+    fetch(`/api/strain?loads=1&from=${from}&to=${selectedDay}`, {
       cache: "no-store",
       signal: controller.signal,
     })
@@ -119,6 +132,354 @@ export function TrainingView({
     loads?.muscleFreshness?.filter((m) => m.status === "fatigued").length ?? 0;
   const recoveringCount =
     loads?.muscleFreshness?.filter((m) => m.status === "recovering").length ?? 0;
+
+  // ===========================================================================
+  // FULL-PAGE BEVEL DRILL-DOWN VIEWS
+  // ===========================================================================
+  if (page) {
+    const backHeader = (title: string, badge?: React.ReactNode) => (
+      <div className="page-header" style={{ marginBottom: ".2rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: ".6rem", width: "100%", justifyContent: "space-between" }}>
+          <button
+            type="button"
+            className="secondary compact"
+            onClick={() => setPage(null)}
+            style={{ minHeight: "36px", padding: ".25rem .7rem" }}
+          >
+            <ArrowLeft size={16} /> Back
+          </button>
+          <h1 style={{ fontSize: "1.2rem", margin: 0, letterSpacing: "-0.02em", flex: 1, textAlign: "center" }}>
+            {title}
+          </h1>
+          <div style={{ minWidth: "60px", display: "flex", justifyContent: "flex-end" }}>
+            {badge}
+          </div>
+        </div>
+      </div>
+    );
+
+    if (page.kind === "muscular") {
+      const status = loads?.muscularStatus;
+      return (
+        <>
+          {backHeader(
+            "Muscular Load",
+            status && <span className={`pill ${statusPillClass(status.tone)}`}>{status.label}</span>,
+          )}
+          <section className="card" style={{ display: "grid", gap: ".75rem" }}>
+            <div className="split-row">
+              <div>
+                <span className="eyebrow">Training Status</span>
+                <h2 style={{ margin: ".15rem 0 0", fontSize: "1.35rem" }}>
+                  {status?.label ?? "Calibrating"}
+                  {status?.acwr != null && (
+                    <span className="num muted" style={{ fontSize: ".92rem", marginLeft: ".4rem" }}>
+                      {status.acwr}× baseline
+                    </span>
+                  )}
+                </h2>
+              </div>
+              <button
+                type="button"
+                className="secondary compact"
+                disabled={busy}
+                onClick={() => void onSyncHevy()}
+              >
+                <RefreshCw size={13} /> Sync Hevy
+              </button>
+            </div>
+            {status && <p style={{ fontSize: ".82rem", color: "var(--muted)", margin: 0 }}>{status.guidance}</p>}
+
+            {loads?.latestMuscular ? (
+              <>
+                <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
+                  <div className="energy-cell">
+                    <span>Daily</span>
+                    <strong className="num">{loads.latestMuscular.daily}</strong>
+                  </div>
+                  <div className="energy-cell">
+                    <span>7d Acute</span>
+                    <strong className="num">{loads.latestMuscular.acute7d}</strong>
+                  </div>
+                  <div className="energy-cell">
+                    <span>42d Chronic</span>
+                    <strong className="num">{loads.latestMuscular.chronic42d}</strong>
+                  </div>
+                </div>
+                {loads.muscularSeries.length > 1 && (
+                  <div className="chart" style={{ height: 210 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={loads.muscularSeries.slice(-28)}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                        <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} width={32} />
+                        <Tooltip />
+                        <Area
+                          type="monotone"
+                          dataKey="optimalMax"
+                          name="Optimal Ceiling"
+                          stroke="none"
+                          fill="var(--purple-soft, rgba(124,58,237,0.14))"
+                          fillOpacity={0.4}
+                        />
+                        <Line type="monotone" dataKey="acute7d" name="7d Acute" stroke="var(--purple)" dot={false} strokeWidth={2.5} />
+                        <Line type="monotone" dataKey="chronic42d" name="42d Chronic" stroke="var(--accent)" dot={false} strokeWidth={2} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="empty">No muscular training history synced yet.</p>
+            )}
+          </section>
+
+          {loads?.muscleFreshness?.length ? (
+            <section className="card" style={{ display: "grid", gap: ".65rem" }}>
+              <div className="split-row">
+                <h2 style={{ fontSize: "1rem", margin: 0 }}>Muscle Recovery &amp; Heat Map</h2>
+                <span className="pill">Hevy 7d</span>
+              </div>
+              <MuscleFreshnessMap entries={loads.muscleFreshness} />
+            </section>
+          ) : null}
+        </>
+      );
+    }
+
+    if (page.kind === "cardio") {
+      const status = loads?.cardioStatus;
+      return (
+        <>
+          {backHeader(
+            "Cardio Load",
+            status && <span className={`pill ${statusPillClass(status.tone)}`}>{status.label}</span>,
+          )}
+          <section className="card" style={{ display: "grid", gap: ".75rem" }}>
+            <div>
+              <span className="eyebrow">Cardio Status</span>
+              <h2 style={{ margin: ".15rem 0 0", fontSize: "1.35rem" }}>
+                {status?.label ?? "Calibrating"}
+                {status?.acwr != null && (
+                  <span className="num muted" style={{ fontSize: ".92rem", marginLeft: ".4rem" }}>
+                    {status.acwr}× baseline
+                  </span>
+                )}
+              </h2>
+            </div>
+            {status && <p style={{ fontSize: ".82rem", color: "var(--muted)", margin: 0 }}>{status.guidance}</p>}
+
+            {loads?.latestCardio ? (
+              <>
+                <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
+                  <div className="energy-cell">
+                    <span>Daily TRIMP</span>
+                    <strong className="num">{loads.latestCardio.daily}</strong>
+                  </div>
+                  <div className="energy-cell">
+                    <span>7d Acute</span>
+                    <strong className="num">{loads.latestCardio.acute7d}</strong>
+                  </div>
+                  <div className="energy-cell">
+                    <span>42d Chronic</span>
+                    <strong className="num">{loads.latestCardio.chronic42d}</strong>
+                  </div>
+                </div>
+                {loads.cardioSeries.length > 1 && (
+                  <div className="chart" style={{ height: 220 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={loads.cardioSeries.slice(-28)}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                        <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} width={32} />
+                        <Tooltip />
+                        <Area
+                          type="monotone"
+                          dataKey="optimalMax"
+                          name="Optimal Ceiling"
+                          stroke="none"
+                          fill="var(--teal-soft)"
+                          fillOpacity={0.4}
+                        />
+                        <Line type="monotone" dataKey="acute7d" name="7d Acute" stroke="var(--blue)" dot={false} strokeWidth={2.5} />
+                        <Line type="monotone" dataKey="chronic42d" name="42d Chronic" stroke="var(--teal)" dot={false} strokeWidth={2} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="empty">No cardio TRIMP history synced yet.</p>
+            )}
+          </section>
+        </>
+      );
+    }
+
+    if (page.kind === "muscles") {
+      return (
+        <>
+          {backHeader("Muscle Recovery")}
+          <section className="card" style={{ display: "grid", gap: ".75rem" }}>
+            {loads?.muscleFreshness?.length ? (
+              <MuscleFreshnessMap entries={loads.muscleFreshness} />
+            ) : (
+              <p className="empty">Sync Hevy workouts to map your muscle recovery &amp; strain heatmap.</p>
+            )}
+          </section>
+        </>
+      );
+    }
+
+    if (page.kind === "recovery") {
+      const rec = recoveryInsights;
+      return (
+        <>
+          {backHeader("Recovery")}
+          <section className="card" style={{ display: "grid", gap: ".9rem", justifyItems: "center" }} aria-label="Recovery Insights">
+            <BevelScoreRing
+              label="Recovery Score"
+              value={rec?.score ?? null}
+              displayText={rec?.score != null ? `${rec.score}%` : "—"}
+              pct={rec?.score ?? 0}
+              color="var(--recovery-color)"
+              size={128}
+              strokeWidth={10}
+              sublabel={
+                rec?.band === "optimal"
+                  ? "Optimal"
+                  : rec?.band === "moderate"
+                    ? "Moderate"
+                    : rec?.band === "strained"
+                      ? "Strained"
+                      : "Pending sync"
+              }
+            />
+            <div className="energy-strip" style={{ width: "100%", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
+              <div className="energy-cell">
+                <span>Sleep</span>
+                <strong className="num">{fmtSleep(rec?.metrics.sleepMinutes ?? null)}</strong>
+              </div>
+              <div className="energy-cell">
+                <span>Resting HR</span>
+                <strong className="num">
+                  {rec?.metrics.restingHrBpm != null ? `${Math.round(rec.metrics.restingHrBpm)} bpm` : "—"}
+                </strong>
+              </div>
+              <div className="energy-cell">
+                <span>HRV</span>
+                <strong className="num">
+                  {rec?.metrics.hrvRmssdMs != null ? `${Math.round(rec.metrics.hrvRmssdMs)} ms` : "—"}
+                </strong>
+              </div>
+            </div>
+            {rec?.summary && (
+              <p style={{ fontSize: ".82rem", color: "var(--muted)", margin: 0, textAlign: "center" }}>
+                {rec.summary}
+              </p>
+            )}
+            <div className="bevel-awaiting-strip" style={{ width: "100%" }}>
+              <span>
+                <strong>Target Strain:</strong> {target.min}–{target.max} ({target.label})
+              </span>
+            </div>
+          </section>
+        </>
+      );
+    }
+
+    if (page.kind === "activity") {
+      const act = strain.activities.find((a) => a.id === page.id);
+      if (act) {
+        const groupedExercises = new Map<string, NonNullable<StrainActivityBreakdown["sets"]>>();
+        for (const s of act.sets ?? []) {
+          const list = groupedExercises.get(s.exerciseTitle) ?? [];
+          list.push(s);
+          groupedExercises.set(s.exerciseTitle, list);
+        }
+        return (
+          <>
+            {backHeader(act.title, <span className="pill teal-soft">+{act.overallPointsContribution.toFixed(1)} pts</span>)}
+            <section className="card" style={{ display: "grid", gap: ".75rem" }}>
+              <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
+                <div className="energy-cell">
+                  <span>Duration</span>
+                  <strong className="num">{fmtDur(act.durationSeconds)}</strong>
+                </div>
+                <div className="energy-cell">
+                  <span>Muscular</span>
+                  <strong className="num">{act.mRaw > 0 ? act.mRaw : "—"}</strong>
+                </div>
+                <div className="energy-cell">
+                  <span>Cardio TRIMP</span>
+                  <strong className="num">{act.cRaw > 0 ? act.cRaw : "—"}</strong>
+                </div>
+              </div>
+
+              {act.hrSeries && act.hrSeries.length > 1 && (
+                <div>
+                  <span className="eyebrow">Heart Rate ({act.avgHrBpm != null ? `Avg ${act.avgHrBpm} bpm` : "Timeline"})</span>
+                  <div className="chart" style={{ height: 170, marginTop: ".35rem" }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={act.hrSeries.map((p) => ({ time: p.recordedAt.slice(11, 16), bpm: p.bpm }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                        <XAxis dataKey="time" tick={{ fontSize: 10 }} />
+                        <YAxis domain={["dataMin - 10", "dataMax + 10"]} tick={{ fontSize: 10 }} width={32} />
+                        <Tooltip />
+                        <Area type="monotone" dataKey="bpm" stroke="var(--danger-fg)" fill="var(--danger-bg)" strokeWidth={2} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {act.trimpZones && act.trimpZones.some((z) => z.minutes > 0) && (
+                <div className="energy-strip" style={{ marginTop: 0 }}>
+                  {act.trimpZones.map((z) => (
+                    <div className="energy-cell" key={z.zone}>
+                      <span>Z{z.zone}</span>
+                      <strong className="num">{z.minutes.toFixed(0)}m</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {act.notes.map((n, idx) => (
+                <p key={idx} style={{ fontSize: ".76rem", color: "var(--muted)", margin: 0 }}>{n}</p>
+              ))}
+            </section>
+
+            {groupedExercises.size > 0 && (
+              <section className="card" style={{ display: "grid", gap: ".55rem" }}>
+                <h2 style={{ fontSize: "1rem", margin: 0 }}>Hevy Exercises</h2>
+                {[...groupedExercises.entries()].map(([exTitle, sets]) => (
+                  <div key={exTitle} style={{ borderTop: "1px solid var(--border)", paddingTop: ".45rem" }}>
+                    <strong style={{ fontSize: ".88rem" }}>{exTitle}</strong>
+                    <div style={{ display: "grid", gap: ".2rem", marginTop: ".25rem", fontSize: ".78rem", color: "var(--muted)" }}>
+                      {sets.map((s, i) => (
+                        <div key={i} className="split-row">
+                          <span>Set {s.setIndex + 1} · {s.setType}</span>
+                          <span className="num" style={{ color: "var(--text)" }}>
+                            {s.weightKg != null ? `${s.weightKg} kg` : "BW"} × {s.reps ?? "—"}
+                            {s.rpe != null ? ` · RPE ${s.rpe}` : ""}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </section>
+            )}
+          </>
+        );
+      }
+    }
+  }
+
+  // ===========================================================================
+  // MAIN TRAINING OVERVIEW (Sleek, Tappable Bevel Cards → Full-Page Drill-Downs)
+  // ===========================================================================
+  const recoveryPending = recoveryInsights?.score == null && recoveryInsights?.completeness === "unavailable";
 
   return (
     <>
@@ -194,11 +555,39 @@ export function TrainingView({
         </div>
       </section>
 
-      {/* Recovery Insights (sleek, click-to-expand, gated if Google Health disconnected) */}
+      {/* Recovery Insights Card (Taps into full-page Recovery view) */}
       <div className="unlock-gate">
-        <div className={`unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}>
-          <RecoveryCard recovery={recoveryInsights} />
-        </div>
+        <section
+          className={`card unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}
+          aria-label="Recovery Insights"
+          style={{ padding: recoveryPending ? ".65rem .9rem" : undefined }}
+        >
+          <button
+            type="button"
+            className="compact-row-btn"
+            style={{ padding: 0, borderTop: 0 }}
+            onClick={() => setPage({ kind: "recovery" })}
+          >
+            <div>
+              <span className="eyebrow">Recovery</span>
+              <div style={{ display: "flex", alignItems: "baseline", gap: ".45rem", marginTop: ".1rem" }}>
+                <strong className="num" style={{ fontSize: "1.2rem" }}>
+                  {recoveryInsights?.score != null ? `${recoveryInsights.score}%` : "Pending"}
+                </strong>
+                <span style={{ fontSize: ".78rem", color: "var(--muted)" }}>
+                  {recoveryPending
+                    ? "Awaiting morning sync"
+                    : `${fmtSleep(recoveryInsights?.metrics.sleepMinutes ?? null)} sleep${
+                        recoveryInsights?.metrics.restingHrBpm != null
+                          ? ` · ${Math.round(recoveryInsights.metrics.restingHrBpm)} bpm RHR`
+                          : ""
+                      }`}
+                </span>
+              </div>
+            </div>
+            <ChevronRight size={17} style={{ color: "var(--muted)" }} />
+          </button>
+        </section>
         {google && !google.connected && (
           <div className="unlock-overlay">
             <h3>Unlock Recovery Insights</h3>
@@ -226,7 +615,7 @@ export function TrainingView({
             pct={overall ?? 0}
             color="var(--strain-color)"
             targetRange={[target.min, target.max]}
-            size={112}
+            size={110}
             strokeWidth={9.5}
             sublabel={target.label}
           />
@@ -256,247 +645,34 @@ export function TrainingView({
         </div>
       </section>
 
-      {/* Daily Strain Breakdown (Click any item to expand details) */}
-      <section className="card" aria-label="Daily Strain Breakdown" style={{ display: "grid", gap: ".5rem" }}>
-        <div className="split-row">
-          <h2 style={{ fontSize: "1rem", margin: 0 }}>Daily Breakdown</h2>
-          <span className="pill">{strain.activities.length} item(s)</span>
-        </div>
-
-        {loading ? (
-          <p className="empty">Loading daily strain…</p>
-        ) : strain.activities.length === 0 ? (
-          <p className="empty" style={{ padding: ".6rem 0" }}>
-            No workouts or steps recorded for {formattedDate}.
-          </p>
-        ) : (
-          strain.activities.map((act: StrainActivityBreakdown) => {
-            const isOpen = expandedId === act.id;
-            const groupedExercises = new Map<string, NonNullable<StrainActivityBreakdown["sets"]>>();
-            for (const s of act.sets ?? []) {
-              const list = groupedExercises.get(s.exerciseTitle) ?? [];
-              list.push(s);
-              groupedExercises.set(s.exerciseTitle, list);
-            }
-
-            return (
-              <article className="meal-card" key={act.id} style={{ padding: ".7rem .85rem" }}>
-                <button
-                  type="button"
-                  className="list-item"
-                  style={{ borderTop: 0, padding: 0 }}
-                  aria-expanded={isOpen}
-                  onClick={() => setExpandedId(isOpen ? null : act.id)}
-                >
-                  <div>
-                    <div className="meal-title-row">
-                      <span className={`pill ${act.kind === "strength" ? "protein-soft" : act.kind === "cardio" ? "teal-soft" : "accent-soft"}`}>
-                        {act.kind === "strength" ? <FlameBurnIcon size={12} /> : act.kind === "cardio" ? <FitbitPulseIcon size={12} /> : <FootstepsIcon size={12} />}
-                        {act.source}
-                      </span>
-                      <strong>{act.title}</strong>
-                    </div>
-                    <div className="meal-meta" style={{ marginTop: ".25rem" }}>
-                      {act.durationSeconds != null && <span>{fmtDur(act.durationSeconds)}</span>}
-                      {act.avgHrBpm != null && <span className="num">Avg {act.avgHrBpm} bpm</span>}
-                      {act.mRaw > 0 && <span className="num">Muscular {act.mRaw}</span>}
-                      {act.cRaw > 0 && <span className="num">Cardio TRIMP {act.cRaw}</span>}
-                      {act.walkingDetail?.eligibleSteps != null && (
-                        <span className="num">
-                          {act.walkingDetail.eligibleSteps.toLocaleString("en-GB")} steps
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="meal-kcal" style={{ display: "flex", alignItems: "center", gap: ".35rem" }}>
-                    <div>
-                      <strong className="num">+{act.overallPointsContribution.toFixed(1)}</strong>
-                      <small>pts</small>
-                    </div>
-                    {isOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-                  </div>
-                </button>
-
-                {isOpen && (
-                  <div className="meal-items-box" style={{ display: "grid", gap: ".55rem", marginTop: ".6rem" }}>
-                    {act.notes.map((n, idx) => (
-                      <p key={idx} style={{ fontSize: ".76rem", color: "var(--muted)", margin: 0 }}>{n}</p>
-                    ))}
-
-                    {act.walkingDetail && (
-                      <div className="energy-strip" style={{ marginTop: 0 }}>
-                        <div className="energy-cell">
-                          <span>Eligible</span>
-                          <strong className="num">{act.walkingDetail.eligibleSteps?.toLocaleString("en-GB") ?? "—"}</strong>
-                        </div>
-                        <div className="energy-cell">
-                          <span>Threshold</span>
-                          <strong className="num">{act.walkingDetail.threshold.toLocaleString("en-GB")}</strong>
-                        </div>
-                        <div className="energy-cell">
-                          <span>Excess</span>
-                          <strong className="num">{act.walkingDetail.excessSteps.toLocaleString("en-GB")}</strong>
-                        </div>
-                      </div>
-                    )}
-
-                    {act.hrSeries && act.hrSeries.length > 1 && (
-                      <div className="chart" style={{ height: 140 }}>
-                        <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={act.hrSeries.map((p) => ({ time: p.recordedAt.slice(11, 16), bpm: p.bpm }))}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                            <XAxis dataKey="time" tick={{ fontSize: 10 }} />
-                            <YAxis domain={["dataMin - 10", "dataMax + 10"]} tick={{ fontSize: 10 }} width={32} />
-                            <Tooltip />
-                            <Area type="monotone" dataKey="bpm" stroke="var(--danger-fg)" fill="var(--danger-bg)" strokeWidth={2} />
-                          </AreaChart>
-                        </ResponsiveContainer>
-                      </div>
-                    )}
-
-                    {groupedExercises.size > 0 && (
-                      <div style={{ display: "grid", gap: ".4rem" }}>
-                        {[...groupedExercises.entries()].map(([exTitle, sets]) => (
-                          <div key={exTitle} style={{ borderTop: "1px solid var(--border)", paddingTop: ".35rem" }}>
-                            <strong style={{ fontSize: ".84rem" }}>{exTitle}</strong>
-                            <div style={{ display: "grid", gap: ".18rem", marginTop: ".2rem", fontSize: ".76rem", color: "var(--muted)" }}>
-                              {sets.map((s, i) => (
-                                <div key={i} className="split-row">
-                                  <span>Set {s.setIndex + 1} · {s.setType}</span>
-                                  <span className="num" style={{ color: "var(--text)" }}>
-                                    {s.weightKg != null ? `${s.weightKg} kg` : "BW"} × {s.reps ?? "—"}
-                                    {s.rpe != null ? ` · RPE ${s.rpe}` : ""}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </article>
-            );
-          })
-        )}
-      </section>
-
-      {/* Bevel-Style Muscle Recovery & Freshness Dropdown */}
-      <div className="unlock-gate">
-        <details className={`card settings-accordion unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}>
-          <summary className="settings-accordion-summary">
-            <div className="settings-accordion-title">
-              <h2>Muscle Recovery Map</h2>
-              <p>
-                {fatiguedCount > 0
-                  ? `${fatiguedCount} fatigued · ${recoveringCount} recovering`
-                  : recoveringCount > 0
-                    ? `${recoveringCount} muscle group(s) recovering`
-                    : "All muscle groups fresh & ready"}
-              </p>
-            </div>
-            <div className="settings-accordion-right">
-              <span className={`pill ${fatiguedCount > 0 ? "danger-soft" : recoveringCount > 0 ? "amber-soft" : "teal-soft"}`}>
-                {fatiguedCount > 0 ? "Fatigued" : recoveringCount > 0 ? "Recovering" : "Fresh"}
-              </span>
-              <ChevronDown size={17} className="settings-accordion-chevron" />
-            </div>
-          </summary>
-          <div className="settings-accordion-body">
-            {loads?.muscleFreshness?.length ? (
-              <MuscleFreshnessMap entries={loads.muscleFreshness} />
-            ) : (
-              <p className="empty">Sync Hevy workouts to view your anatomical muscle recovery map.</p>
-            )}
-          </div>
-        </details>
-        {!hevy.connected && (
-          <div className="unlock-overlay">
-            <h3>Unlock Muscle Recovery</h3>
-            <p>Connect Hevy to map strain and recovery freshness across every muscle group.</p>
-            {hevy.oauthAvailable ? (
-              <a className="unlock-btn" href="/api/integrations/hevy/connect">
-                Connect Hevy to Unlock
-              </a>
-            ) : (
-              <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
-                Configure Hevy in Settings
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Long-Term Cardio Load & Muscular Load (Collapsible Dropdowns to minimize scrolling) */}
+      {/* Long-Term Cardio & Muscular Load Cards (Tap → Full-Page Drill-Down) */}
       <section className="two-col" aria-label="Long-term training loads">
         <div className="unlock-gate">
-          <details className={`card settings-accordion unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}>
-            <summary className="settings-accordion-summary">
-              <div className="settings-accordion-title">
-                <h2>Cardio Load</h2>
-                <p>
-                  {loads?.latestCardio
-                    ? `7d ${loads.latestCardio.acute7d} · 42d ${loads.latestCardio.chronic42d}`
-                    : "7d Acute vs 42d Chronic"}
-                </p>
-              </div>
-              <div className="settings-accordion-right">
-                {loads?.cardioStatus ? (
-                  <span className={`pill ${statusPillClass(loads.cardioStatus.tone)}`}>
-                    {loads.cardioStatus.label}
-                  </span>
-                ) : (
-                  <span className="pill teal-soft">7d / 42d</span>
-                )}
-                <ChevronDown size={17} className="settings-accordion-chevron" />
-              </div>
-            </summary>
-            <div className="settings-accordion-body">
-              {loadsBusy && !loads ? (
-                <p className="empty">Loading Cardio Load…</p>
-              ) : !loads?.latestCardio ? (
-                <p className="empty">No cardio TRIMP history yet.</p>
+          <button
+            type="button"
+            className={`card card-interactive unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}
+            onClick={() => setPage({ kind: "cardio" })}
+            style={{ width: "100%", textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
+          >
+            <div className="split-row">
+              <span className="eyebrow">Cardio Load</span>
+              {loads?.cardioStatus ? (
+                <span className={`pill ${statusPillClass(loads.cardioStatus.tone)}`}>
+                  {loads.cardioStatus.label}
+                </span>
               ) : (
-                <>
-                  {loads.cardioStatus && (
-                    <p style={{ fontSize: ".76rem", color: "var(--muted)", margin: 0 }}>
-                      {loads.cardioStatus.guidance}
-                    </p>
-                  )}
-                  <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
-                    <div className="energy-cell">
-                      <span>Daily</span>
-                      <strong className="num">{loads.latestCardio.daily}</strong>
-                    </div>
-                    <div className="energy-cell">
-                      <span>7d Acute</span>
-                      <strong className="num">{loads.latestCardio.acute7d}</strong>
-                    </div>
-                    <div className="energy-cell">
-                      <span>42d Chronic</span>
-                      <strong className="num">{loads.latestCardio.chronic42d}</strong>
-                    </div>
-                  </div>
-                  {loads.cardioSeries.length > 1 && (
-                    <div className="chart" style={{ height: 145 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart data={loads.cardioSeries.slice(-28)}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                          <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10 }} />
-                          <YAxis tick={{ fontSize: 10 }} width={30} />
-                          <Tooltip />
-                          <Area type="monotone" dataKey="optimalMax" name="Optimal Ceiling" stroke="none" fill="var(--teal-soft)" fillOpacity={0.35} />
-                          <Line type="monotone" dataKey="acute7d" name="7d Acute" stroke="var(--blue)" dot={false} strokeWidth={2} />
-                          <Line type="monotone" dataKey="chronic42d" name="42d Chronic" stroke="var(--teal)" dot={false} strokeWidth={2} />
-                        </ComposedChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </>
+                <span className="pill teal-soft">7d / 42d</span>
               )}
             </div>
-          </details>
+            <div className="split-row" style={{ marginTop: ".45rem", alignItems: "baseline" }}>
+              <strong className="num" style={{ fontSize: "1.45rem" }}>
+                {loadsBusy && !loads ? "…" : loads?.latestCardio ? loads.latestCardio.acute7d : "—"}
+              </strong>
+              <span style={{ fontSize: ".76rem", color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: ".2rem" }}>
+                42d {loads?.latestCardio ? loads.latestCardio.chronic42d : "—"} <ChevronRight size={14} />
+              </span>
+            </div>
+          </button>
           {google && !google.connected && (
             <div className="unlock-overlay">
               <h3>Unlock Cardio Load</h3>
@@ -515,72 +691,31 @@ export function TrainingView({
         </div>
 
         <div className="unlock-gate">
-          <details className={`card settings-accordion unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}>
-            <summary className="settings-accordion-summary">
-              <div className="settings-accordion-title">
-                <h2>Muscular Load</h2>
-                <p>
-                  {loads?.latestMuscular
-                    ? `7d ${loads.latestMuscular.acute7d} · 42d ${loads.latestMuscular.chronic42d}`
-                    : "7d Acute vs 42d Chronic"}
-                </p>
-              </div>
-              <div className="settings-accordion-right">
-                {loads?.muscularStatus ? (
-                  <span className={`pill ${statusPillClass(loads.muscularStatus.tone)}`}>
-                    {loads.muscularStatus.label}
-                  </span>
-                ) : (
-                  <span className="pill protein-soft">7d / 42d</span>
-                )}
-                <ChevronDown size={17} className="settings-accordion-chevron" />
-              </div>
-            </summary>
-            <div className="settings-accordion-body">
-              {loadsBusy && !loads ? (
-                <p className="empty">Loading Muscular Load…</p>
-              ) : !loads?.latestMuscular ? (
-                <p className="empty">No muscular training history yet.</p>
+          <button
+            type="button"
+            className={`card card-interactive unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
+            onClick={() => setPage({ kind: "muscular" })}
+            style={{ width: "100%", textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
+          >
+            <div className="split-row">
+              <span className="eyebrow">Muscular Load</span>
+              {loads?.muscularStatus ? (
+                <span className={`pill ${statusPillClass(loads.muscularStatus.tone)}`}>
+                  {loads.muscularStatus.label}
+                </span>
               ) : (
-                <>
-                  {loads.muscularStatus && (
-                    <p style={{ fontSize: ".76rem", color: "var(--muted)", margin: 0 }}>
-                      {loads.muscularStatus.guidance}
-                    </p>
-                  )}
-                  <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
-                    <div className="energy-cell">
-                      <span>Daily</span>
-                      <strong className="num">{loads.latestMuscular.daily}</strong>
-                    </div>
-                    <div className="energy-cell">
-                      <span>7d Acute</span>
-                      <strong className="num">{loads.latestMuscular.acute7d}</strong>
-                    </div>
-                    <div className="energy-cell">
-                      <span>42d Chronic</span>
-                      <strong className="num">{loads.latestMuscular.chronic42d}</strong>
-                    </div>
-                  </div>
-                  {loads.muscularSeries.length > 1 && (
-                    <div className="chart" style={{ height: 145 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart data={loads.muscularSeries.slice(-28)}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                          <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10 }} />
-                          <YAxis tick={{ fontSize: 10 }} width={30} />
-                          <Tooltip />
-                          <Area type="monotone" dataKey="optimalMax" name="Optimal Ceiling" stroke="none" fill="var(--purple-soft, rgba(139,92,246,0.14))" fillOpacity={0.35} />
-                          <Line type="monotone" dataKey="acute7d" name="7d Acute" stroke="var(--purple)" dot={false} strokeWidth={2} />
-                          <Line type="monotone" dataKey="chronic42d" name="42d Chronic" stroke="var(--accent)" dot={false} strokeWidth={2} />
-                        </ComposedChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </>
+                <span className="pill protein-soft">7d / 42d</span>
               )}
             </div>
-          </details>
+            <div className="split-row" style={{ marginTop: ".45rem", alignItems: "baseline" }}>
+              <strong className="num" style={{ fontSize: "1.45rem" }}>
+                {loadsBusy && !loads ? "…" : loads?.latestMuscular ? loads.latestMuscular.acute7d : "—"}
+              </strong>
+              <span style={{ fontSize: ".76rem", color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: ".2rem" }}>
+                42d {loads?.latestMuscular ? loads.latestMuscular.chronic42d : "—"} <ChevronRight size={14} />
+              </span>
+            </div>
+          </button>
           {!hevy.connected && (
             <div className="unlock-overlay">
               <h3>Unlock Muscular Load</h3>
@@ -600,7 +735,100 @@ export function TrainingView({
         </div>
       </section>
 
-      {/* Quiet Hevy Sync Footer (only sync button when connected) */}
+      {/* Muscle Recovery & Heat Map Card (Tap → Full-Page Anatomical Heatmap) */}
+      <div className="unlock-gate">
+        <button
+          type="button"
+          className={`card card-interactive unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
+          onClick={() => setPage({ kind: "muscles" })}
+          style={{ width: "100%", textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
+        >
+          <div className="split-row">
+            <div>
+              <span className="eyebrow">Muscle Recovery &amp; Heat Map</span>
+              <div style={{ fontSize: ".84rem", color: "var(--muted)", marginTop: ".2rem" }}>
+                {loadsBusy && !loads
+                  ? "Loading Hevy muscle map…"
+                  : fatiguedCount > 0
+                    ? `${fatiguedCount} fatigued · ${recoveringCount} recovering`
+                    : recoveringCount > 0
+                      ? `${recoveringCount} muscle group(s) recovering`
+                      : "All muscle groups fresh & ready"}
+              </div>
+            </div>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
+              <span className={`pill ${fatiguedCount > 0 ? "danger-soft" : recoveringCount > 0 ? "amber-soft" : "teal-soft"}`}>
+                {fatiguedCount > 0 ? "Fatigued" : recoveringCount > 0 ? "Recovering" : "Fresh"}
+              </span>
+              <ChevronRight size={16} style={{ color: "var(--muted)" }} />
+            </div>
+          </div>
+        </button>
+        {!hevy.connected && (
+          <div className="unlock-overlay">
+            <h3>Unlock Muscle Recovery</h3>
+            <p>Connect Hevy to view anatomical recovery &amp; strain heatmaps.</p>
+            {hevy.oauthAvailable ? (
+              <a className="unlock-btn" href="/api/integrations/hevy/connect">
+                Connect Hevy to Unlock
+              </a>
+            ) : (
+              <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
+                Configure Hevy in Settings
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Daily Strain Breakdown (Tap any activity → Full-Page Workout Detail) */}
+      <section className="card" aria-label="Daily Strain Breakdown" style={{ display: "grid", gap: ".2rem" }}>
+        <div className="split-row" style={{ marginBottom: ".25rem" }}>
+          <h2 style={{ fontSize: "1rem", margin: 0 }}>Today&apos;s Activities</h2>
+          <span className="pill">{strain.activities.length}</span>
+        </div>
+
+        {loading ? (
+          <p className="empty">Loading activities…</p>
+        ) : strain.activities.length === 0 ? (
+          <p className="empty" style={{ padding: ".5rem 0" }}>
+            No workouts or steps recorded for {formattedDate}.
+          </p>
+        ) : (
+          strain.activities.map((act: StrainActivityBreakdown) => (
+            <button
+              key={act.id}
+              type="button"
+              className="compact-row-btn"
+              onClick={() => setPage({ kind: "activity", id: act.id })}
+            >
+              <div>
+                <div className="meal-title-row">
+                  <span className={`pill ${act.kind === "strength" ? "protein-soft" : act.kind === "cardio" ? "teal-soft" : "accent-soft"}`}>
+                    {act.kind === "strength" ? <FlameBurnIcon size={12} /> : act.kind === "cardio" ? <FitbitPulseIcon size={12} /> : <FootstepsIcon size={12} />}
+                    {act.source}
+                  </span>
+                  <strong>{act.title}</strong>
+                </div>
+                <div className="meal-meta" style={{ marginTop: ".2rem" }}>
+                  {act.durationSeconds != null && <span>{fmtDur(act.durationSeconds)}</span>}
+                  {act.avgHrBpm != null && <span className="num">Avg {act.avgHrBpm} bpm</span>}
+                  {act.mRaw > 0 && <span className="num">Muscular {act.mRaw}</span>}
+                  {act.walkingDetail?.eligibleSteps != null && (
+                    <span className="num">{act.walkingDetail.eligibleSteps.toLocaleString("en-GB")} steps</span>
+                  )}
+                </div>
+              </div>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
+                <strong className="num">+{act.overallPointsContribution.toFixed(1)}</strong>
+                <ChevronRight size={16} style={{ color: "var(--muted)" }} />
+              </div>
+            </button>
+          ))
+        )}
+      </section>
+
+      {/* Quiet Hevy Sync Footer */}
       {hevy.connected && (
         <section className="bevel-awaiting-strip" aria-label="Hevy Strength Sync">
           <span>
