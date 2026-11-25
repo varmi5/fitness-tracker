@@ -194,13 +194,14 @@ export function HomeView({
         ? "Yesterday"
         : viewDateDisplay;
 
-  const effectiveRecoveryScore = pulseInsights?.recovery.score ?? recoveryInsights?.score ?? null;
-  const effectiveRecoveryBand = pulseInsights?.recovery.band ?? recoveryInsights?.band ?? "unavailable";
-  const strainTarget = pulseInsights?.strainTarget ?? computeTargetStrain(effectiveRecoveryScore);
+  const dayPulse = pulseInsights?.day === viewDay ? pulseInsights : null;
+  const effectiveRecoveryScore = dayPulse ? dayPulse.recovery.score : (recoveryInsights?.score ?? null);
+  const effectiveRecoveryBand = dayPulse?.recovery.band ?? recoveryInsights?.band ?? "unavailable";
+  const strainTarget = dayPulse?.strainTarget ?? computeTargetStrain(effectiveRecoveryScore);
   const overallStrain = strain?.overallStrain ?? null;
   const recoveryScore = effectiveRecoveryScore;
   const sleepMinutes = daily.sleep?.minutesAsleep ?? recoveryInsights?.metrics.sleepMinutes ?? null;
-  const sleepScore = pulseInsights?.sleep.score ?? null;
+  const sleepScore = dayPulse?.sleep.score ?? null;
   const sleepPct = sleepScore ?? (sleepMinutes != null ? Math.min(100, Math.round((sleepMinutes / 480) * 100)) : 0);
   const vitalsPending = isFitbitMode && recoveryScore == null && sleepMinutes == null;
 
@@ -308,7 +309,7 @@ export function HomeView({
               sublabel={
                 sleepMinutes == null
                   ? "Pending"
-                  : `${formatDurationMinutes(sleepMinutes)}${pulseInsights?.sleep.sri != null ? ` · SRI ${pulseInsights.sleep.sri}` : ""}`
+                  : `${formatDurationMinutes(sleepMinutes)}${dayPulse?.sleep.sri != null ? ` · SRI ${dayPulse.sleep.sri}` : ""}`
               }
               onClick={() => setSleepDetailOpen((v) => !v)}
             />
@@ -383,13 +384,13 @@ export function HomeView({
               <span>REM {daily.sleep.remMinutes != null ? formatDurationMinutes(daily.sleep.remMinutes) : "—"}</span>
               <span>Light {daily.sleep.lightMinutes != null ? formatDurationMinutes(daily.sleep.lightMinutes) : "—"}</span>
             </div>
-            {pulseInsights?.sleep && (
+            {dayPulse?.sleep && (
               <div className="split-row" style={{ fontSize: ".73rem", color: "var(--muted)" }}>
-                <span>Eff {pulseInsights.sleep.efficiencyPct ?? "—"}% · Debt {pulseInsights.sleep.sleepDebtHours}h</span>
+                <span>Eff {dayPulse.sleep.efficiencyPct ?? "—"}% · Debt {dayPulse.sleep.sleepDebtHours}h</span>
                 <span>
-                  {pulseInsights.sleep.recommendedBedtime
-                    ? `Bedtime ~${pulseInsights.sleep.recommendedBedtime}`
-                    : `Need ${pulseInsights.sleep.sleepNeedHours}h`}
+                  {dayPulse.sleep.recommendedBedtime
+                    ? `Bedtime ~${dayPulse.sleep.recommendedBedtime}`
+                    : `Need ${dayPulse.sleep.sleepNeedHours}h`}
                 </span>
               </div>
             )}
@@ -397,8 +398,8 @@ export function HomeView({
         )}
       </section>
 
-      {/* Silk Pulse Telemetry Card (Energy Bank · Stress · Health Monitor · Forecast) */}
-      {isFitbitMode && pulseInsights && (
+      {/* Silk Pulse Telemetry Card (Energy Bank · Stress · Tomorrow · Sleep Debt) */}
+      {isFitbitMode && dayPulse && (
         <button
           type="button"
           className="card card-interactive"
@@ -410,43 +411,43 @@ export function HomeView({
             <span className="eyebrow">Pulse Telemetry</span>
             <span
               className={`pill ${
-                pulseInsights.healthMonitor.status === "elevated"
+                dayPulse.healthMonitor.status === "elevated"
                   ? "danger-soft"
-                  : pulseInsights.healthMonitor.status === "watch"
+                  : dayPulse.healthMonitor.status === "watch"
                     ? "amber-soft"
                     : "teal-soft"
               }`}
               style={{ fontSize: ".68rem" }}
             >
-              {pulseInsights.healthMonitor.status === "unavailable"
+              {dayPulse.healthMonitor.status === "unavailable"
                 ? "Syncing"
-                : `${pulseInsights.healthMonitor.inRangeCount}/${pulseInsights.healthMonitor.availableCount} Vitals`}
+                : `${dayPulse.healthMonitor.inRangeCount}/${dayPulse.healthMonitor.availableCount} Vitals`}
             </span>
           </div>
           <div className="pulse-strip-grid">
             <div className="energy-cell">
               <span>Energy Bank</span>
               <strong className="num" style={{ color: "var(--recovery-color)" }}>
-                {pulseInsights.energyBank.currentPct != null ? `${pulseInsights.energyBank.currentPct}%` : "—"}
+                {dayPulse.energyBank.currentPct != null ? `${dayPulse.energyBank.currentPct}%` : "—"}
               </strong>
             </div>
             <div className="energy-cell">
               <span>Stress</span>
               <strong className="num">
-                {pulseInsights.stress.avgStress != null ? `${pulseInsights.stress.avgStress.toFixed(1)}` : "—"}
+                {dayPulse.stress.avgStress != null ? `${dayPulse.stress.avgStress.toFixed(1)}` : "—"}
               </strong>
             </div>
             <div className="energy-cell">
               <span>Tomorrow</span>
               <strong className="num" style={{ color: "var(--accent)" }}>
-                {pulseInsights.forecast.predictedScore != null ? `${pulseInsights.forecast.predictedScore}%` : "—"}
+                {dayPulse.forecast.predictedScore != null ? `${dayPulse.forecast.predictedScore}%` : "—"}
               </strong>
             </div>
             <div className="energy-cell">
-              <span>Bio Age</span>
+              <span>Sleep Debt</span>
               <strong className="num">
-                {pulseInsights.biologicalAge.biologicalAge != null
-                  ? `${pulseInsights.biologicalAge.biologicalAge.toFixed(1)}y`
+                {dayPulse.sleep.sleepDebtHours != null
+                  ? `${dayPulse.sleep.sleepDebtHours}h`
                   : "—"}
               </strong>
             </div>

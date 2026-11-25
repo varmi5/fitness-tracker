@@ -507,12 +507,25 @@ export function SettingsView({
                     </button>
                   </>
                 )}
+                {google.available && !missingWriteScopes && (
+                  <a
+                    href={twoWaySync || google.canWriteNutrition || google.canWriteWeights ? "/api/integrations/google/connect?write=1" : "/api/integrations/google/connect"}
+                    className="secondary compact"
+                  >
+                    Reconnect (keep data)
+                  </a>
+                )}
                 <button type="button" className="danger compact" disabled={busy} onClick={() => void onDisconnectGoogle()}>
                   Disconnect &amp; delete Google data
                 </button>
               </>
             )}
           </div>
+          {google.connected && google.available && (
+            <p className="muted" style={{ fontSize: ".74rem", margin: 0 }}>
+              Reconnect refreshes your Google sign-in and permissions without deleting any synced history.
+            </p>
+          )}
         </div>
 
         {/* Saved Google Health / Google Takeout / Fitbit Export Importer */}
@@ -878,6 +891,69 @@ export function SettingsView({
       </SettingsDropdown>
 
       <Passkeys onMessage={onMessage} />
+
+      {/* Methodology & Calculation Guide */}
+      <SettingsDropdown
+        title="How Everything Is Calculated"
+        subtitle="Formulas behind Recovery, Strain, Sleep, Load, Muscle Map & Bio Age"
+        badge="Guide"
+      >
+        <div className="calc-guide-list">
+          <div className="calc-guide-item">
+            <strong>Recovery Score (0–100%)</strong>
+            <p>
+              Combines overnight HRV (50%), Resting HR (25%), Sleep duration vs. need (15%), plus Respiratory Rate and
+              Skin Temperature penalties against your 28-day outlier-filtered adaptive baseline. Stays blank until that
+              day&apos;s sleep or vitals arrive.
+            </p>
+          </div>
+          <div className="calc-guide-item">
+            <strong>Daily Strain &amp; Dynamic Target</strong>
+            <p>
+              Measures total daily demand (0–100 scale) from Hevy resistance sets (load × reps × RPE), heart-rate zone
+              cardio effort (TRIMP), and daily walking/NEAT steps. Your target range shifts with today&apos;s Recovery and
+              recent training load balance.
+            </p>
+          </div>
+          <div className="calc-guide-item">
+            <strong>Cardio &amp; Muscular Load (7d vs. 42d)</strong>
+            <p>
+              Compares your 7-day exponentially weighted acute workload against your 42-day chronic base (ACWR under the
+              hood). Staying near 85–130% builds fitness steadily; pushing above 135% softens your target strain ceiling.
+            </p>
+          </div>
+          <div className="calc-guide-item">
+            <strong>Muscle Recovery Map</strong>
+            <p>
+              Distributes Hevy working sets into primary (100%) and secondary (50%) muscle groups over the last 7 days,
+              applying a time-decay recovery curve to classify each muscle as Fatigued, Recovering, or Fresh (80%+).
+            </p>
+          </div>
+          <div className="calc-guide-item">
+            <strong>Sleep Score, Debt &amp; Regularity (SRI)</strong>
+            <p>
+              Scores duration against dynamic Sleep Need (baseline 7.75h plus previous-day strain and sleep debt), sleep
+              efficiency, Deep &amp; REM stages, and bedtime/wake consistency over the last 7 nights.
+            </p>
+          </div>
+          <div className="calc-guide-item">
+            <strong>Energy Bank, Stress &amp; 5-Vital Health Monitor</strong>
+            <p>
+              Energy Bank starts from your morning Recovery and Sleep scores and drains across the day via minute-level
+              heart-rate reserve. Daytime Stress (0–3) tracks non-workout HR elevation, while the Health Monitor alerts
+              when 2 or more overnight vitals drift outside your personal baseline range.
+            </p>
+          </div>
+          <div className="calc-guide-item">
+            <strong>Biological Age &amp; VO2 Max Percentile (Body tab)</strong>
+            <p>
+              Uses a 180-day rolling log of sleep duration &amp; regularity, moderate and vigorous cardio minutes,
+              strength work, daily steps, Resting HR, lean mass, and VO2 Max benchmarked against FRIEND age/sex norms,
+              alongside a 30-day Pace of Aging indicator.
+            </p>
+          </div>
+        </div>
+      </SettingsDropdown>
 
       {/* Data Export & Account */}
       <SettingsDropdown

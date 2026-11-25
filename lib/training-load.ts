@@ -166,7 +166,7 @@ export function classifyLoadStatus(
       acwr,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Recent 7d ${noun} load is below your usual range (${acwr}× baseline). Gradually return to your normal routine unless this is an intentional deload.`,
+      guidance: `Recent 7-day ${noun} load is below your usual baseline. Gradually return to your normal routine unless this is an intentional deload.`,
       baselineDays,
       requiredDays,
     };
@@ -179,7 +179,7 @@ export function classifyLoadStatus(
       acwr,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Strong chronic ${noun} base with a controlled taper (${acwr}×). Good freshness window for PRs or peak performance.`,
+      guidance: `Strong chronic ${noun} base with a controlled taper. Good freshness window for PRs or peak performance.`,
       baselineDays,
       requiredDays,
     };
@@ -192,7 +192,7 @@ export function classifyLoadStatus(
       acwr,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Your ${noun} load is holding steady (${acwr}× baseline), supporting current conditioning without excess fatigue.`,
+      guidance: `Your ${noun} load is holding steady, supporting current conditioning without excess fatigue.`,
       baselineDays,
       requiredDays,
     };
@@ -205,7 +205,7 @@ export function classifyLoadStatus(
       acwr,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Optimal overload zone (${acwr}× baseline) — building ${noun} fitness faster than fatigue accumulates.`,
+      guidance: `Optimal overload zone — building ${noun} fitness faster than fatigue accumulates.`,
       baselineDays,
       requiredDays,
     };
@@ -218,7 +218,7 @@ export function classifyLoadStatus(
       acwr,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Short-term ${noun} load is elevated (${acwr}× baseline). Watch sleep and recovery closely before adding more volume.`,
+      guidance: `Short-term ${noun} load is elevated above your baseline. Watch sleep and recovery closely before adding more volume.`,
       baselineDays,
       requiredDays,
     };
@@ -230,7 +230,7 @@ export function classifyLoadStatus(
     acwr,
     optimalMin: latest.optimalMin,
     optimalMax: latest.optimalMax,
-    guidance: `Short-term ${noun} load is significantly above your established baseline (${acwr}×). Reduce volume or intensity and prioritize recovery.`,
+    guidance: `Short-term ${noun} load is significantly above your established baseline. Reduce volume or intensity and prioritize recovery.`,
     baselineDays,
     requiredDays,
   };
