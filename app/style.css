@@ -2345,6 +2345,45 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   border-radius: 14px;
   display: block;
 }
+.physique-card.is-editing {
+  grid-column: 1 / -1;
+}
+.physique-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  flex-shrink: 0;
+}
+.physique-upload-list {
+  display: grid;
+  gap: .65rem;
+}
+.physique-upload-item {
+  display: grid;
+  gap: .45rem;
+  padding: .6rem;
+  border-radius: 16px;
+  background: var(--surface-soft);
+  border: 1px solid var(--surface-border);
+}
+.physique-upload-head {
+  display: flex;
+  align-items: flex-start;
+  gap: .6rem;
+}
+.physique-upload-thumb {
+  width: 72px;
+  height: 96px;
+  object-fit: contain;
+  background: #14161f;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+.physique-edit-form {
+  display: grid;
+  gap: .5rem;
+  margin-top: .4rem;
+}
 
 /* Mobile-first responsive tightening (iPhone 375–430px) */
 .pulse-strip-grid {

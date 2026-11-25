@@ -1,7 +1,7 @@
-import { and, desc, eq, isNotNull, lte } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { AuthDatabase } from "./auth";
-import { dailyEnergy, dailyRecovery, measurement, physiqueCheckin } from "./schema";
+import { physiqueCheckin } from "./schema";
 
 export const PHYSIQUE_POSES = ["front", "side", "back"] as const;
 export type PhysiquePose = (typeof PHYSIQUE_POSES)[number];
@@ -24,6 +24,16 @@ export const createPhysiqueInput = z.object({
 });
 
 export type CreatePhysiqueInput = z.infer<typeof createPhysiqueInput>;
+
+export const updatePhysiqueInput = z.object({
+  day: z.iso.date().optional(),
+  pose: z.enum(PHYSIQUE_POSES).optional(),
+  cadence: z.enum(PHYSIQUE_CADENCES).optional(),
+  weightKg: z.number().positive().max(400).nullable().optional(),
+  note: z.string().trim().max(300).optional(),
+});
+
+export type UpdatePhysiqueInput = z.infer<typeof updatePhysiqueInput>;
 
 export interface PhysiqueCheckinRecord {
   id: string;
@@ -63,49 +73,13 @@ export function physiqueData(db: AuthDatabase, userId: string) {
         .from(physiqueCheckin)
         .where(condition)
         .orderBy(desc(physiqueCheckin.day), desc(physiqueCheckin.createdAt))
-        .limit(120);
+        .limit(300);
 
       return rows.map(toRecord);
     },
 
     async create(raw: CreatePhysiqueInput): Promise<PhysiqueCheckinRecord> {
       const input = createPhysiqueInput.parse(raw);
-
-      let resolvedWeight = input.weightKg ?? null;
-      if (resolvedWeight == null) {
-        const [latestMeasureWeight, latestEnergyWeight] = await Promise.all([
-          db
-            .select({ value: measurement.value, date: measurement.date })
-            .from(measurement)
-            .where(and(eq(measurement.userId, userId), eq(measurement.metric, "weight"), lte(measurement.date, input.day)))
-            .orderBy(desc(measurement.date))
-            .limit(1),
-          db
-            .select({ weightKg: dailyEnergy.weightKg, day: dailyEnergy.day })
-            .from(dailyEnergy)
-            .where(and(eq(dailyEnergy.userId, userId), isNotNull(dailyEnergy.weightKg), lte(dailyEnergy.day, input.day)))
-            .orderBy(desc(dailyEnergy.day))
-            .limit(1),
-        ]);
-        const mRow = latestMeasureWeight[0];
-        const eRow = latestEnergyWeight[0];
-        if (mRow && (!eRow || mRow.date >= eRow.day)) {
-          resolvedWeight = mRow.value;
-        } else if (eRow?.weightKg != null) {
-          resolvedWeight = eRow.weightKg;
-        }
-      }
-
-      let resolvedBodyFat = input.bodyFatPct ?? null;
-      if (resolvedBodyFat == null) {
-        const latestRec = await db
-          .select({ bodyFatPct: dailyRecovery.bodyFatPct })
-          .from(dailyRecovery)
-          .where(and(eq(dailyRecovery.userId, userId), isNotNull(dailyRecovery.bodyFatPct), lte(dailyRecovery.day, input.day)))
-          .orderBy(desc(dailyRecovery.day))
-          .limit(1);
-        resolvedBodyFat = latestRec[0]?.bodyFatPct ?? null;
-      }
 
       const id = crypto.randomUUID();
       const [inserted] = await db
@@ -117,13 +91,40 @@ export function physiqueData(db: AuthDatabase, userId: string) {
           pose: input.pose,
           cadence: input.cadence,
           photoData: input.photoData,
-          weightKg: resolvedWeight,
-          bodyFatPct: resolvedBodyFat,
+          weightKg: input.weightKg ?? null,
+          bodyFatPct: null,
           note: input.note,
         })
         .returning();
 
       return toRecord(inserted);
+    },
+
+    async update(id: string, raw: UpdatePhysiqueInput): Promise<PhysiqueCheckinRecord | null> {
+      const input = updatePhysiqueInput.parse(raw);
+      const patch: Partial<typeof physiqueCheckin.$inferInsert> = {};
+      if (input.day !== undefined) patch.day = input.day;
+      if (input.pose !== undefined) patch.pose = input.pose;
+      if (input.cadence !== undefined) patch.cadence = input.cadence;
+      if (input.weightKg !== undefined) patch.weightKg = input.weightKg;
+      if (input.note !== undefined) patch.note = input.note;
+
+      if (Object.keys(patch).length === 0) {
+        const [existing] = await db
+          .select()
+          .from(physiqueCheckin)
+          .where(and(eq(physiqueCheckin.id, id), eq(physiqueCheckin.userId, userId)))
+          .limit(1);
+        return existing ? toRecord(existing) : null;
+      }
+
+      const [updated] = await db
+        .update(physiqueCheckin)
+        .set(patch)
+        .where(and(eq(physiqueCheckin.id, id), eq(physiqueCheckin.userId, userId)))
+        .returning();
+
+      return updated ? toRecord(updated) : null;
     },
 
     async remove(id: string): Promise<{ deleted: boolean }> {

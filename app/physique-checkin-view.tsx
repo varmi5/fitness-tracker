@@ -1,16 +1,27 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
-import { ArrowLeft, Pause, Play, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Pause, Pencil, Play, Plus, Trash2, X } from "lucide-react";
 import { extractPhotoDate, orderPhysiqueFrames } from "../lib/photo-date";
 import { PHYSIQUE_POSES, type PhysiqueCadence, type PhysiqueCheckinRecord, type PhysiquePose } from "../lib/physique-data";
 
 interface PhysiqueCheckinViewProps {
   today: string;
-  latestWeight: number | null;
-  latestBodyFat: number | null;
+  latestWeight?: number | null;
+  latestBodyFat?: number | null;
   onBack: () => void;
   onMessage: (msg: string) => void;
+}
+
+interface PendingUpload {
+  localId: string;
+  fileName: string;
+  photoData: string;
+  day: string;
+  dateSource: "exif" | "file" | null;
+  pose: PhysiquePose;
+  weightKg: string;
+  note: string;
 }
 
 async function loadImageElement(file: File): Promise<HTMLImageElement> {
@@ -85,10 +96,16 @@ const SPEED_INTERVAL_MS: Record<0.5 | 1 | 2, number> = {
   2: 350,
 };
 
+function parseOptionalWeight(raw: string): number | null | "invalid" {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const num = Number(trimmed);
+  if (!Number.isFinite(num) || num <= 0 || num > 400) return "invalid";
+  return num;
+}
+
 export function PhysiqueCheckinView({
   today,
-  latestWeight,
-  latestBodyFat,
   onBack,
   onMessage,
 }: PhysiqueCheckinViewProps) {
@@ -98,16 +115,19 @@ export function PhysiqueCheckinView({
   const [viewCadence, setViewCadence] = useState<PhysiqueCadence>("weekly");
   const [showUpload, setShowUpload] = useState(false);
 
-  // Upload form state
-  const [day, setDay] = useState(today);
-  const [dateSource, setDateSource] = useState<"exif" | "file" | null>(null);
+  // Batch upload form state
   const [uploadPose, setUploadPose] = useState<PhysiquePose>("front");
-  const [photoData, setPhotoData] = useState<string>("");
-  const [weightKg, setWeightKg] = useState(latestWeight != null ? latestWeight.toFixed(1) : "");
-  const [bodyFatPct, setBodyFatPct] = useState(latestBodyFat != null ? latestBodyFat.toFixed(1) : "");
-  const [note, setNote] = useState("");
+  const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
   const [processingPhoto, setProcessingPhoto] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [savingProgress, setSavingProgress] = useState<{ done: number; total: number } | null>(null);
+
+  // Inline edit state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDay, setEditDay] = useState(today);
+  const [editPose, setEditPose] = useState<PhysiquePose>("front");
+  const [editWeightKg, setEditWeightKg] = useState("");
+  const [editNote, setEditNote] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Timelapse player state
   const [playing, setPlaying] = useState(false);
@@ -167,35 +187,58 @@ export function PhysiqueCheckinView({
   function handleToggleAdd() {
     if (!showUpload) {
       setUploadPose(poseFilter);
-      if (!photoData) {
-        setDay(today);
-        setDateSource(null);
-      }
       setShowUpload(true);
     } else {
       setShowUpload(false);
     }
   }
 
+  function handleUploadPoseChange(nextPose: PhysiquePose) {
+    setUploadPose(nextPose);
+    setPendingUploads((prev) => prev.map((item) => ({ ...item, pose: nextPose })));
+  }
+
+  function updatePendingItem(localId: string, patch: Partial<PendingUpload>) {
+    setPendingUploads((prev) => prev.map((item) => (item.localId === localId ? { ...item, ...patch } : item)));
+  }
+
+  function removePendingItem(localId: string) {
+    setPendingUploads((prev) => prev.filter((item) => item.localId !== localId));
+  }
+
   async function handleFileSelect(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
+
     setProcessingPhoto(true);
     try {
-      const [compressed, extracted] = await Promise.all([
-        compressPhoto(file),
-        extractPhotoDate(file, today),
-      ]);
-      setPhotoData(compressed);
-      if (extracted?.day) {
-        setDay(extracted.day);
-        setDateSource(extracted.source);
-      } else {
-        setDateSource(null);
+      for (const file of files) {
+        try {
+          const [compressed, extracted] = await Promise.all([
+            compressPhoto(file),
+            extractPhotoDate(file, today),
+          ]);
+          const nextItem: PendingUpload = {
+            localId:
+              typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+                ? crypto.randomUUID()
+                : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            fileName: file.name,
+            photoData: compressed,
+            day: extracted?.day ?? today,
+            dateSource: extracted?.source ?? null,
+            pose: uploadPose,
+            weightKg: "",
+            note: "",
+          };
+          setPendingUploads((prev) => [...prev, nextItem]);
+        } catch (err) {
+          onMessage(
+            `${file.name}: ${err instanceof Error ? err.message : "Could not process image file."}`,
+          );
+        }
       }
-    } catch (err) {
-      onMessage(err instanceof Error ? err.message : "Could not process image file.");
     } finally {
       setProcessingPhoto(false);
     }
@@ -203,42 +246,112 @@ export function PhysiqueCheckinView({
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!photoData) {
-      onMessage("Choose a check-in photo first.");
+    if (pendingUploads.length === 0) {
+      onMessage("Choose at least one check-in photo first.");
       return;
     }
-    setSaving(true);
+
+    const snapshot = [...pendingUploads];
+    for (const item of snapshot) {
+      if (!item.day) {
+        onMessage(`Set a date for ${item.fileName || "each photo"}.`);
+        return;
+      }
+      if (parseOptionalWeight(item.weightKg) === "invalid") {
+        onMessage(`Enter a valid weight (kg) or leave it blank for ${item.day}.`);
+        return;
+      }
+    }
+
+    setSavingProgress({ done: 0, total: snapshot.length });
+    const savedPoses: PhysiquePose[] = [];
+    let savedCount = 0;
+
+    try {
+      for (let idx = 0; idx < snapshot.length; idx++) {
+        const item = snapshot[idx];
+        const parsedWeight = parseOptionalWeight(item.weightKg);
+        const res = await fetch("/api/physique", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "create",
+            data: {
+              day: item.day,
+              pose: item.pose,
+              cadence: viewCadence,
+              photoData: item.photoData,
+              weightKg: parsedWeight === "invalid" ? null : parsedWeight,
+              note: item.note,
+            },
+          }),
+        });
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.message ?? "Could not save check-in.");
+
+        setCheckins((prev) => [payload.checkin, ...prev]);
+        setPendingUploads((prev) => prev.filter((p) => p.localId !== item.localId));
+        savedPoses.push(item.pose);
+        savedCount++;
+        setSavingProgress({ done: idx + 1, total: snapshot.length });
+      }
+
+      if (savedPoses.length > 0) {
+        setPoseFilter(savedPoses[0]);
+      }
+      setShowUpload(false);
+      onMessage(savedCount === 1 ? "Physique check-in saved." : `Saved ${savedCount} check-ins.`);
+    } catch (err) {
+      onMessage(err instanceof Error ? err.message : "Could not save check-in.");
+    } finally {
+      setSavingProgress(null);
+    }
+  }
+
+  function startEdit(item: PhysiqueCheckinRecord) {
+    setEditingId(item.id);
+    setEditDay(item.day);
+    setEditPose(item.pose);
+    setEditWeightKg(item.weightKg != null ? String(item.weightKg) : "");
+    setEditNote(item.note);
+  }
+
+  async function handleSaveEdit(e: FormEvent, id: string) {
+    e.preventDefault();
+    const parsedWeight = parseOptionalWeight(editWeightKg);
+    if (parsedWeight === "invalid") {
+      onMessage("Enter a valid weight in kg or leave it blank.");
+      return;
+    }
+
+    setSavingEdit(true);
     try {
       const res = await fetch("/api/physique", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "create",
+          action: "update",
+          id,
           data: {
-            day,
-            pose: uploadPose,
-            cadence: viewCadence,
-            photoData,
-            weightKg: weightKg ? Number(weightKg) : null,
-            bodyFatPct: bodyFatPct ? Number(bodyFatPct) : null,
-            note,
+            day: editDay,
+            pose: editPose,
+            weightKg: parsedWeight,
+            note: editNote,
           },
         }),
       });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload.message ?? "Could not save check-in.");
-      setCheckins((prev) => [payload.checkin, ...prev]);
-      setPoseFilter(uploadPose);
-      setPhotoData("");
-      setDateSource(null);
-      setDay(today);
-      setNote("");
-      setShowUpload(false);
-      onMessage("Physique check-in saved.");
+      if (!res.ok) throw new Error(payload.message ?? "Could not update check-in.");
+      setCheckins((prev) => prev.map((c) => (c.id === id ? payload.checkin : c)));
+      setEditingId(null);
+      if (editPose !== poseFilter) {
+        setPoseFilter(editPose);
+      }
+      onMessage("Check-in updated.");
     } catch (err) {
-      onMessage(err instanceof Error ? err.message : "Could not save check-in.");
+      onMessage(err instanceof Error ? err.message : "Could not update check-in.");
     } finally {
-      setSaving(false);
+      setSavingEdit(false);
     }
   }
 
@@ -250,6 +363,7 @@ export function PhysiqueCheckinView({
       body: JSON.stringify({ action: "delete", id }),
     });
     if (res.ok) {
+      if (editingId === id) setEditingId(null);
       setCheckins((prev) => prev.filter((c) => c.id !== id));
       onMessage("Check-in deleted.");
     }
@@ -304,68 +418,131 @@ export function PhysiqueCheckinView({
       {showUpload && (
         <form className="card" onSubmit={(e) => void handleSubmit(e)}>
           <div className="split-row">
-            <h2>New check-in</h2>
-            <button type="button" className="secondary compact" onClick={() => setShowUpload(false)}>Cancel</button>
+            <h2>Add check-ins</h2>
+            <button
+              type="button"
+              className="secondary compact"
+              onClick={() => setShowUpload(false)}
+              disabled={savingProgress != null}
+            >
+              Cancel
+            </button>
           </div>
-          <label>
-            Photo
-            <input type="file" accept="image/*" onChange={(e) => void handleFileSelect(e)} />
-          </label>
-          {photoData && (
-            <img
-              src={photoData}
-              alt="Check-in preview"
-              style={{
-                width: "100%",
-                maxHeight: 280,
-                objectFit: "contain",
-                borderRadius: 16,
-                background: "#14161f",
-              }}
-            />
-          )}
           <div className="input-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
             <label>
-              Date
-              <input
-                type="date"
-                value={day}
-                max={today}
-                onChange={(e) => {
-                  setDay(e.target.value);
-                  setDateSource(null);
-                }}
-                required
-              />
-              {dateSource && (
-                <small style={{ color: "var(--muted)", fontSize: ".7rem" }}>
-                  {dateSource === "exif" ? "Date auto-filled from photo EXIF" : "Date auto-filled from file"}
-                </small>
-              )}
-            </label>
-            <label>
               Pose
-              <select value={uploadPose} onChange={(e) => setUploadPose(e.target.value as PhysiquePose)}>
+              <select
+                value={uploadPose}
+                onChange={(e) => handleUploadPoseChange(e.target.value as PhysiquePose)}
+                disabled={savingProgress != null}
+              >
                 <option value="front">Front</option>
                 <option value="side">Side</option>
                 <option value="back">Back</option>
               </select>
             </label>
             <label>
-              Weight (kg)
-              <input inputMode="decimal" value={weightKg} onChange={(e) => setWeightKg(e.target.value)} placeholder="Auto" />
-            </label>
-            <label>
-              Body Fat (%)
-              <input inputMode="decimal" value={bodyFatPct} onChange={(e) => setBodyFatPct(e.target.value)} placeholder="Auto" />
+              Photos
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(e) => void handleFileSelect(e)}
+                disabled={savingProgress != null}
+              />
             </label>
           </div>
-          <label>
-            Note
-            <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Lighting, fasted, pump…" />
-          </label>
-          <button type="submit" disabled={saving || processingPhoto || !photoData}>
-            {processingPhoto ? "Processing photo…" : saving ? "Saving…" : "Save Check-in"}
+
+          {pendingUploads.length > 0 && (
+            <div className="physique-upload-list">
+              {pendingUploads.map((item) => (
+                <div key={item.localId} className="physique-upload-item">
+                  <div className="physique-upload-head">
+                    <img
+                      src={item.photoData}
+                      alt={item.fileName || `Queued ${item.pose} check-in`}
+                      className="physique-upload-thumb"
+                    />
+                    <div style={{ flex: 1, minWidth: 0, display: "grid", gap: ".35rem" }}>
+                      <label style={{ margin: 0 }}>
+                        Date
+                        <input
+                          type="date"
+                          value={item.day}
+                          max={today}
+                          onChange={(e) =>
+                            updatePendingItem(item.localId, { day: e.target.value, dateSource: null })
+                          }
+                          required
+                        />
+                        <small style={{ color: "var(--muted)", fontSize: ".68rem" }}>
+                          {item.dateSource === "exif"
+                            ? "Auto-filled from photo EXIF"
+                            : item.dateSource === "file"
+                              ? "Auto-filled from file date"
+                              : "Confirm photo date"}
+                        </small>
+                      </label>
+                      <div className="input-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                        <label style={{ margin: 0 }}>
+                          Pose
+                          <select
+                            value={item.pose}
+                            onChange={(e) =>
+                              updatePendingItem(item.localId, { pose: e.target.value as PhysiquePose })
+                            }
+                          >
+                            <option value="front">Front</option>
+                            <option value="side">Side</option>
+                            <option value="back">Back</option>
+                          </select>
+                        </label>
+                        <label style={{ margin: 0 }}>
+                          Weight (kg)
+                          <input
+                            inputMode="decimal"
+                            value={item.weightKg}
+                            onChange={(e) =>
+                              updatePendingItem(item.localId, { weightKg: e.target.value })
+                            }
+                            placeholder="Optional"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary icon-btn"
+                      style={{ width: 32, minWidth: 32, height: 32, minHeight: 32 }}
+                      aria-label={`Remove ${item.fileName || "photo"}`}
+                      onClick={() => removePendingItem(item.localId)}
+                      disabled={savingProgress != null}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={item.note}
+                    onChange={(e) => updatePendingItem(item.localId, { note: e.target.value })}
+                    placeholder="Note (optional: lighting, fasted, pump…)"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={savingProgress != null || processingPhoto || pendingUploads.length === 0}
+          >
+            {processingPhoto
+              ? "Processing photos…"
+              : savingProgress != null
+                ? `Saving ${savingProgress.done} / ${savingProgress.total}…`
+                : pendingUploads.length > 1
+                  ? `Save ${pendingUploads.length} Check-ins`
+                  : "Save Check-in"}
           </button>
         </form>
       )}
@@ -407,7 +584,6 @@ export function PhysiqueCheckinView({
             <div className="physique-overlay-pill num">
               <span>{activeFrame.day}</span>
               {activeFrame.weightKg != null && <span>· {activeFrame.weightKg.toFixed(1)} kg</span>}
-              {activeFrame.bodyFatPct != null && <span>· {activeFrame.bodyFatPct.toFixed(1)}%</span>}
             </div>
           </div>
           {timelapseFrames.length >= 2 && (
@@ -447,36 +623,121 @@ export function PhysiqueCheckinView({
         </section>
       ) : (
         <div className="physique-grid">
-          {filteredNewest.map((item) => (
-            <article key={item.id} className="card physique-card">
-              <button
-                type="button"
-                className="physique-card-thumb"
-                aria-label={`View ${item.pose} check-in from ${item.day}`}
-                onClick={() => handleSelectThumbnail(item.id)}
-              >
-                <img src={item.photoData} alt={`${item.pose} check-in ${item.day}`} />
-              </button>
-              <div className="split-row" style={{ marginTop: ".4rem" }}>
-                <div>
-                  <strong className="num" style={{ fontSize: ".82rem" }}>{item.day}</strong>
-                  <div className="num" style={{ fontSize: ".72rem", color: "var(--muted)" }}>
-                    {item.weightKg != null ? `${item.weightKg.toFixed(1)} kg` : "—"}
-                    {item.bodyFatPct != null ? ` · ${item.bodyFatPct.toFixed(1)}% BF` : ""}
-                  </div>
-                </div>
+          {filteredNewest.map((item) => {
+            const isEditing = editingId === item.id;
+            return (
+              <article key={item.id} className={`card physique-card${isEditing ? " is-editing" : ""}`}>
                 <button
                   type="button"
-                  className="secondary icon-btn"
-                  style={{ width: 34, minWidth: 34, height: 34, minHeight: 34 }}
-                  aria-label={`Delete check-in ${item.day}`}
-                  onClick={() => void handleDelete(item.id)}
+                  className="physique-card-thumb"
+                  aria-label={`View ${item.pose} check-in from ${item.day}`}
+                  onClick={() => handleSelectThumbnail(item.id)}
                 >
-                  <Trash2 size={14} />
+                  <img src={item.photoData} alt={`${item.pose} check-in ${item.day}`} />
                 </button>
-              </div>
-            </article>
-          ))}
+
+                {isEditing ? (
+                  <form className="physique-edit-form" onSubmit={(e) => void handleSaveEdit(e, item.id)}>
+                    <label>
+                      Date
+                      <input
+                        type="date"
+                        value={editDay}
+                        max={today}
+                        onChange={(e) => setEditDay(e.target.value)}
+                        required
+                      />
+                    </label>
+                    <div className="input-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                      <label>
+                        Pose
+                        <select value={editPose} onChange={(e) => setEditPose(e.target.value as PhysiquePose)}>
+                          <option value="front">Front</option>
+                          <option value="side">Side</option>
+                          <option value="back">Back</option>
+                        </select>
+                      </label>
+                      <label>
+                        Weight (kg)
+                        <input
+                          inputMode="decimal"
+                          value={editWeightKg}
+                          onChange={(e) => setEditWeightKg(e.target.value)}
+                          placeholder="Optional"
+                        />
+                      </label>
+                    </div>
+                    <label>
+                      Note
+                      <input
+                        type="text"
+                        value={editNote}
+                        onChange={(e) => setEditNote(e.target.value)}
+                        placeholder="Optional"
+                      />
+                    </label>
+                    <div style={{ display: "flex", gap: ".45rem" }}>
+                      <button type="submit" className="compact" style={{ flex: 1 }} disabled={savingEdit}>
+                        {savingEdit ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary compact"
+                        onClick={() => setEditingId(null)}
+                        disabled={savingEdit}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="split-row" style={{ marginTop: ".4rem", alignItems: "flex-start" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <strong className="num" style={{ fontSize: ".82rem" }}>{item.day}</strong>
+                      {item.weightKg != null && (
+                        <div className="num" style={{ fontSize: ".72rem", color: "var(--muted)" }}>
+                          {item.weightKg.toFixed(1)} kg
+                        </div>
+                      )}
+                      {item.note && (
+                        <div
+                          style={{
+                            fontSize: ".7rem",
+                            color: "var(--muted)",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {item.note}
+                        </div>
+                      )}
+                    </div>
+                    <div className="physique-card-actions">
+                      <button
+                        type="button"
+                        className="secondary icon-btn"
+                        style={{ width: 32, minWidth: 32, height: 32, minHeight: 32 }}
+                        aria-label={`Edit check-in ${item.day}`}
+                        onClick={() => startEdit(item)}
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary icon-btn"
+                        style={{ width: 32, minWidth: 32, height: 32, minHeight: 32 }}
+                        aria-label={`Delete check-in ${item.day}`}
+                        onClick={() => void handleDelete(item.id)}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </div>
       )}
     </>
