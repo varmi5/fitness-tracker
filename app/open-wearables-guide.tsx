@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
-import { Copy, ExternalLink } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, Copy, ExternalLink } from "lucide-react";
 import type { OpenWearablesIntegrationStatus } from "./types";
 
 type DataSource = "apple" | "android" | "cloud";
@@ -43,7 +43,7 @@ export function OpenWearablesGuide({
 }: OpenWearablesGuideProps) {
   const [source, setSource] = useState<DataSource>(initialPlatform);
   const [step, setStep] = useState(0);
-  const panelId = useId();
+  const [completed, setCompleted] = useState(0);
   const panel = useRef<HTMLDivElement>(null);
   const focusStep = useRef(false);
   const hostUrl = invite?.apiUrl || openWearables?.apiUrl;
@@ -53,6 +53,7 @@ export function OpenWearablesGuide({
   useEffect(() => {
     setSource(initialPlatform);
     setStep(0);
+    setCompleted(0);
   }, [initialPlatform]);
 
   useEffect(() => {
@@ -65,11 +66,13 @@ export function OpenWearablesGuide({
   function advanceTo(nextStep: number) {
     focusStep.current = true;
     setStep(nextStep);
+    setCompleted((previous) => Math.max(previous, nextStep));
   }
 
   function chooseSource(nextSource: DataSource) {
     setSource(nextSource);
     setStep(0);
+    setCompleted(0);
   }
 
   async function copyValue(value: string, label: string) {
@@ -115,21 +118,27 @@ export function OpenWearablesGuide({
         </div>
       ) : (
         <>
-          <nav className="ow-guide-tabs" aria-label="Open Wearables setup steps">
+          <ol className="ow-progress" aria-label="Open Wearables setup progress">
             {steps.map((label, index) => (
-              <button
+              <li
                 key={label}
-                type="button"
-                className={`ow-tab-btn${step === index ? " is-active" : ""}`}
+                className={index < completed ? "is-complete" : undefined}
+                aria-label={index < completed ? `${label} complete` : label}
                 aria-current={step === index ? "step" : undefined}
-                aria-controls={panelId}
-                onClick={() => setStep(index)}
               >
-                {index + 1}. {label}
-              </button>
+                <span className="ow-progress-dot" aria-hidden="true">
+                  {index < completed ? <Check size={13} /> : step === index ? index + 1 : null}
+                </span>
+              </li>
             ))}
-          </nav>
-          <div className="ow-step-panel" id={panelId} ref={panel} tabIndex={-1} aria-label={`Step ${step + 1} of ${steps.length}`}>
+          </ol>
+          <div
+            className="ow-step-panel"
+            ref={panel}
+            tabIndex={-1}
+            aria-label={step < steps.length ? `Step ${step + 1} of ${steps.length}` : "Setup complete"}
+          >
+            {step < steps.length && <p className="ow-detail">Step {step + 1} of {steps.length}</p>}
             {step === 0 && (
               <>
                 <strong>Install Open Wearables</strong>
@@ -193,6 +202,7 @@ export function OpenWearablesGuide({
                     {busy ? "Getting code…" : "Get a new code"}
                   </button>
                 )}
+                <button type="button" className="secondary compact ow-regenerate" onClick={() => advanceTo(0)}>Back to install</button>
               </>
             )}
             {step === 2 && (
@@ -204,7 +214,14 @@ export function OpenWearablesGuide({
                   <li>Return to FitnessTrackr and refresh to check your data.</li>
                 </ol>
                 {apple && <p className="ow-detail">Fitbit Air syncs separately through Google Health.</p>}
-                <button type="button" className="secondary compact" onClick={() => advanceTo(1)}>Back to pairing code</button>
+                <button type="button" className="unlock-btn" onClick={() => advanceTo(steps.length)}>I started sync</button>
+                <button type="button" className="secondary compact ow-regenerate" onClick={() => advanceTo(1)}>Back to pairing code</button>
+              </>
+            )}
+            {step === steps.length && (
+              <>
+                <strong>Setup complete</strong>
+                <p className="ow-detail">Check FitnessTrackr for your data after the first sync.</p>
               </>
             )}
           </div>
