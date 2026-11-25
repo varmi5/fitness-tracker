@@ -26,7 +26,7 @@ not a clinical validation study or a reproduction of Bevel/WHOOP proprietary sco
   establish time asleep. Inconsistent component totals are excluded from scores.
 - `sleep-v2-experimental`: duration/goal capped at 100%; if valid awake time is
   available, the descriptive index is 80% duration and 20% sleep efficiency.
-  Without awake time the index is duration only, with component coverage returned.
+  Without awake time or full interval accounting (within two minutes of rounding), the index is duration only, with component coverage returned. Unclassified/restless/latency minutes never inflate efficiency.
   No universal ideal deep/REM ratio is assumed. The app does not fabricate an SRI
   from session endpoints that cannot establish sleep/wake epochs.
 - Historical `sleep_goal` rows belong to each user and apply from their effective

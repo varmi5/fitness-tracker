@@ -370,3 +370,14 @@ test("nap-only dates do not imply a missing main night had zero sleep", () => {
   assert.equal(partial.observedDays, 1);
   assert.equal(partial.debtCoverage, "partial");
 });
+
+
+test("unclassified interval minutes cannot inflate efficiency in scoring or the shared legacy helper", () => {
+  const day = "2026-11-24";
+  const night = session(day, { minutesAsleep: 360, minutesAwake: 0 });
+  const result = computeSleepInsights(night, [night], day, null);
+  assert.equal(result.efficiencyPct, null);
+  assert.deepEqual(result.scoreCoverage, ["duration"]);
+  const complete = computeSleepInsights({ ...night, minutesAwake: 120 }, [night], day, null);
+  assert.equal(complete.efficiencyPct, 75);
+});

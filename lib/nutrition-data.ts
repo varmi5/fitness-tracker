@@ -183,7 +183,7 @@ function mapSleepRow(row: typeof dailySleep.$inferSelect): SleepRecord {
     deepMinutes: row.deepMinutes,
     remMinutes: row.remMinutes,
     lightMinutes: row.lightMinutes,
-    sleepEfficiencyPct: computeSleepEfficiencyPct(row.minutesAsleep, row.minutesAwake),
+    sleepEfficiencyPct: computeSleepEfficiencyPct(row.minutesAsleep, row.minutesAwake, row.sleepStart && row.sleepEnd ? (row.sleepEnd.getTime() - row.sleepStart.getTime()) / 60000 : null),
     stages: Array.isArray(row.stagesJson) ? (row.stagesJson as SleepRecord["stages"]) : [],
     syncedAt: row.syncedAt.toISOString(),
   };

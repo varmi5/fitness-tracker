@@ -1,4 +1,4 @@
-import { addDays } from "./nutrition-model";
+import { addDays, computeSleepEfficiencyPct } from "./nutrition-model";
 
 // ---------------------------------------------------------------------------
 // 1. Winsorized EWMA Personal Baselines (from Pulse scoring/baselines.ts)
@@ -239,7 +239,7 @@ export function computePulseRecovery(
       z,
       score: sub,
       valueText: `${h}h ${m}m`,
-      baselineText: `${sleepNeedHours.toFixed(1)}h need`,
+      baselineText: `${sleepNeedHours.toFixed(1)}h goal`,
     });
   }
 
@@ -423,7 +423,7 @@ export function computeSleepInsights(
   const durationPct = Math.round(clamp(asleepMin / (sleepNeedHours * 60) * 100, 0, 100));
   const awake = todaySleep.minutesAwake;
   const intervalMinutes = (todaySleep.sleepEnd!.getTime() - todaySleep.sleepStart!.getTime()) / 60000;
-  const efficiencyPct = awake != null && Number.isFinite(awake) && awake >= 0 && asleepMin + awake <= intervalMinutes + 1 ? Math.round(asleepMin / (asleepMin + awake) * 100) : null;
+  const efficiencyPct = computeSleepEfficiencyPct(asleepMin, awake, intervalMinutes);
   const stagePct = (minutes: number | null) => minutes != null && Number.isFinite(minutes) && minutes >= 0 && minutes <= asleepMin ? round1(minutes / asleepMin * 100) : null;
   let deepPct = stagePct(todaySleep.deepMinutes), remPct = stagePct(todaySleep.remMinutes);
   const reportedStages = [todaySleep.deepMinutes, todaySleep.remMinutes, todaySleep.lightMinutes].filter((m): m is number => m != null);
