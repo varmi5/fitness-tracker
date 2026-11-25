@@ -3,7 +3,20 @@ import { z } from "zod";
 export const CATEGORIES = ["breakfast", "lunch", "dinner", "snacks", "drinks"] as const;
 export const UNITS = ["g", "kg", "oz", "ml", "l", "tsp", "tbsp", "cup", "fl_oz", "item", "slice", "piece", "scoop", "serving", "bottle", "can", "pack"] as const;
 export const ESTIMATION_METHODS = ["weighed", "measured", "pack_label", "recipe", "photo_estimate", "standard_portion"] as const;
-export const ENERGY_SOURCES = ["google", "manual", "apple"] as const;
+export const ENERGY_SOURCES = [
+  "google",
+  "apple",
+  "health_connect",
+  "samsung",
+  "garmin",
+  "whoop",
+  "oura",
+  "polar",
+  "suunto",
+  "strava",
+  "withings",
+  "manual",
+] as const;
 export const TRACKING_MODES = ["manual", "fitbit"] as const;
 
 export type MealCategory = (typeof CATEGORIES)[number];
@@ -383,6 +396,9 @@ export const preferencesInput = z.object({
   sleepGoalEffectiveFrom: z.iso.date().optional(),
   bulkMode: z.boolean().optional(),
   onboardingCompleted: z.boolean().optional(),
+  primaryRecoverySource: z.string().trim().min(1).max(40).optional(),
+  primaryWorkoutSource: z.string().trim().min(1).max(40).optional(),
+  autoSyncEnabled: z.boolean().optional(),
 });
 
 export function isCalorieGoalMet(

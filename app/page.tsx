@@ -1,6 +1,7 @@
 import { headers } from "next/headers";
 import { googleStatus } from "../lib/google-health";
 import { hevyStatus } from "../lib/hevy";
+import { openWearablesStatus } from "../lib/open-wearables";
 import { nutritionData } from "../lib/nutrition-data";
 import { localDay } from "../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../lib/runtime";
@@ -32,9 +33,10 @@ export default async function Home() {
   const strainSvc = strainData(db, userId);
 
   const tracker = await trackerData(db, userId).snapshot();
-  const [google, hevy, audit] = await Promise.all([
+  const [google, hevy, openWearables, audit] = await Promise.all([
     googleStatus(db, userId),
     hevyStatus(db, userId),
+    openWearablesStatus(db, userId),
     nutrition.recentAudit(15),
   ]);
   const [syncToken, strainSettings, nutritionSettings] = await Promise.all([
@@ -44,8 +46,10 @@ export default async function Home() {
   ]);
 
   const prefToday = localDay(new Date(), nutritionSettings.timezone);
-  const home = await nutrition.homeSnapshot(prefToday, { canReadSleep: google.canReadSleep });
-  const isFitbit = (home.settings.trackingMode ?? (home.settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit";
+  const home = await nutrition.homeSnapshot(prefToday, { canReadSleep: google.canReadSleep || openWearables.connected });
+  const isFitbit =
+    (home.settings.trackingMode ?? (home.settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit" ||
+    openWearables.connected;
   const [strain, recoveryInsights, pulseInsights] = await Promise.all([
     strainSvc.computeDay(home.activeDay, strainSettings),
     getRecoveryInsightsForUser(db, userId, home.activeDay),
@@ -66,6 +70,7 @@ export default async function Home() {
         history30: home.history30,
         google,
         hevy,
+        openWearables,
         strain,
         strainSettings,
         recoveryInsights,

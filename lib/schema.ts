@@ -90,6 +90,9 @@ export const nutritionPreference = pgTable("nutrition_preference", {
   sleepRolloverEnabled: boolean("sleep_rollover_enabled").notNull().default(true),
   bulkMode: boolean("bulk_mode").notNull().default(false),
   onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
+  primaryRecoverySource: text("primary_recovery_source").notNull().default("auto"),
+  primaryWorkoutSource: text("primary_workout_source").notNull().default("auto"),
+  autoSyncEnabled: boolean("auto_sync_enabled").notNull().default(true),
 });
 
 export const calorieTarget = pgTable("calorie_target", {
@@ -389,12 +392,16 @@ export const healthIntegration = pgTable("health_integration", {
   connectionId: text("connection_id").notNull().default(sql`gen_random_uuid()::text`),
   credential: text().notNull(),
   accountLabel: text("account_label"),
+  externalUserId: text("external_user_id"),
   mealSyncLeasedUntil: timestamp("meal_sync_leased_until", { withTimezone: true }),
   status: text().notNull().default("connected"),
   lastSync: timestamp("last_sync", { withTimezone: true }),
   lastError: text("last_error"),
   diagnosticsJson: jsonb("diagnostics_json").notNull().default({}),
-}, (t) => [primaryKey({ columns: [t.userId, t.provider] })]);
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.provider] }),
+  index("health_integration_provider_ext_user_idx").on(t.provider, t.externalUserId),
+]);
 
 export const mcpAudit = pgTable("mcp_audit", {
   id: text().primaryKey(),

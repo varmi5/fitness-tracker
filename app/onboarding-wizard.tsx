@@ -9,6 +9,7 @@ import {
   Dumbbell,
   ExternalLink,
   Flame,
+  Smartphone,
   Sparkles,
   Upload,
   Watch,
@@ -21,10 +22,12 @@ import {
   estimateMifflinTdee,
 } from "../lib/onboarding";
 import { type TrackingMode } from "../lib/nutrition-model";
+import { OpenWearablesGuide } from "./open-wearables-guide";
 import type {
   GoogleIntegrationStatus,
   HevyIntegrationStatus,
   NutritionSettings,
+  OpenWearablesIntegrationStatus,
   TrackerSnapshot,
 } from "./types";
 
@@ -35,6 +38,7 @@ interface OnboardingWizardProps {
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
   google: GoogleIntegrationStatus;
+  openWearables?: OpenWearablesIntegrationStatus;
   hevy?: HevyIntegrationStatus;
   mcpEnabled: boolean;
   busy: boolean;
@@ -42,6 +46,7 @@ interface OnboardingWizardProps {
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
   onNutritionAction: (action: object, successMessage: string) => Promise<boolean>;
   onImportHevy?: (rawText: string) => Promise<boolean>;
+  onCreateOpenWearablesInvite?: () => Promise<{ code: string; expiresAt: string | null; apiUrl: string | null } | null>;
   onMessage: (msg: string) => void;
 }
 
@@ -63,6 +68,7 @@ export function OnboardingWizard({
   tracker,
   settings,
   google,
+  openWearables,
   hevy,
   mcpEnabled,
   busy,
@@ -70,15 +76,24 @@ export function OnboardingWizard({
   onSaveTracker,
   onNutritionAction,
   onImportHevy,
+  onCreateOpenWearablesInvite,
   onMessage,
 }: OnboardingWizardProps) {
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
 
   // Step 1: Source & TDEE
-  const [trackingMode, setTrackingMode] = useState<TrackingMode>(
-    google.connected || settings.trackingMode === "fitbit" ? "fitbit" : "manual",
+  const [sourceChoice, setSourceChoice] = useState<"fitbit" | "open_wearables" | "manual">(
+    google.connected || settings.trackingMode === "fitbit"
+      ? openWearables?.connected && !google.connected
+        ? "open_wearables"
+        : "fitbit"
+      : openWearables?.connected
+        ? "open_wearables"
+        : "manual",
   );
+  const trackingMode: TrackingMode = sourceChoice === "manual" ? "manual" : "fitbit";
+  const [owInvite, setOwInvite] = useState<{ code: string; expiresAt: string | null; apiUrl: string | null } | null>(null);
   const [manualTdee, setManualTdee] = useState("");
   const [estWeight, setEstWeight] = useState("");
   const [estHeight, setEstHeight] = useState(
@@ -120,7 +135,13 @@ export function OnboardingWizard({
   useEffect(() => {
     if (!open) return;
     setStep(1);
-    setTrackingMode(google.connected || settings.trackingMode === "fitbit" ? "fitbit" : "manual");
+    setSourceChoice(
+      openWearables?.connected && !google.connected
+        ? "open_wearables"
+        : google.connected || settings.trackingMode === "fitbit"
+          ? "fitbit"
+          : "manual",
+    );
     setBulkMode(Boolean(settings.bulkMode));
     setTargetCalories(String(settings.targetToday || 2200));
     setSleepGoalHours(String((settings.sleepGoalMinutes ?? 480) / 60));
@@ -133,7 +154,7 @@ export function OnboardingWizard({
     setBirthDate(tracker.settings.birthDate ?? "");
     setBiologicalSex(tracker.settings.biologicalSex ?? "");
     setUnits(tracker.settings.units === "imperial" ? "imperial" : "metric");
-  }, [open, google.connected, settings.trackingMode, settings.bulkMode, settings.targetToday, settings.sleepGoalMinutes, settings.timezone, settings.targets.length, settings.onboardingCompletedAt, tracker.settings.heightCm, tracker.settings.birthDate, tracker.settings.biologicalSex, tracker.settings.units]);
+  }, [open, google.connected, openWearables?.connected, settings.trackingMode, settings.bulkMode, settings.targetToday, settings.sleepGoalMinutes, settings.timezone, settings.targets.length, settings.onboardingCompletedAt, tracker.settings.heightCm, tracker.settings.birthDate, tracker.settings.biologicalSex, tracker.settings.units]);
 
   const selectedActivity = useMemo(
     () => ACTIVITY_LEVELS.find((a) => a.id === estActivityId) ?? ACTIVITY_LEVELS[2],
@@ -364,41 +385,61 @@ export function OnboardingWizard({
             <div>
               <h2>1. How do you want to track daily burn (TDEE)?</h2>
               <p style={{ fontSize: ".83rem", marginTop: ".25rem" }}>
-                Fitbit Air syncs automatically via Google Health. On Apple Watch, Garmin, or no wearable? Choose Manual TDEE — we’ll help calculate your baseline right here.
+                Fitbit Air syncs via Google Health. Using <strong>Apple Watch</strong>, <strong>Garmin</strong>,{" "}
+                <strong>Android Health Connect</strong>, <strong>Oura</strong> or <strong>Whoop</strong>? Link live via Open Wearables or
+                choose Manual TDEE below.
               </p>
             </div>
 
             <div className="onboarding-choice-grid">
               <button
                 type="button"
-                className={`onboarding-choice${trackingMode === "fitbit" ? " is-active" : ""}`}
-                onClick={() => setTrackingMode("fitbit")}
+                className={`onboarding-choice${sourceChoice === "fitbit" ? " is-active" : ""}`}
+                onClick={() => setSourceChoice("fitbit")}
               >
                 <div className="split-row" style={{ width: "100%" }}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: ".4rem", fontWeight: 700 }}>
-                    <Watch size={17} /> Fitbit / Google Health
+                    <Watch size={17} /> Fitbit Air (Google Health)
                   </span>
                   {google.connected && <span className="pill teal-soft">Connected</span>}
                 </div>
-                <p>Auto-syncs TDEE, sleep stages, HRV, RHR, skin temp, steps &amp; workouts.</p>
+                <p>Auto-syncs TDEE, sleep stages, HRV, RHR, workouts &amp; two-way meal writes.</p>
               </button>
 
               <button
                 type="button"
-                className={`onboarding-choice${trackingMode === "manual" ? " is-active" : ""}`}
-                onClick={() => setTrackingMode("manual")}
+                className={`onboarding-choice${sourceChoice === "open_wearables" ? " is-active" : ""}`}
+                onClick={() => setSourceChoice("open_wearables")}
               >
                 <div className="split-row" style={{ width: "100%" }}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: ".4rem", fontWeight: 700 }}>
-                    <Flame size={17} /> Manual TDEE (Apple Health / Garmin)
+                    <Smartphone size={17} /> Apple Health / Garmin / Health Connect
                   </span>
-                  {trackingMode === "manual" && <span className="pill accent-soft">Selected</span>}
+                  {openWearables?.connected ? (
+                    <span className="pill teal-soft">Connected</span>
+                  ) : (
+                    <span className="pill accent-soft">Live Sync</span>
+                  )}
                 </div>
-                <p>Use your estimated daily maintenance calories &amp; manual scale/diary tracking.</p>
+                <p>Links via Open Wearables (8-char mobile app code or Garmin/Oura/Whoop portal) with smart dual-wear dedup.</p>
+              </button>
+
+              <button
+                type="button"
+                className={`onboarding-choice${sourceChoice === "manual" ? " is-active" : ""}`}
+                onClick={() => setSourceChoice("manual")}
+              >
+                <div className="split-row" style={{ width: "100%" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: ".4rem", fontWeight: 700 }}>
+                    <Flame size={17} /> Manual TDEE (No sync)
+                  </span>
+                  {sourceChoice === "manual" && <span className="pill accent-soft">Selected</span>}
+                </div>
+                <p>Enter your estimated maintenance calories manually &amp; log body weight on the scale.</p>
               </button>
             </div>
 
-            {trackingMode === "fitbit" && (
+            {sourceChoice === "fitbit" && (
               <div className="card" style={{ background: "var(--surface-soft)", display: "grid", gap: ".65rem" }}>
                 <strong>Google Health (Fitbit Air) Link</strong>
                 <p style={{ fontSize: ".8rem" }}>
@@ -425,7 +466,33 @@ export function OnboardingWizard({
               </div>
             )}
 
-            {trackingMode === "manual" && (
+            {sourceChoice === "open_wearables" && (
+              <div className="card" style={{ background: "var(--surface-soft)", display: "grid", gap: ".65rem", minWidth: 0 }}>
+                <OpenWearablesGuide
+                  openWearables={openWearables}
+                  invite={owInvite}
+                  busy={saving || busy}
+                  compact
+                  onGenerateInvite={
+                    onCreateOpenWearablesInvite
+                      ? async () => {
+                          const invite = await onCreateOpenWearablesInvite();
+                          if (invite) setOwInvite(invite);
+                        }
+                      : undefined
+                  }
+                  onMessage={onMessage}
+                />
+                {!openWearables?.available && (
+                  <p style={{ fontSize: ".78rem", margin: 0 }}>
+                    Open Wearables API credentials aren’t configured on this host yet — you can continue with Manual TDEE or link in Settings
+                    later.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {sourceChoice === "manual" && (
               <div style={{ display: "grid", gap: ".8rem" }}>
                 <label>
                   Estimated Maintenance TDEE (kcal/day, optional)
@@ -871,7 +938,13 @@ export function OnboardingWizard({
             <div className="onboarding-checklist">
               <div className="list-item">
                 <span>Tracking mode</span>
-                <strong>{trackingMode === "fitbit" ? "Fitbit Air (Google Health)" : "Manual TDEE"}</strong>
+                <strong>
+                  {sourceChoice === "open_wearables"
+                    ? "Apple Health / Open Wearables"
+                    : trackingMode === "fitbit"
+                      ? "Fitbit Air (Google Health)"
+                      : "Manual TDEE"}
+                </strong>
               </div>
               <div className="list-item">
                 <span>Daily goal</span>
@@ -884,8 +957,18 @@ export function OnboardingWizard({
                 <strong className="num">{sleepGoalHours}h / night</strong>
               </div>
               <div className="list-item">
-                <span>Google Health</span>
-                <strong>{google.connected ? "Connected" : trackingMode === "fitbit" ? "Link in Settings anytime" : "Not needed (Manual mode)"}</strong>
+                <span>Wearable link</span>
+                <strong>
+                  {google.connected && openWearables?.connected
+                    ? "Google Health + Open Wearables"
+                    : google.connected
+                      ? "Google Health connected"
+                      : openWearables?.connected
+                        ? `Open Wearables (${openWearables.accountLabel || "Connected"})`
+                        : trackingMode === "fitbit"
+                          ? "Link in Settings anytime"
+                          : "Manual mode"}
+                </strong>
               </div>
               <div className="list-item">
                 <span>Hevy strength</span>

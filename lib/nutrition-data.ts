@@ -64,6 +64,12 @@ import {
 } from "./schema";
 import { macroTargetInput, resolveMacroTargets, rebalanceMacros, type MacroPlan } from "./macro-targets";
 import { queueGoogleMeal } from "./google-sync-queue";
+import {
+  DEFAULT_ENERGY_PRIORITY,
+  DEFAULT_RECOVERY_PRIORITY,
+  dedupeWorkoutsAcrossSources,
+  rankSources,
+} from "./source-priority";
 import { foodMatchScore } from "./search-match";
 import { catalogueById, searchCatalogue, catalogueCount } from "./food-catalogue";
 import { calculateFoodPortion, type FoodDefinition } from "./food-catalogue-model";
@@ -281,7 +287,11 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       : "manual";
     const onboardingCompletedAt = pref?.onboardingCompletedAt ? pref.onboardingCompletedAt.toISOString() : null;
     const hasGoogleConnected = integrations.some((i) => i.provider === "google");
-    const needsOnboarding = !onboardingCompletedAt && !hasGoogleConnected && targets.length === 0;
+    const hasOpenWearablesConnected = integrations.some((i) => i.provider === "open_wearables" && i.status === "connected");
+    const primaryRecoverySource = pref?.primaryRecoverySource ?? "auto";
+    const primaryWorkoutSource = pref?.primaryWorkoutSource ?? "auto";
+    const autoSyncEnabled = pref?.autoSyncEnabled ?? true;
+    const needsOnboarding = !onboardingCompletedAt && !hasGoogleConnected && !hasOpenWearablesConnected && targets.length === 0;
     return {
       timezone: pref?.timezone ?? DEFAULT_TIMEZONE,
       trackingMode,
@@ -291,10 +301,14 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       bulkMode: pref?.bulkMode ?? false,
       onboardingCompletedAt,
       needsOnboarding,
+      primaryRecoverySource,
+      primaryWorkoutSource,
+      autoSyncEnabled,
       sleepGoals: sleepGoals.map(g => ({ effectiveFrom: g.effectiveFrom, goalMinutes: g.goalMinutes })),
       sleepGoalMinutes: sleepGoals.find(g => g.effectiveFrom <= localDay(new Date(), pref?.timezone ?? DEFAULT_TIMEZONE))?.goalMinutes ?? 480,
       targets: targets.map((t) => ({ id: t.id, effectiveFrom: t.effectiveFrom, calories: t.calories, proteinG: t.proteinG, carbsG: t.carbsG, fatG: t.fatG, fibreG: t.fibreG })),
       hasGoogleConnected,
+      hasOpenWearablesConnected,
     };
   }
 
@@ -303,11 +317,18 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     preferred: EnergySource,
     hasGoogleConnected: boolean,
     trackingMode: TrackingMode,
+    primarySource?: string | null,
   ): EnergyRecord | null {
     if (trackingMode === "manual") {
       return preferred === "apple" ? (bySource.apple ?? bySource.manual ?? null) : (bySource.manual ?? null);
     }
-    return bySource.google ?? (!hasGoogleConnected ? (bySource.manual ?? null) : null);
+    const order = rankSources(primarySource, DEFAULT_ENERGY_PRIORITY);
+    for (const src of order) {
+      if (src === "manual" && hasGoogleConnected) continue;
+      const found = bySource[src as EnergySource];
+      if (found) return found;
+    }
+    return !hasGoogleConnected ? (bySource.manual ?? null) : null;
   }
 
   async function assembleMeals(
@@ -365,25 +386,45 @@ export function nutritionData(db: AuthDatabase, userId: string) {
   function pickSleep(
     bySource: Partial<Record<EnergySource, SleepRecord>>,
     trackingMode: TrackingMode,
+    primaryRecoverySource?: string | null,
   ): SleepRecord | null {
     if (trackingMode !== "fitbit") return null;
-    return bySource.google ?? bySource.manual ?? null;
+    for (const src of rankSources(primaryRecoverySource, DEFAULT_RECOVERY_PRIORITY)) {
+      const found = bySource[src as EnergySource];
+      if (found) return found;
+    }
+    return null;
   }
 
   function pickRecovery(
     bySource: Partial<Record<EnergySource, RecoveryRecord>>,
     trackingMode: TrackingMode,
+    primaryRecoverySource?: string | null,
   ): RecoveryRecord | null {
     if (trackingMode !== "fitbit") return null;
-    return bySource.google ?? bySource.manual ?? null;
+    for (const src of rankSources(primaryRecoverySource, DEFAULT_RECOVERY_PRIORITY)) {
+      const found = bySource[src as EnergySource];
+      if (found) return found;
+    }
+    return null;
   }
 
   function pickWorkouts(
     rows: WorkoutRecord[],
     trackingMode: TrackingMode,
+    primaryWorkoutSource?: string | null,
   ): WorkoutRecord[] {
     if (trackingMode !== "fitbit") return [];
-    return rows.filter((r) => r.source === "google" || r.source === "manual");
+    const deduped = dedupeWorkoutsAcrossSources(
+      rows.map((r) => ({
+        ...r,
+        startTime: r.startTime ? new Date(r.startTime) : null,
+        endTime: r.endTime ? new Date(r.endTime) : null,
+      })),
+      primaryWorkoutSource,
+    );
+    const keepKeys = new Set(deduped.map((d) => `${d.source}:${d.sessionId}`));
+    return rows.filter((r) => keepKeys.has(`${r.source}:${r.sessionId}`));
   }
 
   async function resolveSleepGatedActiveDay(
@@ -392,7 +433,10 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     now: Date = new Date(),
     tz: string = prefs.timezone,
   ): Promise<{ activeDay: string; waitingForSleep: boolean }> {
-    const sleepGated = prefs.trackingMode === "fitbit" && prefs.hasGoogleConnected && prefs.sleepRolloverEnabled;
+    const sleepGated =
+      prefs.trackingMode === "fitbit" &&
+      (prefs.hasGoogleConnected || prefs.hasOpenWearablesConnected) &&
+      prefs.sleepRolloverEnabled;
     if (!sleepGated) {
       return resolveActiveHomeDay({ calendarToday });
     }
@@ -471,19 +515,19 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       if (prefs.trackingMode !== "fitbit" && row.source === "google") continue;
       energySources[row.source as EnergySource] = mapEnergyRow(row);
     }
-    const energy = pickEnergy(energySources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode);
+    const energy = pickEnergy(energySources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode, prefs.primaryRecoverySource);
     const sleepSources: Partial<Record<EnergySource, SleepRecord>> = {};
     for (const row of sleepRows) {
       sleepSources[row.source as EnergySource] = mapSleepRow(row);
     }
-    const sleep = pickSleep(sleepSources, prefs.trackingMode);
+    const sleep = pickSleep(sleepSources, prefs.trackingMode, prefs.primaryRecoverySource);
 
     const recoverySources: Partial<Record<EnergySource, RecoveryRecord>> = {};
     for (const row of recoveryRows) {
       recoverySources[row.source as EnergySource] = mapRecoveryRow(row);
     }
-    const recovery = pickRecovery(recoverySources, prefs.trackingMode);
-    const workouts = pickWorkouts(workoutRows.map(mapWorkoutRow), prefs.trackingMode);
+    const recovery = pickRecovery(recoverySources, prefs.trackingMode, prefs.primaryRecoverySource);
+    const workouts = pickWorkouts(workoutRows.map(mapWorkoutRow), prefs.trackingMode, prefs.primaryWorkoutSource);
 
     const totalBurn = energy?.totalKcal ?? null;
     const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
@@ -608,10 +652,10 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       const remaining = totals.calories == null ? target : round1(target - totals.calories);
       const diaryComplete = isDayComplete(day, activeDay);
       const sources = energyByDay.get(day) ?? {};
-      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode);
-      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.trackingMode);
-      const recovery = pickRecovery(recoveryByDay.get(day) ?? {}, prefs.trackingMode);
-      const workouts = pickWorkouts(workoutsByDay.get(day) ?? [], prefs.trackingMode);
+      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode, prefs.primaryRecoverySource);
+      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.trackingMode, prefs.primaryRecoverySource);
+      const recovery = pickRecovery(recoveryByDay.get(day) ?? {}, prefs.trackingMode, prefs.primaryRecoverySource);
+      const workouts = pickWorkouts(workoutsByDay.get(day) ?? [], prefs.trackingMode, prefs.primaryWorkoutSource);
       const totalBurn = energy?.totalKcal ?? null;
       const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
       const provisional = !diaryComplete || totalBurn == null || totals.calories == null;
@@ -969,6 +1013,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       bulkMode: prefs.bulkMode,
       onboardingCompletedAt: prefs.onboardingCompletedAt,
       needsOnboarding: prefs.needsOnboarding,
+      primaryRecoverySource: prefs.primaryRecoverySource,
+      primaryWorkoutSource: prefs.primaryWorkoutSource,
+      autoSyncEnabled: prefs.autoSyncEnabled,
       targetToday: resolveTargetForDay(prefs.targets, today),
       macroTargets: resolveMacroTargets(prefs.targets, today),
       targets: prefs.targets,
@@ -999,6 +1046,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const bulkMode = input.bulkMode ?? existing.bulkMode;
     const timezone = input.timezone ?? existing.timezone;
     const googleTwoWaySync = input.googleTwoWaySync ?? existing.googleTwoWaySync;
+    const primaryRecoverySource = input.primaryRecoverySource ?? existing.primaryRecoverySource;
+    const primaryWorkoutSource = input.primaryWorkoutSource ?? existing.primaryWorkoutSource;
+    const autoSyncEnabled = input.autoSyncEnabled ?? existing.autoSyncEnabled;
     const onboardingCompletedAt =
       input.onboardingCompleted === true
         ? new Date()
@@ -1017,6 +1067,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       sleepRolloverEnabled,
       bulkMode,
       onboardingCompletedAt,
+      primaryRecoverySource,
+      primaryWorkoutSource,
+      autoSyncEnabled,
     }).onConflictDoUpdate({
       target: nutritionPreference.userId,
       set: {
@@ -1027,6 +1080,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         sleepRolloverEnabled,
         bulkMode,
         onboardingCompletedAt,
+        primaryRecoverySource,
+        primaryWorkoutSource,
+        autoSyncEnabled,
       },
     });
     if (input.sleepGoalMinutes !== undefined) {
@@ -1592,10 +1648,10 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       const remaining = totals.calories == null ? target : round1(target - totals.calories);
       const diaryComplete = isDayComplete(day, activeDay);
       const sources = energyByDay.get(day) ?? {};
-      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode);
-      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.trackingMode);
-      const recovery = pickRecovery(recoveryByDay.get(day) ?? {}, prefs.trackingMode);
-      const workouts = pickWorkouts(workoutsByDay.get(day) ?? [], prefs.trackingMode);
+      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode, prefs.primaryRecoverySource);
+      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.trackingMode, prefs.primaryRecoverySource);
+      const recovery = pickRecovery(recoveryByDay.get(day) ?? {}, prefs.trackingMode, prefs.primaryRecoverySource);
+      const workouts = pickWorkouts(workoutsByDay.get(day) ?? [], prefs.trackingMode, prefs.primaryWorkoutSource);
       const totalBurn = energy?.totalKcal ?? null;
       const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
       const provisional = !diaryComplete || totalBurn == null || totals.calories == null;
@@ -1678,6 +1734,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       bulkMode: prefs.bulkMode,
       onboardingCompletedAt: prefs.onboardingCompletedAt,
       needsOnboarding: prefs.needsOnboarding,
+      primaryRecoverySource: prefs.primaryRecoverySource,
+      primaryWorkoutSource: prefs.primaryWorkoutSource,
+      autoSyncEnabled: prefs.autoSyncEnabled,
       targetToday: resolveTargetForDay(prefs.targets, calendarToday),
       macroTargets: resolveMacroTargets(prefs.targets, calendarToday),
       targets: prefs.targets,

@@ -3,6 +3,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { addDays } from "./nutrition-model";
 import * as schema from "./schema";
 import { computePulseRecovery, selectNonOverlappingSleepSessions, type PulseRecoveryDayInput } from "./pulse-engine";
+import { pickRecoveryRowForDay } from "./source-priority";
 
 export interface RecoverySleepInput {
   minutesAsleep: number;
@@ -226,7 +227,7 @@ export async function getRecoveryInsightsForUser(
   const yesterday = addDays(day, -1);
   const from7 = addDays(day, -7);
 
-  const [sleepRows, sessionRows, recoveryRows, goalRows, strainRows] = await Promise.all([
+  const [sleepRows, sessionRows, recoveryRows, goalRows, strainRows, prefRows] = await Promise.all([
     db
       .select()
       .from(schema.dailySleep)
@@ -274,6 +275,11 @@ export async function getRecoveryInsightsForUser(
           lte(schema.dailyStrain.day, yesterday),
         ),
       ),
+    db
+      .select({ primaryRecoverySource: schema.nutritionPreference.primaryRecoverySource })
+      .from(schema.nutritionPreference)
+      .where(eq(schema.nutritionPreference.userId, userId))
+      .limit(1),
   ]);
 
   const sessionDays = new Set(sessionRows.map((r) => r.day));
@@ -288,10 +294,8 @@ export async function getRecoveryInsightsForUser(
     if (!prev || s.minutesAsleep > prev.minutesAsleep) sleepByDay.set(s.day, s);
   }
 
-  const recByDay = new Map<string, (typeof recoveryRows)[number]>();
-  for (const r of [...recoveryRows].sort((a, b) => a.syncedAt.getTime() - b.syncedAt.getTime() || a.source.localeCompare(b.source))) {
-    recByDay.set(r.day, r);
-  }
+  const primaryRecoverySource = prefRows[0]?.primaryRecoverySource ?? "auto";
+  const recByDay = pickRecoveryRowForDay(recoveryRows, primaryRecoverySource);
 
   const todaySleep = sleepByDay.get(day) ?? null;
   const todayRecovery = recByDay.get(day) ?? null;

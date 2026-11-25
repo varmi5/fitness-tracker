@@ -2591,3 +2591,104 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   display: grid;
   gap: .15rem;
 }
+
+.ow-guide-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: .7rem;
+  min-width: 0;
+  max-width: 100%;
+}
+.ow-guide-intro,
+.ow-download-callout,
+.ow-invite-card {
+  padding: .72rem .82rem;
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: var(--silk-inset);
+  min-width: 0;
+  max-width: 100%;
+}
+.ow-guide-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  min-width: 0;
+}
+.ow-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .42rem .72rem;
+  min-height: 36px;
+  border-radius: 999px;
+  font-size: .77rem;
+  font-weight: 600;
+  background: var(--bg);
+  color: var(--muted);
+  border: 1px solid transparent;
+  box-shadow: var(--silk-raised-sm);
+  white-space: nowrap;
+}
+.ow-tab-btn.is-active {
+  background: var(--surface-raised);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.ow-step-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: .55rem;
+  min-width: 0;
+}
+.ow-steps-list {
+  font-size: .78rem;
+  margin: 0;
+  padding-left: 1.15rem;
+  display: grid;
+  gap: .35rem;
+  min-width: 0;
+}
+.ow-steps-list li {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.ow-invite-card {
+  display: grid;
+  gap: .55rem;
+}
+.ow-code-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+.ow-code-pill {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: .3rem .65rem;
+  border-radius: 10px;
+  background: var(--surface-raised);
+  box-shadow: var(--silk-raised-sm);
+}
+.ow-url-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .45rem;
+  min-width: 0;
+}
+.ow-url-text {
+  font-size: .74rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+  min-width: 0;
+}
+.ow-dual-tip {
+  font-size: .74rem;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.45;
+}

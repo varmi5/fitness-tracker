@@ -10,12 +10,15 @@ import { authClient } from "../lib/auth-client";
 import { displayUnit, displayValue, metrics, type Reading } from "../lib/metrics";
 import { type EnergySource, type TrackingMode } from "../lib/nutrition-model";
 import { CHATGPT_MCP_INSTRUCTIONS } from "../lib/onboarding";
+import { formatSourceLabel } from "../lib/source-priority";
+import { OpenWearablesGuide } from "./open-wearables-guide";
 import {
   fmtRelativeSync,
   type AuditEntry,
   type GoogleIntegrationStatus,
   type HevyIntegrationStatus,
   type NutritionSettings,
+  type OpenWearablesIntegrationStatus,
   type StrainSettings,
   type TrackerSnapshot,
 } from "./types";
@@ -26,6 +29,7 @@ interface SettingsViewProps {
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
   google: GoogleIntegrationStatus;
+  openWearables?: OpenWearablesIntegrationStatus;
   hevy?: HevyIntegrationStatus;
   strainSettings?: StrainSettings;
   audit: AuditEntry[];
@@ -41,6 +45,9 @@ interface SettingsViewProps {
   onSyncGoogle: (days?: number) => Promise<void>;
   onPushGoogle: (days?: number) => Promise<void>;
   onDisconnectGoogle: () => Promise<void>;
+  onCreateOpenWearablesInvite?: () => Promise<{ code: string; expiresAt: string | null; apiUrl: string | null } | null>;
+  onSyncOpenWearables?: (days?: number) => Promise<void>;
+  onDisconnectOpenWearables?: () => Promise<void>;
   onOpenOnboarding?: () => void;
   onMessage: (msg: string) => void;
 }
@@ -51,6 +58,7 @@ export function SettingsView({
   tracker,
   settings,
   google,
+  openWearables,
   hevy,
   strainSettings,
   audit,
@@ -66,6 +74,9 @@ export function SettingsView({
   onSyncGoogle,
   onPushGoogle,
   onDisconnectGoogle,
+  onCreateOpenWearablesInvite,
+  onSyncOpenWearables,
+  onDisconnectOpenWearables,
   onOpenOnboarding,
   onMessage,
 }: SettingsViewProps) {
@@ -82,6 +93,10 @@ export function SettingsView({
   );
   const [twoWaySync, setTwoWaySync] = useState(Boolean(settings.googleTwoWaySync));
   const [bulkMode, setBulkMode] = useState(Boolean(settings.bulkMode));
+  const [primaryRecoverySource, setPrimaryRecoverySource] = useState(settings.primaryRecoverySource ?? "auto");
+  const [primaryWorkoutSource, setPrimaryWorkoutSource] = useState(settings.primaryWorkoutSource ?? "auto");
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(settings.autoSyncEnabled !== false);
+  const [owInvite, setOwInvite] = useState<{ code: string; expiresAt: string | null; apiUrl: string | null } | null>(null);
 
   const [walkingEnabled, setWalkingEnabled] = useState(strainSettings?.walkingEnabled ?? true);
   const [walkingStepThreshold, setWalkingStepThreshold] = useState(
@@ -107,6 +122,9 @@ export function SettingsView({
     setPreferredSource(nextMode === "fitbit" ? "google" : "manual");
     setTwoWaySync(Boolean(settings.googleTwoWaySync));
     setBulkMode(Boolean(settings.bulkMode));
+    setPrimaryRecoverySource(settings.primaryRecoverySource ?? "auto");
+    setPrimaryWorkoutSource(settings.primaryWorkoutSource ?? "auto");
+    setAutoSyncEnabled(settings.autoSyncEnabled !== false);
     setTargetCalories(String(settings.targetToday));
     setSleepGoalHours(String((settings.sleepGoalMinutes ?? 480) / 60));
   }, [
@@ -116,6 +134,9 @@ export function SettingsView({
     settings.preferredEnergySource,
     settings.googleTwoWaySync,
     settings.bulkMode,
+    settings.primaryRecoverySource,
+    settings.primaryWorkoutSource,
+    settings.autoSyncEnabled,
     settings.targetToday,
   ]);
 
@@ -159,6 +180,9 @@ export function SettingsView({
           preferredEnergySource: resolvedSource,
           googleTwoWaySync: twoWaySync,
           bulkMode: nextBulk,
+          primaryRecoverySource,
+          primaryWorkoutSource,
+          autoSyncEnabled,
         },
       },
       nextBulk ? "Bulk mode enabled (green = at/over target, red = under)." : "Cut / Deficit mode enabled (green = under target, red = over).",
@@ -188,6 +212,9 @@ export function SettingsView({
           preferredEnergySource: resolvedSource,
           googleTwoWaySync: twoWaySync,
           bulkMode,
+          primaryRecoverySource,
+          primaryWorkoutSource,
+          autoSyncEnabled,
         },
       },
       "Preferences updated.",
@@ -299,7 +326,16 @@ export function SettingsView({
         <div style={{ minWidth: 0 }}>
           <strong style={{ fontSize: "1rem", overflowWrap: "anywhere" }}>{userName || "Member"}</strong>
           <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
-            Silk Telemetry · {google.connected ? "Google Health connected" : trackingMode === "manual" ? "Manual TDEE" : "Local"}
+            Silk Telemetry ·{" "}
+            {google.connected && openWearables?.connected
+              ? "Google Health + Open Wearables"
+              : google.connected
+                ? "Google Health connected"
+                : openWearables?.connected
+                  ? `Open Wearables (${openWearables.accountLabel || "Connected"})`
+                  : trackingMode === "manual"
+                    ? "Manual TDEE"
+                    : "Local"}
             {hevy?.connected ? " · Hevy connected" : ""}
           </div>
         </div>
@@ -400,14 +436,14 @@ export function SettingsView({
         </form>
       </SettingsDropdown>
 
-      {/* Expenditure Source & Timezone Preferences */}
+      {/* Expenditure Source, Multi-Wearable Priority & Timezone */}
       <SettingsDropdown
-        title="Expenditure Source & Timezone"
-        subtitle="Choose Manual TDEE mode or Fitbit Air (Google Health) mode"
-        badge={trackingMode === "fitbit" ? "Fitbit Air mode" : "Manual mode"}
+        title="Wearable Priority, Auto-Sync & Timezone"
+        subtitle="Configure live wearable mode, multi-watch priority & background refresh"
+        badge={trackingMode === "fitbit" ? "Wearable auto-sync" : "Manual mode"}
         badgeClass={trackingMode === "fitbit" ? "teal-soft" : "accent-soft"}
       >
-        <form onSubmit={submitPreferences}>
+        <form onSubmit={submitPreferences} style={{ display: "grid", gap: ".75rem", minWidth: 0 }}>
           <div className="segments" role="group" aria-label="Tracking mode">
             <button
               type="button"
@@ -421,7 +457,7 @@ export function SettingsView({
               aria-pressed={trackingMode === "fitbit"}
               onClick={() => selectMode("fitbit")}
             >
-              Google Health (Fitbit Air)
+              Wearable Auto-Sync
             </button>
           </div>
           <div className="input-grid">
@@ -430,16 +466,51 @@ export function SettingsView({
               <input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="Europe/London" />
             </label>
             <label>
-              Preferred expenditure source
+              Preferred expenditure mode
               <select
                 value={preferredSource}
                 onChange={(e) => selectMode(e.target.value === "google" ? "fitbit" : "manual")}
               >
                 <option value="manual">Manual TDEE entry</option>
-                <option value="google">Google Health (Fitbit Air)</option>
+                <option value="google">Live Wearables (Fitbit / Apple Health / Garmin)</option>
+              </select>
+            </label>
+            <label>
+              Primary Sleep &amp; Recovery watch
+              <select value={primaryRecoverySource} onChange={(e) => setPrimaryRecoverySource(e.target.value)}>
+                <option value="auto">Auto (Fitbit &gt; Oura &gt; Whoop &gt; Apple &gt; Garmin)</option>
+                <option value="google">Fitbit Air / Google Health</option>
+                <option value="apple">Apple Watch (Apple Health)</option>
+                <option value="garmin">Garmin</option>
+                <option value="oura">Oura Ring</option>
+                <option value="whoop">WHOOP</option>
+                <option value="health_connect">Android Health Connect</option>
+                <option value="samsung">Samsung Health</option>
+                <option value="polar">Polar</option>
+              </select>
+            </label>
+            <label>
+              Primary Workout &amp; HR watch
+              <select value={primaryWorkoutSource} onChange={(e) => setPrimaryWorkoutSource(e.target.value)}>
+                <option value="auto">Auto (Apple &gt; Garmin &gt; Polar &gt; Fitbit)</option>
+                <option value="apple">Apple Watch (Apple Health)</option>
+                <option value="garmin">Garmin</option>
+                <option value="google">Fitbit Air / Google Health</option>
+                <option value="polar">Polar</option>
+                <option value="suunto">Suunto</option>
+                <option value="whoop">WHOOP</option>
+                <option value="strava">Strava</option>
               </select>
             </label>
           </div>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={autoSyncEnabled}
+              onChange={(e) => setAutoSyncEnabled(e.target.checked)}
+            />
+            Auto-sync wearables quietly on app open, every 15 min &amp; morning rollover
+          </label>
           {google.connected && trackingMode === "fitbit" && (
             <label className="check-row">
               <input
@@ -450,8 +521,111 @@ export function SettingsView({
               Auto-push logged meals &amp; weights to Google Health (two-way write)
             </label>
           )}
+          <details style={{ minWidth: 0 }}>
+            <summary style={{ fontSize: ".82rem", fontWeight: 600, cursor: "pointer" }}>
+              Wearing two watches? (Dual-wear &amp; swap guide)
+            </summary>
+            <p style={{ fontSize: ".78rem", color: "var(--muted)", marginTop: ".4rem" }}>
+              <strong>Swapping watches</strong> (e.g. taking off Fitbit Air and wearing Apple Watch for runs/gym) fills in missing
+              workouts &amp; HR cleanly. <strong>Wearing both simultaneously</strong> is deduplicated automatically (within 10 min / 50%
+              overlap) using your Primary Workout watch above so TRIMP strain and steps never double-count. Keep{" "}
+              <strong>one consistent sleep watch</strong> overnight so your 28-day HRV/RHR readiness baseline stays comparable.
+            </p>
+          </details>
           <Button variant="secondary" disabled={busy} type="submit">Save preferences</Button>
         </form>
+      </SettingsDropdown>
+
+      {/* Apple Health, Android Health Connect & Multi-Wearable Hub (Open Wearables) */}
+      <SettingsDropdown
+        id="open-wearables-settings"
+        title="Apple Health, Health Connect & Garmin"
+        subtitle="Self-hosted Open Wearables hub: Apple Watch, Android Health Connect, Garmin, Oura, Whoop"
+        badge={
+          openWearables?.connected
+            ? `Connected · ${openWearables.providers.length ? openWearables.providers.map(formatSourceLabel).join(", ") : "Active"}`
+            : openWearables?.owUserId
+              ? "Waiting for app link"
+              : openWearables?.available
+                ? "Ready to link"
+                : "Env vars not set"
+        }
+        badgeClass={openWearables?.connected ? "teal-soft" : openWearables?.owUserId ? "amber-soft" : ""}
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".65rem", minWidth: 0 }}>
+          {!openWearables?.available && (
+            <p style={{ fontSize: ".82rem" }}>
+              Set <code>OPEN_WEARABLES_API_URL</code> and <code>OPEN_WEARABLES_API_KEY</code> in Coolify to link Apple Health,
+              Health Connect, Garmin, Whoop, or Oura via your NAS Open Wearables server.
+            </p>
+          )}
+
+          {openWearables?.available && (
+            <>
+              {openWearables.owUserId && (
+                <div style={{ display: "grid", gap: ".4rem", fontSize: ".82rem", color: "var(--muted)", minWidth: 0 }}>
+                  <div>
+                    Status: <strong style={{ color: "var(--text)" }}>{openWearables.status ?? "pending"}</strong> · Last sync:{" "}
+                    <strong style={{ color: "var(--text)" }}>{fmtRelativeSync(openWearables.lastSync)}</strong>
+                  </div>
+                  {openWearables.providers.length > 0 && (
+                    <div className="button-row">
+                      {openWearables.providers.map((p) => (
+                        <span key={p} className="pill teal-soft">
+                          {formatSourceLabel(p)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {openWearables.lastError && (
+                    <div style={{ color: "var(--danger-fg)", overflowWrap: "anywhere" }}>
+                      Last error: {openWearables.lastError}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <OpenWearablesGuide
+                openWearables={openWearables}
+                invite={owInvite}
+                busy={busy}
+                onGenerateInvite={
+                  onCreateOpenWearablesInvite
+                    ? async () => {
+                        const invite = await onCreateOpenWearablesInvite();
+                        if (invite) setOwInvite(invite);
+                      }
+                    : undefined
+                }
+                onMessage={onMessage}
+                formatExpiry={fmtRelativeSync}
+              />
+
+              {openWearables.owUserId && onSyncOpenWearables && (
+                <div className="button-row">
+                  <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncOpenWearables(3)}>
+                    <RefreshCw size={14} /> Sync now (3d)
+                  </button>
+                  <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncOpenWearables(14)}>
+                    Pull 14 days
+                  </button>
+                </div>
+              )}
+
+              {openWearables.owUserId && onDisconnectOpenWearables && (
+                <button
+                  type="button"
+                  className="danger compact"
+                  style={{ justifySelf: "start" }}
+                  disabled={busy}
+                  onClick={() => void onDisconnectOpenWearables()}
+                >
+                  Disconnect Open Wearables
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </SettingsDropdown>
 
       {/* Google Health / Fitbit Air Two-Way Integration & Saved File Importer */}
