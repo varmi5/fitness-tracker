@@ -1016,7 +1016,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Could not generate connection code.");
       if (payload.status) setOpenWearables(payload.status);
-      showToast("Open Wearables connection code ready.", "success");
       return {
         code: payload.code,
         expiresAt: payload.expiresAt ?? null,

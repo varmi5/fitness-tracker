@@ -7,7 +7,7 @@ import type { OpenWearablesIntegrationStatus } from "./types";
 type DataSource = "apple" | "android" | "cloud";
 
 const sources: Record<DataSource, string> = {
-  apple: "Apple Health (iPhone or Apple Watch)",
+  apple: "Apple Health",
   android: "Health Connect or Samsung Health",
   cloud: "Garmin, Oura, WHOOP or Strava",
 };
@@ -48,6 +48,7 @@ export function OpenWearablesGuide({
   const focusStep = useRef(false);
   const hostUrl = invite?.apiUrl || openWearables?.apiUrl;
   const apple = source === "apple";
+  const canGenerate = onGenerateInvite && openWearables?.available !== false;
 
   useEffect(() => {
     setSource(initialPlatform);
@@ -150,18 +151,18 @@ export function OpenWearablesGuide({
               <>
                 <strong>Get your pairing code</strong>
                 <p className="ow-detail">Use this one-time code and Host URL in Open Wearables.</p>
-                {onGenerateInvite && openWearables?.available !== false && (
+                {canGenerate && !invite && (
                   <button
                     type="button"
-                    className={invite ? "secondary compact" : "unlock-btn"}
+                    className="unlock-btn"
                     disabled={busy}
-                    onClick={() => void onGenerateInvite()}
+                    onClick={() => void onGenerateInvite?.()}
                   >
-                    {busy ? "Getting code…" : invite ? "Get a new code" : "Get link code"}
+                    {busy ? "Getting code…" : "Get link code"}
                   </button>
                 )}
                 {invite && (
-                  <div className="ow-invite-card" role="group" aria-label="Pairing details">
+                  <div className="ow-invite-card" role="group" aria-label="Pairing details" aria-live="polite">
                     <span className="ow-detail">
                       Pairing code{invite.expiresAt ? ` · Expires ${formatExpiry ? formatExpiry(invite.expiresAt) : new Date(invite.expiresAt).toLocaleString()}` : ""}
                     </span>
@@ -184,7 +185,14 @@ export function OpenWearablesGuide({
                     )}
                   </div>
                 )}
-                <button type="button" className="secondary compact" onClick={() => advanceTo(2)}>Next · Sync</button>
+                {invite && (
+                  <button type="button" className="unlock-btn" onClick={() => advanceTo(2)}>Next · Sync</button>
+                )}
+                {canGenerate && invite && (
+                  <button type="button" className="secondary compact ow-regenerate" disabled={busy} onClick={() => void onGenerateInvite()}>
+                    {busy ? "Getting code…" : "Get a new code"}
+                  </button>
+                )}
               </>
             )}
             {step === 2 && (
