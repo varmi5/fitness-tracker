@@ -402,6 +402,12 @@ export function MeasurementsView({
                 </div>
               )}
 
+              {pulseInsights.biologicalAge.status === "provisional" && (
+                <div style={{ fontSize: ".74rem", color: "var(--muted)" }}>
+                  Early estimate ({pulseInsights.biologicalAge.activeDays}d synced) — stabilizes after 20+ days.
+                </div>
+              )}
+
               {pulseInsights.biologicalAge.contributors.length > 0 && (
                 <>
                   <button

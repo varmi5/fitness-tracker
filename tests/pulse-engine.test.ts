@@ -125,6 +125,22 @@ test("Biological age & FRIEND VO2max percentile compute expected healthspan delt
   assert.equal(bio.status, "ready");
   assert.ok(bio.biologicalAge != null && bio.biologicalAge < 30);
   assert.ok(bio.deltaYears != null && bio.deltaYears < 0);
+
+  const lifterDays = Array.from({ length: 30 }, (_, i) => ({
+    day: addDays(anchor, -29 + i),
+    sleepHours: 7.5,
+    sri: 80,
+    zone13Min: 10,
+    strengthMin: 26,
+    steps: 7000,
+    restingHr: 58,
+    weightKg: 72,
+  }));
+  const youngLifter = computeBiologicalAge(lifterDays, { age: 23, sex: "male", heightCm: 173 }, anchor);
+  assert.ok(
+    youngLifter.biologicalAge != null && youngLifter.biologicalAge <= 23.5,
+    `Expected healthy 23yo lifter bio age <= 23.5, got ${youngLifter.biologicalAge}`,
+  );
 });
 
 test("Energy bank, daytime stress, HRR, and auto behavior impacts compute accurately", () => {

@@ -44,8 +44,8 @@ export default async function Home() {
 
   const prefToday = localDay(new Date(), nutritionSettings.timezone);
   const home = await nutrition.homeSnapshot(prefToday, { canReadSleep: google.canReadSleep });
-  const strain = await strainSvc.computeDay(prefToday, strainSettings);
-  const recoveryInsights = await getRecoveryInsightsForUser(db, userId, prefToday);
+  const strain = await strainSvc.computeDay(home.activeDay, strainSettings);
+  const recoveryInsights = await getRecoveryInsightsForUser(db, userId, home.activeDay);
 
   return (
     <Dashboard

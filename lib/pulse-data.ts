@@ -321,6 +321,7 @@ export async function getPulseInsightsForUser(
     ...workoutsByDay.keys(),
   ]);
 
+  const hasAnyWorkoutHistory = hevyRows.length > 0 || workoutRows.length > 0;
   const healthspanDays: HealthspanDayInput[] = [...allDaysSet]
     .sort()
     .map((d) => {
@@ -334,7 +335,7 @@ export async function getPulseInsightsForUser(
         sri: sleep.sri,
         zone13Min: w?.cardioMin ?? (e?.activeZoneMinutes != null ? e.activeZoneMinutes : null),
         zone45Min: w?.vigorousMin ?? null,
-        strengthMin: w?.strengthMin ?? 0,
+        strengthMin: hasAnyWorkoutHistory ? (w?.strengthMin ?? 0) : null,
         steps: e?.steps ?? null,
         vo2max: r?.vo2Max ?? null,
         restingHr: r?.restingHrBpm ?? null,
@@ -343,8 +344,12 @@ export async function getPulseInsightsForUser(
       };
     });
 
+  // Exclude an incomplete in-progress current day when completed history exists
+  const completedBioDays = healthspanDays.filter((d) => d.day < day);
+  const bioInput = completedBioDays.length > 0 ? completedBioDays : healthspanDays;
+
   const biologicalAge = computeBiologicalAge(
-    healthspanDays,
+    bioInput,
     { age, sex, heightCm: prof?.heightCm ?? null },
     day,
   );

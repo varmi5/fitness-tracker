@@ -3,7 +3,7 @@
 import { ReminderSettings } from "./reminder-settings";
 import { MacroTargetEditor } from "./macro-target-editor";
 import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
-import { ArrowDownToLine, ChevronDown, Copy, Fingerprint, RefreshCw, Upload } from "lucide-react";
+import { AlertTriangle, ArrowDownToLine, ChevronDown, Copy, Fingerprint, RefreshCw, Upload } from "lucide-react";
 import { TwoWaySyncIcon } from "../components/icons";
 import { Button } from "../components/ui/button";
 import { authClient } from "../lib/auth-client";
@@ -29,6 +29,7 @@ interface SettingsViewProps {
   audit: AuditEntry[];
   mcpEnabled: boolean;
   busy: boolean;
+  googleSyncPct?: number | null;
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
   onNutritionAction: (action: object, successMessage: string) => Promise<boolean>;
   onSaveStrainSettings?: (data: Partial<StrainSettings>) => Promise<boolean>;
@@ -58,6 +59,7 @@ export function SettingsView({
   audit,
   mcpEnabled,
   busy,
+  googleSyncPct = null,
   onSaveTracker,
   onNutritionAction,
   onSaveStrainSettings,
@@ -480,21 +482,41 @@ export function SettingsView({
             </div>
           )}
 
-          <div className="button-row">
-            {google.available && (!google.connected || missingWriteScopes) && (
+          {!google.connected && google.available && (
+            <div className="button-row">
               <a
-                href={missingWriteScopes || twoWaySync ? "/api/integrations/google/connect?write=1" : "/api/integrations/google/connect"}
+                href={twoWaySync ? "/api/integrations/google/connect?write=1" : "/api/integrations/google/connect"}
                 className="unlock-btn"
               >
-                {missingWriteScopes ? "Reconnect for sleep & 2-way permissions" : "Connect Google Health"}
+                Connect Google Health
               </a>
-            )}
-            {google.connected && (
-              <>
-                <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncGoogle(14)}>
-                  <RefreshCw size={14} /> Pull 14 days
+            </div>
+          )}
+
+          {google.connected && (
+            <div style={{ display: "grid", gap: ".75rem" }}>
+              <div className="button-row">
+                <button
+                  type="button"
+                  className="secondary compact"
+                  disabled={busy || googleSyncPct != null}
+                  onClick={() => void onSyncGoogle(14)}
+                >
+                  <RefreshCw size={14} className={googleSyncPct != null ? "spin" : undefined} />{" "}
+                  {googleSyncPct != null ? (
+                    <>
+                      Syncing <span className="num">{googleSyncPct}%</span>
+                    </>
+                  ) : (
+                    "Pull 14 days"
+                  )}
                 </button>
-                <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncGoogle(30)}>
+                <button
+                  type="button"
+                  className="secondary compact"
+                  disabled={busy || googleSyncPct != null}
+                  onClick={() => void onSyncGoogle(30)}
+                >
                   Pull 30 days
                 </button>
                 {google.canWriteNutrition && (
@@ -507,24 +529,49 @@ export function SettingsView({
                     </button>
                   </>
                 )}
-                {google.available && !missingWriteScopes && (
+              </div>
+
+              {google.available && (
+                <div style={{ display: "grid", gap: ".32rem" }}>
                   <a
-                    href={twoWaySync || google.canWriteNutrition || google.canWriteWeights ? "/api/integrations/google/connect?write=1" : "/api/integrations/google/connect"}
-                    className="secondary compact"
+                    href={
+                      missingWriteScopes || twoWaySync || google.canWriteNutrition || google.canWriteWeights
+                        ? "/api/integrations/google/connect?write=1"
+                        : "/api/integrations/google/connect"
+                    }
+                    className="success-btn wide"
                   >
-                    Reconnect (keep data)
+                    <RefreshCw size={15} />
+                    {missingWriteScopes
+                      ? "Reconnect for sleep & 2-way permissions (keep data)"
+                      : "Reconnect Google Health (keep data)"}
                   </a>
-                )}
-                <button type="button" className="danger compact" disabled={busy} onClick={() => void onDisconnectGoogle()}>
-                  Disconnect &amp; delete Google data
+                  <p className="muted" style={{ fontSize: ".74rem", margin: 0 }}>
+                    Refreshes your Google sign-in and scopes without deleting synced history.
+                  </p>
+                </div>
+              )}
+
+              <div className="danger-zone-box" role="region" aria-label="Remove Google Health connection">
+                <div className="danger-zone-head">
+                  <AlertTriangle size={15} aria-hidden="true" />
+                  <span>Danger zone</span>
+                </div>
+                <p className="danger-zone-copy">
+                  Warning: Removing your connection deletes all synced Google Health calories, sleep, recovery vitals,
+                  heart-rate samples, and workouts from FitnessTrackr.
+                </p>
+                <button
+                  type="button"
+                  className="danger wide"
+                  style={{ marginTop: 0 }}
+                  disabled={busy}
+                  onClick={() => void onDisconnectGoogle()}
+                >
+                  Remove connection &amp; delete all Google Health data
                 </button>
-              </>
-            )}
-          </div>
-          {google.connected && google.available && (
-            <p className="muted" style={{ fontSize: ".74rem", margin: 0 }}>
-              Reconnect refreshes your Google sign-in and permissions without deleting any synced history.
-            </p>
+              </div>
+            </div>
           )}
         </div>
 

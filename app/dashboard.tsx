@@ -106,6 +106,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   const [audit, setAudit] = useState(initial.audit);
   const [busy, setBusy] = useState(false);
+  const [googleSyncPct, setGoogleSyncPct] = useState<number | null>(null);
+  const googleSyncLock = useRef(false);
   const [toast, setToast] = useState<{ id: number; text: string; kind: "success" | "error" | "info" } | null>(null);
   const toastSeq = useRef(0);
 
@@ -776,8 +778,13 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   }
 
   async function syncGoogle(days = 14) {
-    setBusy(true);
+    if (googleSyncLock.current) return;
+    googleSyncLock.current = true;
     setToast(null);
+    setGoogleSyncPct(10);
+    const ticker = window.setInterval(() => {
+      setGoogleSyncPct((p) => (p == null ? null : Math.min(72, p + Math.max(1, Math.round((72 - p) * 0.14)))));
+    }, 250);
     try {
       const from = addDays(today, 1 - days);
       const res = await fetch("/api/integrations/google/sync", {
@@ -785,10 +792,13 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ from, to: today }),
       });
+      window.clearInterval(ticker);
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Google sync failed.");
       if (payload.status) setGoogle(payload.status);
+      setGoogleSyncPct(78);
       await refreshAccountAndMeta();
+      setGoogleSyncPct(88);
       await Promise.all([
         refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
         refreshTracker(),
@@ -811,12 +821,17 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           .catch(() => undefined),
       ]);
       void refreshSyncToken().catch(() => null);
+      setGoogleSyncPct(100);
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
       const sleepNote = payload.syncedSleepDays ? ` & ${payload.syncedSleepDays} sleep session(s)` : "";
       showToast(`Synced ${payload.syncedDays} day(s)${sleepNote} from Google Health.`, "success");
     } catch (error) {
+      window.clearInterval(ticker);
       showToast(error instanceof Error ? error.message : "Google sync failed.", "error");
     } finally {
-      setBusy(false);
+      window.clearInterval(ticker);
+      setGoogleSyncPct(null);
+      googleSyncLock.current = false;
     }
   }
 
@@ -946,13 +961,19 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           {isFitbitMode && google.connected && (
             <button
               type="button"
-              className="secondary compact"
-              style={{ minHeight: "38px", padding: ".2rem .6rem", fontSize: ".74rem" }}
-              disabled={busy}
+              className={`secondary compact sync-pill-btn ${googleSyncPct != null ? "is-syncing" : ""}`}
+              style={{ ["--sync-pct" as string]: `${googleSyncPct ?? 0}%` }}
+              disabled={busy || googleSyncPct != null}
               onClick={() => void syncGoogle(14)}
-              aria-label="Sync Google Health"
+              aria-label={googleSyncPct != null ? `Syncing Google Health ${googleSyncPct}%` : "Sync Google Health"}
             >
-              <RefreshCw size={13} /> Sync
+              <RefreshCw size={13} className={googleSyncPct != null ? "spin" : undefined} />
+              {googleSyncPct != null ? (
+                <span className="num sync-pct-label">{googleSyncPct}%</span>
+              ) : (
+                "Sync"
+              )}
+              {googleSyncPct != null && <span className="sync-pill-fill" aria-hidden="true" />}
             </button>
           )}
           <button
@@ -1089,6 +1110,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
               audit={audit}
               mcpEnabled={initial.mcpEnabled}
               busy={busy}
+              googleSyncPct={googleSyncPct}
               onSaveTracker={saveTracker}
               onNutritionAction={(action, msg) => runNutritionAction(action as { action: string }, msg)}
               onSaveStrainSettings={saveStrainSettings}
