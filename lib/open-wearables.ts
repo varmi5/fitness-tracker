@@ -64,6 +64,42 @@ export function normalizeOwSource(provider?: string | null): EnergySource {
   return "apple";
 }
 
+let developerSession: { token: string; usableUntil: number } | null = null;
+let developerLogin: Promise<string> | null = null;
+
+function getInvitationDeveloperToken(base: string, email: string, password: string): Promise<string> {
+  if (developerSession && developerSession.usableUntil > Date.now()) {
+    return Promise.resolve(developerSession.token);
+  }
+  developerLogin ??= (async () => {
+    const response = await fetch(`${base}/api/v1/auth/login`, {
+      method: "POST",
+      body: new URLSearchParams({ username: email, password }),
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(15000),
+    }).catch(() => null);
+    if (!response?.ok) {
+      throw new NutritionError("Couldn’t sign in to Open Wearables. Try again or contact support.", 502);
+    }
+    const session = await response.json().catch(() => null) as {
+      access_token?: string;
+      expires_in?: number;
+    } | null;
+    if (typeof session?.access_token !== "string" || !session.access_token) {
+      throw new NutritionError("Open Wearables didn’t return a pairing session. Try again or contact support.", 502);
+    }
+    developerSession = {
+      token: session.access_token,
+      usableUntil: Date.now() + Math.max(0, (session.expires_in ?? 0) - 30) * 1000,
+    };
+    return session.access_token;
+  })().finally(() => {
+    developerLogin = null;
+  });
+  return developerLogin;
+}
+
 function ownOw(userId: string) {
   return and(eq(healthIntegration.userId, userId), eq(healthIntegration.provider, OPEN_WEARABLES_PROVIDER));
 }
@@ -215,7 +251,7 @@ export async function ensureOpenWearablesUser(db: AuthDatabase, userId: string):
       `/api/v1/users?search=${encodeURIComponent(userId)}&limit=10`,
     );
     const matches = unwrapItems<{ id: string; external_user_id?: string }>(lookupRes.data);
-    const exact = matches.find((m) => m.external_user_id === userId) ?? matches[0];
+    const exact = matches.find((match) => match.external_user_id === userId);
     if (exact?.id) owUserId = exact.id;
   }
 
@@ -251,15 +287,25 @@ export async function ensureOpenWearablesUser(db: AuthDatabase, userId: string):
 
 export async function createOpenWearablesInviteCode(db: AuthDatabase, userId: string) {
   const owUserId = await ensureOpenWearablesUser(db, userId);
-  const res = await owFetch<{ id?: string; code?: string; expires_at?: string; detail?: string }>(
+  const base = apiBaseUrl();
+  const email = process.env.OPEN_WEARABLES_DEVELOPER_EMAIL?.trim();
+  const password = process.env.OPEN_WEARABLES_DEVELOPER_PASSWORD;
+  const token = base && email && password ? await getInvitationDeveloperToken(base, email, password) : null;
+  const res = await owFetch<{ code?: string; expires_at?: string }>(
     `/api/v1/users/${encodeURIComponent(owUserId)}/invitation-code`,
-    { method: "POST" },
+    {
+      method: "POST",
+      cache: "no-store",
+      redirect: "error",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    },
   );
+  if (res.status === 401 || res.status === 403) {
+    if (developerSession?.token === token) developerSession = null;
+    throw new NutritionError("Pairing is temporarily unavailable. Try again or contact support.", 503);
+  }
   if (!res.ok || !res.data?.code) {
-    throw new NutritionError(
-      res.data?.detail || `Could not generate Open Wearables connection code (${res.status}).`,
-      res.status >= 500 ? 502 : 422,
-    );
+    throw new NutritionError("Couldn’t get a pairing code. Try again or contact support.", 502);
   }
   return {
     code: res.data.code,
