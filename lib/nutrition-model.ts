@@ -277,6 +277,7 @@ export const sleepInput = z.object({
 export function computeSleepEfficiencyPct(
   minutesAsleep: number | null | undefined,
   minutesAwake: number | null | undefined,
+  intervalMinutes?: number | null,
 ): number | null {
   if (
     minutesAsleep == null ||
@@ -290,6 +291,8 @@ export function computeSleepEfficiencyPct(
   }
   const total = minutesAsleep + minutesAwake;
   if (total <= 0) return null;
+  // Unclassified/restless/latency minutes are not silently assumed asleep or awake.
+  if (intervalMinutes !== undefined && (intervalMinutes === null || !Number.isFinite(intervalMinutes) || intervalMinutes <= 0 || Math.abs(total - intervalMinutes) > 2)) return null;
   return Math.round((minutesAsleep / total) * 100);
 }
 

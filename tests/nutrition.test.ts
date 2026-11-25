@@ -389,6 +389,9 @@ test("resolveActiveHomeDay rolls over cleanly at midnight and trackingMode stric
   assert.equal(computeSleepEfficiencyPct(0, 0), null);
   assert.equal(computeSleepEfficiencyPct(0, 45), 0);
   assert.equal(computeSleepEfficiencyPct(-10, 20), null);
+  assert.equal(computeSleepEfficiencyPct(360, 0, 480), null);
+  assert.equal(computeSleepEfficiencyPct(360, 120, 480), 75);
+  assert.equal(computeSleepEfficiencyPct(420, 60, null), null);
 
   // DB-backed rollover & manual vs fitbit mode gating
   await db.insert(schema.user).values({
@@ -587,7 +590,7 @@ test("resolveActiveHomeDay rolls over cleanly at midnight and trackingMode stric
   assert.equal(fitbitYesterday.energy?.activeZoneMinutes, 42);
   assert.equal(fitbitYesterday.energy?.distanceMeters, 7850.5);
   assert.equal(fitbitYesterday.energy?.floors, 14);
-  assert.equal(fitbitYesterday.sleep?.sleepEfficiencyPct, 93);
+  assert.equal(fitbitYesterday.sleep?.sleepEfficiencyPct, null); // No interval establishes full sleep/wake coverage.
   assert.equal(fitbitYesterday.recovery?.restingHrBpm, 56);
   assert.equal(fitbitYesterday.recovery?.skinTempDeltaC, -0.35);
   assert.equal(fitbitYesterday.recovery?.vo2Max, 47.4);
