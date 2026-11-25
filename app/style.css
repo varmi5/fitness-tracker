@@ -581,8 +581,7 @@ button.card:active,
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: .7rem;
 }
-.metric-card:first-child, .recomp { grid-column: 1 / -1; }
-.metric-card:first-child { background: var(--measure-lead-bg); }
+.recomp { grid-column: 1 / -1; }
 .reading { font-size: clamp(1.75rem, 6.5vw, 2.8rem); letter-spacing: -.05em; line-height: 1.15; font-weight: 650; margin: .25rem 0 .45rem; font-variant-numeric: tabular-nums; }
 .reading small { font-size: .88rem; letter-spacing: 0; color: var(--muted); font-weight: 540; }
 .metric-meta { display: flex; justify-content: space-between; font-size: .77rem; margin: .22rem 0; color: var(--muted); }
@@ -691,6 +690,7 @@ button.card:active,
 
 .modal-top {
   flex-shrink: 0;
+  min-width: 0;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   padding: max(.5rem, env(safe-area-inset-top)) 1rem .65rem;
@@ -1088,7 +1088,7 @@ summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight:
 @media (min-width: 760px) {
   .shell { padding-inline: 1.5rem; }
   .measure-grid, .insight-grid, .input-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .metric-card:first-child, .recomp { grid-column: auto; }
+  .recomp { grid-column: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   .screen, button { animation: none; transition: none; }
@@ -1352,7 +1352,7 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   text-align: center;
 }
 .bevel-ring-center strong {
-  font-size: 1.32rem;
+  font-size: clamp(1.04rem, 3.8vw, 1.24rem);
   font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 1;
@@ -1817,6 +1817,8 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 .cal-filter-row {
   display: flex;
   flex-wrap: nowrap;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
   gap: .38rem;
   padding: .15rem .1rem;
@@ -1828,6 +1830,10 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 }
 .cal-filter-row button {
   flex-shrink: 0;
+}
+.cal-detail-strip .energy-cell strong {
+  font-size: .9rem;
+  white-space: nowrap;
 }
 @media (max-width: 440px) {
   .energy-cell {

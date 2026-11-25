@@ -524,6 +524,30 @@ export function TrainingView({
                 </div>
               )}
 
+              {pulseInsights?.workoutHrrById[act.id] && (() => {
+                const hrr = pulseInsights.workoutHrrById[act.id];
+                return (
+                  <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
+                    <div className="energy-cell">
+                      <span>HRR 1m</span>
+                      <strong className="num" style={{ color: "var(--recovery-color)" }}>
+                        {hrr.after1Minute != null ? `−${hrr.after1Minute} bpm` : "—"}
+                      </strong>
+                    </div>
+                    <div className="energy-cell">
+                      <span>HRR 2m</span>
+                      <strong className="num">
+                        {hrr.after2Minutes != null ? `−${hrr.after2Minutes} bpm` : "—"}
+                      </strong>
+                    </div>
+                    <div className="energy-cell">
+                      <span>Peak End HR</span>
+                      <strong className="num">{hrr.endHr} bpm</strong>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {act.notes.map((n, idx) => (
                 <p key={idx} style={{ fontSize: ".76rem", color: "var(--muted)", margin: 0 }}>{n}</p>
               ))}

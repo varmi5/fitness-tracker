@@ -456,7 +456,7 @@ export function HomeView({
 
       {/* Calorie Intake Linear Slider */}
       <CalorieSlider
-        title="Energy Balance & Intake"
+        title="Calorie Intake"
         consumedText={intake == null ? "0" : fmtKcal(intake)}
         targetText={`${fmtKcal(target)} kcal`}
         statusText={remainingLabel}
