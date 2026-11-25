@@ -356,24 +356,26 @@ export function TrainingView({
 
     if (page.kind === "recovery") {
       const rec = recoveryInsights;
+      const recScore = effectiveRecovery ?? null;
+      const recBand = pulseInsights?.recovery.band ?? rec?.band ?? "unavailable";
       return (
         <>
           {backHeader("Recovery")}
           <section className="card" style={{ display: "grid", gap: ".9rem", justifyItems: "center" }} aria-label="Recovery Insights">
             <BevelScoreRing
               label="Recovery Score"
-              value={rec?.score ?? null}
-              displayText={rec?.score != null ? `${rec.score}%` : "—"}
-              pct={rec?.score ?? 0}
+              value={recScore}
+              displayText={recScore != null ? `${Math.round(recScore)}%` : "—"}
+              pct={recScore ?? 0}
               color="var(--recovery-color)"
               size={128}
               strokeWidth={10}
               sublabel={
-                rec?.band === "optimal"
+                recBand === "optimal"
                   ? "Optimal"
-                  : rec?.band === "moderate"
+                  : recBand === "moderate"
                     ? "Moderate"
-                    : rec?.band === "strained"
+                    : recBand === "strained"
                       ? "Strained"
                       : "Pending sync"
               }
@@ -760,7 +762,7 @@ export function TrainingView({
                 type="button"
                 className={`card card-interactive unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}
                 onClick={() => setPage({ kind: "cardio" })}
-                style={{ width: "100%", textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
+                style={{ width: "100%", textAlign: "left" }}
               >
                 <div className="split-row">
                   <span className="eyebrow">Cardio Load</span>
@@ -803,7 +805,7 @@ export function TrainingView({
                 type="button"
                 className={`card card-interactive unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
                 onClick={() => setPage({ kind: "muscular" })}
-                style={{ width: "100%", textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
+                style={{ width: "100%", textAlign: "left" }}
               >
                 <div className="split-row">
                   <span className="eyebrow">Muscular Load</span>
@@ -851,7 +853,7 @@ export function TrainingView({
           type="button"
           className={`card card-interactive unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
           onClick={() => setPage({ kind: "muscles" })}
-          style={{ width: "100%", textAlign: "left", background: "var(--surface)", color: "var(--text)" }}
+          style={{ width: "100%", textAlign: "left" }}
         >
           <div className="split-row">
             <div>
