@@ -2599,8 +2599,6 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   min-width: 0;
   max-width: 100%;
 }
-.ow-guide-intro,
-.ow-download-callout,
 .ow-invite-card {
   padding: .72rem .82rem;
   border-radius: 14px;
@@ -2608,6 +2606,39 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   box-shadow: var(--silk-inset);
   min-width: 0;
   max-width: 100%;
+}
+.ow-guide-heading {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+.ow-source-picker {
+  display: grid;
+  gap: .3rem;
+  min-width: 0;
+  font-size: .84rem;
+  font-weight: 600;
+}
+.ow-source-picker select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  font-size: 1rem;
+}
+.ow-detail {
+  margin: 0;
+  font-size: .84rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.ow-install-link {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: .35rem;
+  min-height: 44px;
+  text-decoration: underline;
+  text-underline-offset: .18em;
 }
 .ow-guide-tabs {
   display: flex;
@@ -2620,7 +2651,7 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   align-items: center;
   gap: .35rem;
   padding: .42rem .72rem;
-  min-height: 36px;
+  min-height: 44px;
   border-radius: 999px;
   font-size: .77rem;
   font-weight: 600;
@@ -2686,12 +2717,6 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   max-width: 100%;
   min-width: 0;
 }
-.ow-dual-tip {
-  font-size: .74rem;
-  color: var(--muted);
-  margin: 0;
-  line-height: 1.45;
-}
 .device-logo-tile {
   width: 36px;
   height: 36px;
@@ -2718,46 +2743,4 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   font-weight: 700;
   font-size: .88rem;
   min-width: 0;
-}
-.ow-step-list {
-  display: grid;
-  gap: .45rem;
-  min-width: 0;
-}
-.ow-step-row {
-  display: flex;
-  align-items: flex-start;
-  gap: .6rem;
-  padding: .62rem .72rem;
-  border-radius: 13px;
-  background: var(--bg);
-  box-shadow: var(--silk-inset);
-  min-width: 0;
-}
-.ow-step-num {
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: .72rem;
-  font-weight: 700;
-  background: var(--surface-raised);
-  color: var(--accent);
-  box-shadow: var(--silk-raised-sm);
-  flex-shrink: 0;
-  margin-top: .08rem;
-}
-.ow-step-copy {
-  display: grid;
-  gap: .1rem;
-  font-size: .76rem;
-  line-height: 1.38;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.ow-step-copy strong {
-  font-size: .8rem;
-  color: var(--text);
 }
