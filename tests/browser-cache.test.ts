@@ -32,3 +32,30 @@ test("persistent cache survives reopening, isolates accounts, and clears device 
   await clearBrowserCache();
   assert.equal(await readBrowserCache("b", "bootstrap"), null);
 });
+
+test("the previous browser cache schema retains saved diary data on upgrade", async () => {
+  const { IDBFactory } = await import("fake-indexeddb");
+  const original = globalThis.indexedDB;
+  globalThis.indexedDB = new IDBFactory();
+  try {
+    const legacy = await new Promise<IDBDatabase>((resolve, reject) => {
+      const open = indexedDB.open("fitnesstrackr-private-v1", 1);
+      open.onupgradeneeded = () => open.result.createObjectStore("records", { keyPath: "id" });
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => reject(open.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const tx = legacy.transaction("records", "readwrite");
+      tx.objectStore("records").put({
+        ...row(1), id: "u:day:2020-01-01", key: "day:2020-01-01", value: { day: "2020-01-01" },
+      });
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error);
+    });
+    legacy.close();
+    const { readBrowserCache } = await import("../lib/browser-cache");
+    assert.deepEqual((await readBrowserCache("u", "day:2020-01-01"))?.value, { day: "2020-01-01" });
+  } finally {
+    globalThis.indexedDB = original;
+  }
+});

@@ -1,3 +1,4 @@
+import { logDiaryLoadFailure } from "../../../lib/diary-load-diagnostics";
 import { z } from "zod";
 import { localDay } from "../../../lib/nutrition-model";
 import { getPulseInsightsForUser } from "../../../lib/pulse-data";
@@ -20,6 +21,7 @@ export async function GET(request: Request) {
     return json(insights);
   } catch (error) {
     if (error instanceof z.ZodError) return json({ message: error.issues[0]?.message ?? "Invalid day." }, 400);
+    logDiaryLoadFailure("pulse", error);
     return json({ message: "Could not compute Pulse insights." }, 500);
   }
 }

@@ -14,10 +14,14 @@ unused for 30 days expire. Browser storage eviction or private browsing can remo
 local copies. Server records remain the source of truth. The cache stores no
 passwords, OAuth tokens or provider credentials. It is cleared on sign-out,
 authentication failure and account deletion; switching accounts removes other
-accounts' cached copies. Saved data is labelled while it refreshes.
+accounts' cached copies. A failed startup refresh is shown with a retry action.
 
-Day navigation immediately reuses cached data, revalidates nutrition separately
-from slower optional metrics, and only prefetches neighboring nutrition days.
+After startup, the dashboard warms today and the previous seven dates. It
+reads saved snapshots first, fetches any missing or stale diaries, then fetches
+health metrics separately. Revisiting a loaded date uses its snapshot
+immediately. Fresh results are reused for one minute for today and five minutes
+for older dates. Stale results refresh in the background. Confirmed writes
+and remote updates expire the relevant snapshots.
 Mutations still require an online confirmed server write. A cached date is never
 presented as confirmation of a new write.
 
