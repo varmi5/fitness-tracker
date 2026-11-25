@@ -536,11 +536,11 @@ export function SettingsView({
         </form>
       </SettingsDropdown>
 
-      {/* Apple Health, Android Health Connect & Multi-Wearable Hub (Open Wearables) */}
+      {/* Apple Watch, Android Health Connect & Wearables */}
       <SettingsDropdown
         id="open-wearables-settings"
-        title="Apple Health, Health Connect & Garmin"
-        subtitle="Self-hosted Open Wearables hub: Apple Watch, Android Health Connect, Garmin, Oura, Whoop"
+        title="Apple Watch, Garmin & Health Connect"
+        subtitle="Sync Apple Health, Android Health Connect, Garmin, Oura & Whoop"
         badge={
           openWearables?.connected
             ? `Connected · ${openWearables.providers.length ? openWearables.providers.map(formatSourceLabel).join(", ") : "Active"}`

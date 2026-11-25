@@ -273,3 +273,78 @@ export function BevelDotGauge({ pct, color }: { pct: number; color: string }) {
     </svg>
   );
 }
+
+export function AppleHealthIcon({ size = 22, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <rect x="2" y="2" width="20" height="20" rx="5.5" fill="#FFFFFF" stroke="rgba(15,23,42,0.08)" strokeWidth="1" />
+      <path
+        d="M15.4 7.4c-1.15 0-2.05.62-2.4 1.33-.35-.71-1.25-1.33-2.4-1.33-1.66 0-2.85 1.32-2.85 3.04 0 2.58 3.24 4.89 4.86 6.08.23.17.55.17.78 0 1.62-1.19 4.86-3.5 4.86-6.08 0-1.72-1.19-3.04-2.85-3.04Z"
+        fill="#F43F5E"
+      />
+    </svg>
+  );
+}
+
+export function FitbitBrandIcon({ size = 22, ...props }: IconProps) {
+  const dots: [number, number, number][] = [
+    [6, 12, 1.35],
+    [9.3, 9.2, 1.45],
+    [9.3, 12, 1.45],
+    [9.3, 14.8, 1.45],
+    [12.8, 6.6, 1.6],
+    [12.8, 9.3, 1.6],
+    [12.8, 12, 1.6],
+    [12.8, 14.7, 1.6],
+    [12.8, 17.4, 1.6],
+    [16.5, 9.2, 1.75],
+    [16.5, 12, 1.75],
+    [16.5, 14.8, 1.75],
+  ];
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      {dots.map(([cx, cy, r], i) => (
+        <circle key={i} cx={cx} cy={cy} r={r} fill="#0D9488" />
+      ))}
+    </svg>
+  );
+}
+
+export function GarminBrandIcon({ size = 22, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path d="M12 4.5 20.5 18.5H3.5L12 4.5Z" fill="#0EA5E9" />
+      <path d="M12 9.4 16.4 16.7H7.6L12 9.4Z" fill="#0369A1" opacity="0.35" />
+    </svg>
+  );
+}
+
+export function HealthConnectIcon({ size = 22, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="M12 20.2s-7-4.55-7-9.6A4.2 4.2 0 0 1 12 7.5a4.2 4.2 0 0 1 7 3.1c0 5.05-7 9.6-7 9.6Z"
+        fill="#10B981"
+        fillOpacity="0.18"
+        stroke="#10B981"
+        strokeWidth="1.9"
+      />
+      <path d="M8.5 12h2l1.2-2.2 1.6 4.1 1.2-1.9h1.5" stroke="#059669" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function ManualTdeeIcon({ size = 22, ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="M12.3 3.2c2.8 3.2 5.2 5.9 5.2 9.4a5.5 5.5 0 1 1-11 0c0-2.2 1.15-4.3 2.55-5.9.22 1.7 1.05 2.65 2.2 3.05-.52-2.1-.18-4.35 1.05-6.55Z"
+        fill="#F59E0B"
+        fillOpacity="0.22"
+        stroke="#D97706"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
