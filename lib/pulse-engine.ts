@@ -165,63 +165,106 @@ export function computePulseRecovery(
   priorDays: PulseRecoveryDayInput[],
   sleepNeedHours = 8.0,
 ): PulseRecoveryResult {
-  priorDays = priorDays.map((d) => today.source && d.source !== today.source ? { ...d, hrvRmssdMs: null, restingHrBpm: null, respiratoryRate: null, skinTempDeltaC: null } : d);
+  priorDays = priorDays.map((d) =>
+    today.source && d.source && d.source !== today.source
+      ? { ...d, hrvRmssdMs: null, restingHrBpm: null, respiratoryRate: null, skinTempDeltaC: null }
+      : d,
+  );
   const hrvBase = foldBaselineSeries(
-    priorDays.map((d) => (d.sleepHours != null && d.sleepHours > 0 && d.hrvRmssdMs != null && d.hrvRmssdMs > 0 ? Math.log(d.hrvRmssdMs) : null)),
+    priorDays.map((d) => (d.hrvRmssdMs != null && d.hrvRmssdMs > 0 ? Math.log(d.hrvRmssdMs) : null)),
     PULSE_METRIC_CFG.readinessHrvLn,
     false,
   );
-  const rhrBase = foldBaselineSeries(priorDays.map((d) => d.sleepHours != null && d.sleepHours > 0 ? d.restingHrBpm : null), PULSE_METRIC_CFG.restingHr);
+  const rhrBase = foldBaselineSeries(
+    priorDays.map((d) => d.restingHrBpm),
+    PULSE_METRIC_CFG.restingHr,
+  );
   const respBase = foldBaselineSeries(priorDays.map((d) => d.respiratoryRate), PULSE_METRIC_CFG.resp);
   const tempBase = foldBaselineSeries(priorDays.map((d) => d.skinTempDeltaC), PULSE_METRIC_CFG.skinTempDev);
 
-  const valid = (value: number | null, config: MetricCfg) => value != null && Number.isFinite(value) && value >= config.minVal && value <= config.maxVal;
-  const baselineState: BaselineStatus = hrvBase?.status === "stale" || rhrBase?.status === "stale" ? "stale"
-    : hrvBase?.status === "trusted" && rhrBase?.status === "trusted" ? "trusted"
-    : (hrvBase?.nValid ?? 0) >= MIN_NIGHTS_SEED && (rhrBase?.nValid ?? 0) >= MIN_NIGHTS_SEED ? "provisional" : "calibrating";
-  const availability: PulseRecoveryResult["availability"] = !(today.sleepHours != null && Number.isFinite(today.sleepHours) && today.sleepHours > 0 && today.sleepHours <= 24) ? "waiting_for_sleep"
-    : !valid(today.hrvRmssdMs, PULSE_METRIC_CFG.hrv) || !valid(today.restingHrBpm, PULSE_METRIC_CFG.restingHr) ? "partial"
-    : baselineState === "stale" ? "stale" : baselineState === "calibrating" ? "calibrating" : "available";
-  if (availability !== "available") return {
-    score: null, band: "unavailable", baselineStatus: baselineState, availability,
-    algorithmVersion: "readiness-v2-experimental", drivers: [],
-    summary: availability === "waiting_for_sleep" ? "Waiting for a completed main sleep session."
-      : availability === "partial" ? "Sleep, valid RMSSD HRV and resting heart rate are all required."
-      : availability === "stale" ? "Personal HRV or resting heart rate baseline is stale."
-      : "Calibrating: at least four accepted prior HRV and resting heart rate observations are required.",
-  };
+  const valid = (value: number | null, config: MetricCfg) =>
+    value != null && Number.isFinite(value) && value >= config.minVal && value <= config.maxVal;
+  const hasHrv = valid(today.hrvRmssdMs, PULSE_METRIC_CFG.hrv);
+  const hasRhr = valid(today.restingHrBpm, PULSE_METRIC_CFG.restingHr);
+  const hasSleep = today.sleepHours != null && Number.isFinite(today.sleepHours) && today.sleepHours > 0 && today.sleepHours <= 24;
+
+  const hrvCount = hrvBase?.nValid ?? 0;
+  const rhrCount = rhrBase?.nValid ?? 0;
+  const baselineState: BaselineStatus =
+    hrvBase?.status === "stale" || rhrBase?.status === "stale"
+      ? "stale"
+      : hrvCount >= MIN_NIGHTS_TRUST || rhrCount >= MIN_NIGHTS_TRUST
+        ? "trusted"
+        : hrvCount >= MIN_NIGHTS_SEED || rhrCount >= MIN_NIGHTS_SEED
+          ? "provisional"
+          : "calibrating";
+
+  const availability: PulseRecoveryResult["availability"] = !hasSleep
+    ? "waiting_for_sleep"
+    : !hasHrv && !hasRhr
+      ? "partial"
+      : baselineState === "stale"
+        ? "stale"
+        : "available";
+
+  if (availability !== "available") {
+    return {
+      score: null,
+      band: "unavailable",
+      baselineStatus: baselineState,
+      availability,
+      algorithmVersion: "readiness-v2-experimental",
+      drivers: [],
+      summary:
+        availability === "waiting_for_sleep"
+          ? "Waiting for a completed main sleep session."
+          : availability === "partial"
+            ? "Completed sleep plus Resting HR or HRV is required for recovery."
+            : "Personal HRV or resting heart rate baseline is stale.",
+    };
+  }
 
   const parts: Array<{ key: PulseRecoveryDriver["key"]; label: string; weight: number; z: number | null; score: number; valueText: string; baselineText: string | null }> = [];
 
-  if (today.hrvRmssdMs != null && today.hrvRmssdMs > 0) {
-    const lnHrv = Math.log(today.hrvRmssdMs);
-    const hasBase = hrvBase != null && hrvBase.nValid >= MIN_NIGHTS_SEED && hrvBase.status !== "stale";
-    const z = hasBase ? clamp((lnHrv - hrvBase!.baseline) / Math.max(0.08, hrvBase!.spread), -3, 3) : null;
-    const sub = z != null ? clamp(72 + z * 18, 10, 100) : 0;
+  if (hasHrv) {
+    const lnHrv = Math.log(today.hrvRmssdMs!);
+    const hasSettledBase = hrvBase != null && hrvBase.nValid >= MIN_NIGHTS_SEED && hrvBase.status !== "stale";
+    const hasEarlyBase = !hasSettledBase && hrvBase != null && hrvBase.nValid >= 1 && hrvBase.status !== "stale";
+    const z = hasSettledBase
+      ? clamp((lnHrv - hrvBase!.baseline) / Math.max(0.08, hrvBase!.spread), -3, 3)
+      : hasEarlyBase
+        ? clamp((lnHrv - hrvBase!.baseline) / 0.14, -2, 2)
+        : 0;
+    const sub = clamp(72 + z * 18, 10, 100);
     parts.push({
       key: "hrv",
       label: "HRV",
       weight: 0.55,
-      z,
+      z: hasSettledBase || hasEarlyBase ? z : null,
       score: sub,
-      valueText: `${Math.round(today.hrvRmssdMs)} ms`,
-      baselineText: hasBase ? `${Math.round(Math.exp(hrvBase!.baseline))} ms` : null,
+      valueText: `${Math.round(today.hrvRmssdMs!)} ms`,
+      baselineText: hasSettledBase || hasEarlyBase ? `${Math.round(Math.exp(hrvBase!.baseline))} ms` : null,
     });
   }
 
-  if (today.restingHrBpm != null && today.restingHrBpm > 0) {
-    const hasBase = rhrBase != null && rhrBase.nValid >= MIN_NIGHTS_SEED && rhrBase.status !== "stale";
+  if (hasRhr) {
+    const hasSettledBase = rhrBase != null && rhrBase.nValid >= MIN_NIGHTS_SEED && rhrBase.status !== "stale";
+    const hasEarlyBase = !hasSettledBase && rhrBase != null && rhrBase.nValid >= 1 && rhrBase.status !== "stale";
     // Lower RHR than baseline is positive z
-    const z = hasBase ? clamp((rhrBase!.baseline - today.restingHrBpm) / Math.max(2.0, rhrBase!.spread), -3, 3) : null;
-    const sub = z != null ? clamp(72 + z * 16, 10, 100) : 0;
+    const z = hasSettledBase
+      ? clamp((rhrBase!.baseline - today.restingHrBpm!) / Math.max(2.0, rhrBase!.spread), -3, 3)
+      : hasEarlyBase
+        ? clamp((rhrBase!.baseline - today.restingHrBpm!) / 3.5, -2, 2)
+        : 0;
+    const sub = clamp(72 + z * 16, 10, 100);
     parts.push({
       key: "rhr",
       label: "Resting HR",
       weight: 0.2,
-      z,
+      z: hasSettledBase || hasEarlyBase ? z : null,
       score: sub,
-      valueText: `${Math.round(today.restingHrBpm)} bpm`,
-      baselineText: hasBase ? `${Math.round(rhrBase!.baseline)} bpm` : null,
+      valueText: `${Math.round(today.restingHrBpm!)} bpm`,
+      baselineText: hasSettledBase || hasEarlyBase ? `${Math.round(rhrBase!.baseline)} bpm` : null,
     });
   }
 
@@ -670,16 +713,143 @@ export interface BiologicalAgeResult {
   contributors: BiologicalAgeContributor[];
 }
 
+function referenceVo2max(age: number, sex: BiologicalSex): number {
+  const col50 = FRIEND_PERCENTILES.indexOf(50);
+  return piecewiseLinear(
+    FRIEND_TREADMILL[sex].map((row, i) => [25 + 10 * i, row[col50]] as const),
+    age,
+  );
+}
+
+const lnHr = (rows: [number, number][]) => rows.map(([x, hr]) => [x, Math.log(hr)] as const);
+
+const HEALTHSPAN_CURVES = {
+  vo2max: lnHr([[10, 1], [80, 0.87 ** (70 / 3.5)]]),
+  restingHr: lnHr([[45, 1], [105, 1.09 ** 6]]),
+  steps: lnHr([[3000, 1], [5500, 0.82], [7500, 0.74], [10500, 0.68]]),
+  sleepHours: lnHr([[5, 1.12], [7, 1], [8, 1], [9, 1.3]]),
+  sri: lnHr([[65.1, 1], [75.62, 0.8], [80.99, 0.75], [85.22, 0.72], [89.8, 0.7]]),
+  zone13: lnHr([[0, 1], [75, 0.9], [150, 0.82], [300, 0.76]]),
+  zone45: lnHr([[0, 1], [112, 0.81], [225, 0.81 * 0.97]]),
+  strength: lnHr([[0, 1], [45, 0.85], [120, 0.82], [300, 0.83]]),
+  leanMass: lnHr([[16.1, 1], [21.9, 0.7]]),
+};
+
 export function computeBiologicalAge(
   days: HealthspanDayInput[],
   profile: { age: number | null; sex: BiologicalSex | null; heightCm?: number | null },
   anchorDay: string,
 ): BiologicalAgeResult {
+  if (profile.age == null || !Number.isFinite(profile.age) || profile.sex == null) {
+    return {
+      status: "needs_profile",
+      chronologicalAge: profile.age,
+      biologicalAge: null,
+      deltaYears: null,
+      paceOfAging: null,
+      activeDays: 0,
+      contributors: [],
+    };
+  }
+
+  const age = profile.age;
+  const sex = profile.sex;
+  const DOUBLING_YEARS = 8;
+  const OVERLAP_SHRINK = 0.65;
+  const CLAMP_YEARS = 15;
+  const LN2 = Math.LN2;
+  const maxSpan = Math.min(CLAMP_YEARS, Math.max(4, age * 0.25));
+
+  const evalWindow = (fromDay: string) => {
+    const slice = days.filter((d) => d.day >= fromDay && d.day <= anchorDay);
+    const meanOf = (fn: (d: HealthspanDayInput) => number | null | undefined) => {
+      const vals = slice.map(fn).filter((v): v is number => v != null && Number.isFinite(v));
+      return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+    };
+    const weeklyOf = (fn: (d: HealthspanDayInput) => number | null | undefined) => {
+      const vals = slice.map(fn).filter((v): v is number => v != null && Number.isFinite(v));
+      return vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length) * 7 : null;
+    };
+
+    const ref = {
+      vo2max: referenceVo2max(Math.min(79, Math.max(20, age)), sex),
+      restingHr: 58,
+      steps: 7000,
+      sleepHours: 7.5,
+      sri: 80,
+      zone13: 100,
+      zone45: 35,
+      strength: 45,
+      leanMass: sex === "male" ? 19.5 : 16.5,
+    };
+
+    const obs: Partial<Record<keyof typeof HEALTHSPAN_CURVES, { val: number; label: string; fmt: (v: number) => string }>> = {};
+    const vVo2 = meanOf((d) => d.vo2max);
+    if (vVo2 != null) obs.vo2max = { val: vVo2, label: "VO2 Max", fmt: (v) => `${v.toFixed(1)}` };
+    const vRhr = meanOf((d) => d.restingHr);
+    if (vRhr != null) obs.restingHr = { val: vRhr, label: "Resting HR", fmt: (v) => `${Math.round(v)} bpm` };
+    const vSteps = meanOf((d) => d.steps);
+    if (vSteps != null) obs.steps = { val: vSteps, label: "Daily Steps", fmt: (v) => `${Math.round(v).toLocaleString("en-GB")}` };
+    const vSleep = meanOf((d) => d.sleepHours);
+    if (vSleep != null) obs.sleepHours = { val: vSleep, label: "Sleep Duration", fmt: (v) => `${v.toFixed(1)} h` };
+    const vSri = meanOf((d) => d.sri);
+    if (vSri != null) obs.sri = { val: vSri, label: "Sleep Regularity", fmt: (v) => `${Math.round(v)}%` };
+    const vZ13 = weeklyOf((d) => d.zone13Min);
+    if (vZ13 != null && vZ13 > 0) obs.zone13 = { val: vZ13, label: "Moderate Cardio", fmt: (v) => `${Math.round(v)} min/wk` };
+    const vZ45 = weeklyOf((d) => d.zone45Min);
+    if (vZ45 != null && vZ45 > 0) obs.zone45 = { val: vZ45, label: "Vigorous Cardio", fmt: (v) => `${Math.round(v)} min/wk` };
+    const vStr = weeklyOf((d) => d.strengthMin);
+    if (vStr != null) obs.strength = { val: vStr, label: "Strength Training", fmt: (v) => `${Math.round(v)} min/wk` };
+
+    if (profile.heightCm && profile.heightCm > 0) {
+      const hM = profile.heightCm / 100;
+      const w = meanOf((d) => d.weightKg);
+      const bf = meanOf((d) => d.bodyFatPct);
+      if (w != null && bf != null) {
+        const ffmi = (w * (1 - bf / 100)) / (hM * hM);
+        obs.leanMass = { val: ffmi, label: "Lean Mass (FFMI)", fmt: (v) => `${v.toFixed(1)}` };
+      }
+    }
+
+    const confidenceScale = Math.min(1, slice.length / 14);
+    let totalYears = 0;
+    const contributors: BiologicalAgeContributor[] = [];
+    for (const key of Object.keys(obs) as (keyof typeof HEALTHSPAN_CURVES)[]) {
+      const entry = obs[key]!;
+      const curve = HEALTHSPAN_CURVES[key];
+      const deltaLn = piecewiseLinear(curve, entry.val) - piecewiseLinear(curve, ref[key]);
+      const yrs = clamp(((OVERLAP_SHRINK * deltaLn) / LN2) * DOUBLING_YEARS, -3.5, 3.5);
+      totalYears += yrs;
+      contributors.push({
+        key,
+        label: entry.label,
+        valueText: entry.fmt(entry.val),
+        deltaYears: round1(yrs * confidenceScale),
+      });
+    }
+
+    const deltaYears = clamp(totalYears * confidenceScale, -maxSpan, maxSpan);
+    return {
+      activeDays: slice.length,
+      deltaYears: round1(deltaYears),
+      contributors: contributors.sort((a, b) => a.deltaYears - b.deltaYears),
+    };
+  };
+
+  const w180 = evalWindow(addDays(anchorDay, -179));
+  const w30 = evalWindow(addDays(anchorDay, -29));
+  const paceOfAging = w30.activeDays >= 5 && w180.activeDays >= 10
+    ? round2(clamp(1.0 + (w30.deltaYears - w180.deltaYears) / 5.0, -1, 3))
+    : 1.0;
+
   return {
-    status: profile.age == null ? "needs_profile" : "unvalidated",
-    chronologicalAge: profile.age, biologicalAge: null, deltaYears: null, paceOfAging: null,
-    activeDays: new Set(days.filter((d) => d.day <= anchorDay && d.day >= addDays(anchorDay, -179) && Object.entries(d).some(([k, v]) => k !== "day" && typeof v === "number" && Number.isFinite(v))).map((d) => d.day)).size,
-    contributors: [],
+    status: w180.activeDays >= 20 ? "ready" : "provisional",
+    chronologicalAge: round1(age),
+    biologicalAge: round1(age + w180.deltaYears),
+    deltaYears: w180.deltaYears,
+    paceOfAging,
+    activeDays: w180.activeDays,
+    contributors: w180.contributors,
   };
 }
 

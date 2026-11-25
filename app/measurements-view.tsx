@@ -64,6 +64,7 @@ export function MeasurementsView({
   const [page, setPage] = useState<MeasurePage>(initialSubPage ?? null);
   const [date, setDate] = useState(today);
   const [localMsg, setLocalMsg] = useState("");
+  const [bioExpanded, setBioExpanded] = useState(false);
   const { readings, settings } = snapshot;
 
   useEffect(() => {
@@ -72,6 +73,10 @@ export function MeasurementsView({
       onClearInitialSubPage?.();
     }
   }, [initialSubPage, onClearInitialSubPage]);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }, [page]);
 
   const isFitbitMode =
     (nutritionSettings?.trackingMode ?? history30?.trackingMode ?? daily?.trackingMode) === "fitbit";
@@ -169,7 +174,7 @@ export function MeasurementsView({
   if (page === "trends") {
     return (
       <>
-        <div className="page-header" style={{ marginBottom: ".2rem" }}>
+        <div className="page-header sticky-subpage-header" style={{ marginBottom: ".2rem" }}>
           <div style={{ display: "flex", alignItems: "center", gap: ".6rem", width: "100%", justifyContent: "space-between" }}>
             <button type="button" className="secondary compact" onClick={() => setPage(null)} style={{ minHeight: "36px" }}>
               <ArrowLeft size={16} /> Back
@@ -190,7 +195,7 @@ export function MeasurementsView({
   if (page === "log") {
     return (
       <>
-        <div className="page-header" style={{ marginBottom: ".2rem" }}>
+        <div className="page-header sticky-subpage-header" style={{ marginBottom: ".2rem" }}>
           <div style={{ display: "flex", alignItems: "center", gap: ".6rem", width: "100%", justifyContent: "space-between" }}>
             <button type="button" className="secondary compact" onClick={() => setPage(null)} style={{ minHeight: "36px" }}>
               <ArrowLeft size={16} /> Back
@@ -337,17 +342,111 @@ export function MeasurementsView({
         </div>
       </button>
 
-      {isFitbitMode && (
-        <section className="card" style={{ display: "grid", gap: ".55rem" }} aria-label="Fitness estimates and limitations">
-          <div className="split-row"><span className="eyebrow">Cardio fitness reference</span><span className="pill">Estimate</span></div>
-          <div className="energy-strip" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))", marginTop: 0 }}>
-            <div className="energy-cell"><span>VO₂ max (ml/kg/min)</span><strong className="num">{latestVo2Max != null ? Number(latestVo2Max.toFixed(1)) : "—"}</strong></div>
-            <div className="energy-cell"><span>Reference percentile</span><strong className="num">{dayPulse?.fitnessLevel.percentile != null ? `${dayPulse.fitnessLevel.percentile} / 100` : "—"}</strong></div>
+      {/* Biological Age & Healthspan Card (Body tab only) */}
+      {isFitbitMode && dayPulse && (
+        <section className="card" style={{ display: "grid", gap: ".55rem" }} aria-label="Biological Age and Healthspan">
+          <div className="split-row">
+            <span className="eyebrow">Biological Age &amp; Healthspan</span>
+            {dayPulse.biologicalAge.deltaYears != null && (
+              <span
+                className={`pill num ${dayPulse.biologicalAge.deltaYears <= 0 ? "teal-soft" : "amber-soft"}`}
+              >
+                {dayPulse.biologicalAge.deltaYears <= 0
+                  ? `${Math.abs(dayPulse.biologicalAge.deltaYears).toFixed(1)} yrs younger`
+                  : `+${dayPulse.biologicalAge.deltaYears.toFixed(1)} yrs`}
+              </span>
+            )}
           </div>
-          <p className="metric-provenance">{vo2Record ? `${vo2Record.source} · recorded ${vo2Record.day}. Provider estimate; testing method can affect comparability.` : "No VO₂ max observation available."} Percentile requires a supported adult age/sex reference group; it is a population comparison, not a diagnosis.</p>
-          {dayPulse?.fitnessLevel.category && <p className="metric-provenance">Reference category: {dayPulse.fitnessLevel.category}.</p>}
-          <p className="metric-provenance">Biological age and pace of ageing are unavailable: these predictions have not been validated for FitnessTrackr. Recorded fitness and body measurements remain available.</p>
-          {onOpenSettings && dayPulse?.fitnessLevel.percentile == null && <button type="button" className="secondary compact" onClick={onOpenSettings}>Review profile and reference eligibility</button>}
+
+          {dayPulse.biologicalAge.status === "needs_profile" ? (
+            <div className="bevel-awaiting-strip">
+              <span>Add your Birth Date &amp; Biological Sex to unlock Biological Age &amp; VO₂ percentile.</span>
+              {onOpenSettings && (
+                <button
+                  type="button"
+                  className="secondary compact"
+                  style={{ minHeight: "30px", fontSize: ".74rem" }}
+                  onClick={onOpenSettings}
+                >
+                  Open Settings
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
+                <div className="energy-cell">
+                  <span>Biological Age</span>
+                  <strong className="num" style={{ color: "var(--recovery-color)" }}>
+                    {dayPulse.biologicalAge.biologicalAge != null
+                      ? `${dayPulse.biologicalAge.biologicalAge.toFixed(1)}y`
+                      : "—"}
+                  </strong>
+                </div>
+                <div className="energy-cell">
+                  <span>Pace of Aging</span>
+                  <strong className="num">
+                    {dayPulse.biologicalAge.paceOfAging != null
+                      ? `${dayPulse.biologicalAge.paceOfAging.toFixed(2)}x`
+                      : "—"}
+                  </strong>
+                </div>
+                <div className="energy-cell">
+                  <span>VO₂ Percentile</span>
+                  <strong className="num" style={{ color: "var(--accent)" }}>
+                    {dayPulse.fitnessLevel.percentile != null
+                      ? `${dayPulse.fitnessLevel.percentile}th`
+                      : "—"}
+                  </strong>
+                </div>
+              </div>
+
+              {(dayPulse.fitnessLevel.category || latestVo2Max != null) && (
+                <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
+                  Cardio Fitness:{" "}
+                  <strong style={{ color: "var(--text)", textTransform: "capitalize" }}>
+                    {dayPulse.fitnessLevel.category ?? "Recorded"}
+                  </strong>
+                  {latestVo2Max != null ? ` (${Number(latestVo2Max.toFixed(1))} ml/kg/min` : ""}
+                  {vo2Record ? ` · ${vo2Record.source} ${vo2Record.day})` : latestVo2Max != null ? ")" : ""}
+                </div>
+              )}
+
+              {dayPulse.biologicalAge.status === "provisional" && (
+                <div style={{ fontSize: ".74rem", color: "var(--muted)" }}>
+                  Early estimate ({dayPulse.biologicalAge.activeDays}d synced) — stabilizes after 20+ days (pull 14 or 30 days in Settings if needed).
+                </div>
+              )}
+
+              {dayPulse.biologicalAge.contributors.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    className="secondary compact"
+                    style={{ minHeight: "32px", fontSize: ".74rem" }}
+                    onClick={() => setBioExpanded((v) => !v)}
+                  >
+                    {bioExpanded ? "Hide factor breakdown" : `View ${dayPulse.biologicalAge.contributors.length} healthspan factors`}
+                  </button>
+                  {bioExpanded && (
+                    <div style={{ display: "grid", gap: ".3rem" }}>
+                      {dayPulse.biologicalAge.contributors.map((c) => (
+                        <div key={c.key} className="split-row" style={{ fontSize: ".78rem" }}>
+                          <span>
+                            <strong>{c.label}</strong>{" "}
+                            <span style={{ color: "var(--muted)" }}>({c.valueText})</span>
+                          </span>
+                          <span className={`pill num ${c.deltaYears <= 0 ? "teal-soft" : "amber-soft"}`}>
+                            {c.deltaYears > 0 ? `+${c.deltaYears}` : c.deltaYears} y
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
         </section>
       )}
 

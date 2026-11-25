@@ -612,7 +612,6 @@ export function strainData(db: AuthDatabase, userId: string) {
       if (t > (latestSourceSyncByDay.get(h.day) ?? 0)) latestSourceSyncByDay.set(h.day, t);
     }
     for (const g of googleDays) {
-      if (isStrengthGoogleWorkout(g.title, g.exerciseType)) hasStrengthByDay.add(g.day);
       const t = g.syncedAt.getTime();
       if (t > (latestSourceSyncByDay.get(g.day) ?? 0)) latestSourceSyncByDay.set(g.day, t);
     }

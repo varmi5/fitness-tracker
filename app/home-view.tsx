@@ -280,7 +280,7 @@ export function HomeView({
               pct={overallStrain ?? 0}
               color="var(--strain-color)"
               targetRange={recoveryScore == null ? null : [strainTarget.min, strainTarget.max]}
-              sublabel={recoveryScore == null ? "Readiness not available" : `Guide ${strainTarget.min}–${strainTarget.max}`}
+              sublabel={recoveryScore == null ? "No guide" : `Guide ${strainTarget.min}–${strainTarget.max}`}
               onClick={openTrainingView}
             />
             <BevelScoreRing
@@ -291,7 +291,7 @@ export function HomeView({
               color="var(--recovery-color)"
               sublabel={
                 effectiveRecoveryBand === "optimal"
-                  ? "Higher readiness"
+                  ? "Optimal"
                   : effectiveRecoveryBand === "moderate"
                     ? "Moderate"
                     : effectiveRecoveryBand === "strained"
@@ -407,17 +407,30 @@ export function HomeView({
         )}
       </section>
 
-      {/* Silk Energy Bank & HR elevation Card */}
+      {/* Calorie Intake Linear Slider (2nd right below rings) */}
+      <CalorieSlider
+        title="Calorie Intake"
+        consumedText={fmtKcal(intake)}
+        targetText={`${fmtKcal(target)} kcal`}
+        statusText={remainingLabel}
+        fillPct={calPct}
+        isOnTarget={goalMet}
+        isBulkMode={isBulkMode}
+        macros={macroBars}
+        onClick={() => onNavigate("Nutrition")}
+      />
+
+      {/* Compact Energy, HR & Sleep Debt Card (matching Health Monitor compactness) */}
       {isFitbitMode && dayPulse && (
         <button
           type="button"
           className="card card-interactive"
           onClick={openTrainingView}
-          style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".55rem" }}
-          aria-label="Pulse Telemetry summary"
+          style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".5rem" }}
+          aria-label="Daily Energy and Heart Rate summary"
         >
           <div className="split-row">
-            <span className="eyebrow">Experimental energy &amp; HR elevation</span>
+            <span className="eyebrow">Energy &amp; Autonomic Load</span>
             <span
               className={`pill ${
                 dayPulse.stress.band === "high"
@@ -429,52 +442,47 @@ export function HomeView({
               style={{ fontSize: ".68rem" }}
             >
               {dayPulse.stress.avgStress != null
-                ? `HR index ${dayPulse.stress.avgStress.toFixed(1)} · ${dayPulse.stress.band === "high" ? "High" : dayPulse.stress.band === "moderate" ? "Moderate" : "Low"}`
-                : "Insufficient observations"}
+                ? `${dayPulse.stress.band === "high" ? "High" : dayPulse.stress.band === "moderate" ? "Moderate" : "Calm"} HR`
+                : "Pending sync"}
             </span>
           </div>
-          <div className="pulse-strip-grid">
-            <div className="energy-cell">
-              <span>Energy index</span>
-              <strong className="num" style={{ color: "var(--recovery-color)" }}>
+          <div className="compact-telemetry-grid">
+            <div className="health-vital-cell">
+              <span className="health-vital-label">Energy</span>
+              <span className="health-vital-val num" style={{ color: "var(--recovery-color)" }}>
                 {dayPulse.energyBank.currentPct != null ? `${dayPulse.energyBank.currentPct}%` : "—"}
-              </strong>
-              <div className="energy-bank-bar" aria-hidden="true">
+              </span>
+              <div className="energy-bank-bar" style={{ margin: ".1rem 0 0", width: "78%" }} aria-hidden="true">
                 <div
                   className="energy-bank-fill"
                   style={{ width: `${Math.max(0, Math.min(100, dayPulse.energyBank.currentPct ?? 0))}%` }}
                 />
               </div>
-              <span style={{ fontSize: ".68rem", color: "var(--muted)" }}>
-                {dayPulse.energyBank.peakPct != null
-                  ? `Peak ${dayPulse.energyBank.peakPct}% · -${dayPulse.energyBank.drainedPct}%`
-                  : "Needs sleep, baseline and HR"}
-              </span>
             </div>
-            <div className="energy-cell">
-              <span>HR elevation</span>
-              <strong className="num">
+            <div className="health-vital-cell">
+              <span className="health-vital-label">HR Index</span>
+              <span className="health-vital-val num">
                 {dayPulse.stress.avgStress != null ? dayPulse.stress.avgStress.toFixed(1) : "—"}
-              </strong>
-              <span style={{ fontSize: ".68rem", color: "var(--muted)", marginTop: ".15rem" }}>
-                {dayPulse.stress.avgStress != null
-                  ? `${dayPulse.stress.lowMinutes}m low · ${dayPulse.stress.mediumMinutes + dayPulse.stress.highMinutes}m load`
-                  : "No eligible HR coverage"}
               </span>
+              <span
+                className={`health-vital-dot ${
+                  dayPulse.stress.band === "high"
+                    ? "is-high"
+                    : dayPulse.stress.band === "low" || dayPulse.stress.band === "moderate"
+                      ? "is-in_range"
+                      : ""
+                }`}
+                aria-hidden="true"
+              />
             </div>
-            <div className="energy-cell">
-              <span>Future scenario</span>
-              <strong className="num" style={{ color: "var(--accent)" }}>
-                {dayPulse.forecast.predictedScore != null ? `${dayPulse.forecast.predictedScore}%` : "—"}
-              </strong>
-              <span className="metric-provenance">Unavailable pending validation</span>
-            </div>
-            <div className="energy-cell">
-              <span>Estimated sleep debt</span>
-              <strong className="num">
+            <div className="health-vital-cell">
+              <span className="health-vital-label">Sleep Debt</span>
+              <span className="health-vital-val num">
                 {dayPulse.sleep.sleepDebtHours != null ? `${dayPulse.sleep.sleepDebtHours}h` : "—"}
-              </strong>
-              <span className="metric-provenance">{dayPulse.sleep.observedDays}/7 days · {dayPulse.sleep.debtCoverage}</span>
+              </span>
+              <span className="health-vital-label" style={{ fontSize: ".6rem" }}>
+                {dayPulse.sleep.observedDays}/7d
+              </span>
             </div>
           </div>
         </button>
@@ -551,23 +559,10 @@ export function HomeView({
           </div>
           <p className="metric-provenance">
             Planning goal in {daily.timezone}. This is your configured goal, not a measured biological sleep requirement.
-            {dayPulse.sleep.sleepDebtHours == null ? " Sleep debt is unknown until sleep history is recorded." : ` Estimated debt ${dayPulse.sleep.sleepDebtHours}h from ${dayPulse.sleep.observedDays}/7 days (${dayPulse.sleep.debtCoverage}); missing nights remain unknown.`}
+            {dayPulse.sleep.sleepDebtHours == null ? " Sleep debt is unknown until sleep history is recorded (pull 14 or 30 days in Settings if needed)." : ` Estimated debt ${dayPulse.sleep.sleepDebtHours}h from ${dayPulse.sleep.observedDays}/7 days (${dayPulse.sleep.debtCoverage}); missing nights remain unknown.`}
           </p>
         </section>
       )}
-
-      {/* Calorie Intake Linear Slider */}
-      <CalorieSlider
-        title="Calorie Intake"
-        consumedText={fmtKcal(intake)}
-        targetText={`${fmtKcal(target)} kcal`}
-        statusText={remainingLabel}
-        fillPct={calPct}
-        isOnTarget={goalMet}
-        isBulkMode={isBulkMode}
-        macros={macroBars}
-        onClick={() => onNavigate("Nutrition")}
-      />
 
       {/* Weight Sparkline + Steps + Energy Balance Trends */}
       <section

@@ -214,7 +214,7 @@ export function PhysiqueCheckinView({
 
   return (
     <>
-      <div className="page-header" style={{ marginBottom: ".1rem" }}>
+      <div className="page-header sticky-subpage-header" style={{ marginBottom: ".1rem" }}>
         <button type="button" className="secondary compact" onClick={onBack} style={{ minHeight: "36px" }}>
           <ArrowLeft size={16} /> Back
         </button>

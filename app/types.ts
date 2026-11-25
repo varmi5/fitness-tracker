@@ -68,6 +68,7 @@ export interface InitialAppData {
   strain: DailyStrainView;
   strainSettings: StrainSettings;
   recoveryInsights?: RecoveryInsightView;
+  pulseInsights?: PulseInsightsView | null;
   audit: AuditEntry[];
   mcpEnabled: boolean;
   syncToken: string;
@@ -124,12 +125,12 @@ export function mealMethodSummary(meal: MealRecord): EstimationMethod {
 
 /** Readiness states describe data availability, never a measured repair state. */
 export function recoveryAvailabilityLabel(state: string | null | undefined): string {
-  if (state === "waiting_for_sleep") return "Waiting for completed sleep";
-  if (state === "calibrating") return "Calibrating personal baseline";
-  if (state === "stale") return "Baseline needs fresh data";
-  if (state === "partial") return "Missing required inputs";
+  if (state === "waiting_for_sleep") return "Awaiting sleep";
+  if (state === "calibrating") return "Calibrating";
+  if (state === "stale") return "Needs fresh data";
+  if (state === "partial") return "Missing vitals";
   if (state === "available") return "Readiness estimate";
-  return "Awaiting sleep and vitals";
+  return "Awaiting sync";
 }
 
 export function sleepAttribution(sleep: SleepRecord | null | undefined, timezone: string, displayedDay: string): string {

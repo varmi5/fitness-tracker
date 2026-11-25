@@ -97,8 +97,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [hevy, setHevy] = useState<HevyIntegrationStatus | undefined>(initial.hevy);
   const [homeRecovery, setHomeRecovery] = useState<RecoveryInsightView | undefined>(initial.recoveryInsights);
   const [trainingRecovery, setTrainingRecovery] = useState<RecoveryInsightView | undefined>(initial.recoveryInsights);
-  const [pulseInsights, setPulseInsights] = useState<PulseInsightsView | null>(null);
-  const [trainingPulse, setTrainingPulse] = useState<PulseInsightsView | null>(null);
+  const [pulseInsights, setPulseInsights] = useState<PulseInsightsView | null>(initial.pulseInsights ?? null);
+  const [trainingPulse, setTrainingPulse] = useState<PulseInsightsView | null>(initial.pulseInsights ?? null);
 
   type DayCacheEntry = {
     daily?: DailyNutritionView;
@@ -114,6 +114,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           daily: initial.daily,
           strain: initial.strain,
           recovery: initial.recoveryInsights,
+          pulse: initial.pulseInsights ?? undefined,
         },
       ],
     ]),
@@ -164,13 +165,13 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     };
   }, [google.connected, google.mealSync?.pending, google.mealSync?.failed]);
 
-  // Automatic background sync on app open (if stale > 2m) and every 3 minutes while visible
+  // Automatic background sync: 14d on initial unconnected/unsynced load, fast 3d hot-sync when stale > 5m
   useEffect(() => {
     if (!google.connected && !hevy?.connected) return;
     let active = true;
     let running = false;
 
-    const isStale = (iso?: string | null, minAgeMs = 2 * 60 * 1000) => {
+    const isStale = (iso?: string | null, minAgeMs = 5 * 60 * 1000) => {
       if (!iso) return true;
       const t = Date.parse(iso);
       return Number.isNaN(t) || Date.now() - t >= minAgeMs;
@@ -179,24 +180,39 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     const runSilentSync = async (isAppOpen = false) => {
       if (!active || running || document.visibilityState !== "visible") return;
       const now = Date.now();
-      const minGap = isAppOpen ? 0 : 3 * 60 * 1000;
+      const minGap = isAppOpen ? 0 : 5 * 60 * 1000;
       if (!isAppOpen && now - lastAutoSyncRef.current < minGap) return;
+      const isInitialGoogleSync = google.connected && !google.lastSync;
       const shouldSyncGoogle =
-        google.connected && !googleSyncLock.current && (isAppOpen ? isStale(google.lastSync, 2 * 60 * 1000) : true);
-      const shouldSyncHevy = Boolean(hevy?.connected) && (isAppOpen ? isStale(hevy?.lastSync, 2 * 60 * 1000) : true);
+        google.connected && !googleSyncLock.current && (isInitialGoogleSync || (isAppOpen ? isStale(google.lastSync, 5 * 60 * 1000) : true));
+      const shouldSyncHevy = Boolean(hevy?.connected) && (isAppOpen ? isStale(hevy?.lastSync, 5 * 60 * 1000) : true);
       if (!shouldSyncGoogle && !shouldSyncHevy) return;
 
       running = true;
       lastAutoSyncRef.current = now;
-      if (shouldSyncGoogle) googleSyncLock.current = true;
+      let ticker: number | null = null;
+      if (shouldSyncGoogle) {
+        googleSyncLock.current = true;
+        setGoogleSyncPct(12);
+        ticker = window.setInterval(() => {
+          setGoogleSyncPct((p) => (p == null ? null : Math.min(72, p + Math.max(1, Math.round((72 - p) * 0.14)))));
+        }, 250);
+      }
       try {
         const jobs: Promise<boolean>[] = [];
         if (shouldSyncGoogle) {
+          const hotFrom = addDays(todayRef.current, isInitialGoogleSync ? -13 : -2);
           jobs.push(
-            fetch("/api/integrations/google/sync", { method: "POST", cache: "no-store" })
+            fetch("/api/integrations/google/sync", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ from: hotFrom, to: todayRef.current }),
+              cache: "no-store",
+            })
               .then(async (res) => (res.ok ? res.json() : null))
               .then((payload) => {
                 if (payload?.status && active) setGoogle(payload.status);
+                if (active) setGoogleSyncPct(82);
                 return Boolean(payload);
               })
               .catch(() => false),
@@ -214,15 +230,27 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           );
         }
         const results = await Promise.all(jobs);
+        if (ticker != null) {
+          window.clearInterval(ticker);
+          ticker = null;
+        }
         if (active && results.some(Boolean)) {
           invalidateDayCache();
           await Promise.all([
             refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
             selectTrainingDay(trainingDayRef.current),
           ]).catch(() => undefined);
+          if (shouldSyncGoogle && active) {
+            setGoogleSyncPct(100);
+            await new Promise((resolve) => window.setTimeout(resolve, 350));
+          }
         }
       } finally {
-        if (shouldSyncGoogle) googleSyncLock.current = false;
+        if (ticker != null) window.clearInterval(ticker);
+        if (shouldSyncGoogle) {
+          if (active) setGoogleSyncPct(null);
+          googleSyncLock.current = false;
+        }
         running = false;
       }
     };
@@ -964,6 +992,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     const cachedPulse = dayCacheRef.current.get(homeDay)?.pulse;
     if (cachedPulse && cachedPulse.day === homeDay) {
       setPulseInsights(cachedPulse);
+      return;
     }
     const controller = new AbortController();
     fetch(`/api/pulse?day=${homeDay}`, { cache: "no-store", signal: controller.signal })
@@ -1068,7 +1097,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
               className={`secondary compact sync-pill-btn ${googleSyncPct != null ? "is-syncing" : ""}`}
               style={{ ["--sync-pct" as string]: `${googleSyncPct ?? 0}%` }}
               disabled={busy || googleSyncPct != null}
-              onClick={() => void syncGoogle(14)}
+              onClick={() => void syncGoogle(google.lastSync ? 3 : 14)}
               aria-label={googleSyncPct != null ? `Syncing Google Health ${googleSyncPct}%` : "Sync Google Health"}
             >
               <RefreshCw size={13} className={googleSyncPct != null ? "spin" : undefined} />
@@ -1119,7 +1148,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             onOpenTraining={openTrainingForDay}
             onOpenTrends={(m) => setTrendsMetric(m)}
             onEditMeal={openEditMeal}
-            onSyncGoogle={() => void syncGoogle(14)}
+            onSyncGoogle={() => void syncGoogle(google.lastSync ? 3 : 14)}
             onNavigate={navigate}
           />
         )}
@@ -1193,7 +1222,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       {settingsOpen && (
         <div className="silk-overlay" role="dialog" aria-label="Settings & Integrations">
           <div className="silk-overlay-inner">
-            <div className="page-header">
+            <div className="page-header sticky-subpage-header">
               <button
                 type="button"
                 className="secondary compact"

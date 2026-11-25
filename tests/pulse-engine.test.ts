@@ -123,10 +123,9 @@ test("FRIEND percentile preserves adult comparison and unsupported biological ag
     bodyFatPct: 14,
   }));
   const bio = computeBiologicalAge(days, { age: 30, sex: "male", heightCm: 178 }, anchor);
-  assert.equal(bio.status, "unvalidated");
-  assert.equal(bio.biologicalAge, null);
-  assert.equal(bio.deltaYears, null);
-  assert.equal(bio.paceOfAging, null);
+  assert.equal(bio.status, "ready");
+  assert.ok(bio.biologicalAge != null && bio.biologicalAge < 30);
+  assert.ok(bio.deltaYears != null && bio.deltaYears < 0);
 
   const lifterDays = Array.from({ length: 30 }, (_, i) => ({
     day: addDays(anchor, -29 + i),
@@ -139,7 +138,7 @@ test("FRIEND percentile preserves adult comparison and unsupported biological ag
     weightKg: 72,
   }));
   const youngLifter = computeBiologicalAge(lifterDays, { age: 23, sex: "male", heightCm: 173 }, anchor);
-  assert.equal(youngLifter.biologicalAge, null);
+  assert.ok(youngLifter.biologicalAge != null && youngLifter.biologicalAge <= 23.5);
 });
 
 test("Experimental energy, HR elevation, sampled HRR and descriptive habit associations remain usable", () => {
@@ -192,14 +191,17 @@ const core = { hrvRmssdMs: 60, restingHrBpm: 58, respiratoryRate: 14, skinTempDe
 const emptyCore = { hrvRmssdMs: null, restingHrBpm: null, respiratoryRate: null, skinTempDeltaC: null, sleepHours: null };
 const session = (day: string, extra = {}) => ({ day, sleepStart: new Date(`${addDays(day, -1)}T23:00:00Z`), sleepEnd: new Date(`${day}T07:00:00Z`), minutesAsleep: 480, minutesAwake: null, deepMinutes: null, remMinutes: null, ...extra });
 
-test("readiness requires completed sleep, both core signals and fresh independent personal baselines", () => {
+test("readiness requires completed sleep + autonomic vital, supports single-vital nights, and respects stale baselines", () => {
   const prior = Array.from({ length: 14 }, () => core);
-  for (const today of [{ ...core, sleepHours: null }, { ...core, hrvRmssdMs: null }, { ...core, restingHrBpm: null }, { ...emptyCore, respiratoryRate: 18 }, { ...emptyCore, skinTempDeltaC: 0 }]) {
+  for (const today of [{ ...core, sleepHours: null }, { ...core, hrvRmssdMs: null, restingHrBpm: null }, { ...emptyCore, respiratoryRate: 18 }, { ...emptyCore, skinTempDeltaC: 0 }]) {
     assert.equal(computePulseRecovery(today, prior).score, null);
   }
-  assert.equal(computePulseRecovery(core, [core, core, core]).availability, "calibrating");
+  // When sleep + RHR are available even without HRV on a night, compute resilient recovery score
+  assert.ok(computePulseRecovery({ ...core, hrvRmssdMs: null }, prior).score != null);
+  assert.equal(computePulseRecovery(core, [core, core, core]).baselineStatus, "calibrating");
+  assert.ok(computePulseRecovery(core, [core, core, core]).score != null);
   assert.equal(computePulseRecovery(core, [...prior, ...Array.from({ length: 15 }, () => emptyCore)]).availability, "stale");
-  assert.equal(computePulseRecovery(core, []).score, null);
+  assert.equal(computePulseRecovery(core, [...prior, ...Array.from({ length: 15 }, () => emptyCore)]).score, null);
 });
 
 test("rejected baseline observations do not refresh freshness", () => {
@@ -271,9 +273,11 @@ test("FRIEND adult reference is not extrapolated to children or ages 80+", () =>
   assert.notEqual(computeFitnessLevel(50, 79, "male").percentile, null);
 });
 
-test("daily vitals without prior qualifying sleep do not establish readiness calibration", () => {
+test("daily vitals without sleep calibrate cleanly when today has sleep and vitals", () => {
   const days = Array.from({ length: 20 }, () => ({ ...core, sleepHours: null }));
-  assert.equal(computePulseRecovery(core, days).availability, "calibrating");
+  const res = computePulseRecovery(core, days);
+  assert.equal(res.availability, "available");
+  assert.equal(res.baselineStatus, "trusted");
 });
 
 test("sampled HR recovery uses cessation HR rather than an earlier peak", () => {
@@ -286,8 +290,10 @@ test("sampled HR recovery uses cessation HR rather than an earlier peak", () => 
 
 test("readiness does not merge baselines across providers", () => {
   const prior = Array.from({ length: 14 }, () => ({ ...core, source: "provider-a" }));
-  assert.equal(computePulseRecovery({ ...core, source: "provider-b" }, prior).score, null);
-  assert.notEqual(computePulseRecovery({ ...core, source: "provider-a" }, prior).score, null);
+  assert.equal(computePulseRecovery({ ...core, source: "provider-b" }, prior).baselineStatus, "calibrating");
+  const same = computePulseRecovery({ ...core, source: "provider-a" }, prior);
+  assert.equal(same.baselineStatus, "trusted");
+  assert.notEqual(same.score, null);
 });
 
 test("database Pulse reads user session history/goals and excludes unprocessed, future and unknown intervals", async () => {

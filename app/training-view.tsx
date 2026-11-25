@@ -112,6 +112,10 @@ export function TrainingView({
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }, [page]);
+
+  useEffect(() => {
     const controller = new AbortController();
     setLoadsBusy(true);
     setLoads(null);
@@ -170,7 +174,7 @@ export function TrainingView({
   // ===========================================================================
   if (page) {
     const backHeader = (title: string, badge?: React.ReactNode) => (
-      <div className="page-header" style={{ marginBottom: ".2rem" }}>
+      <div className="page-header sticky-subpage-header" style={{ marginBottom: ".2rem" }}>
         <div style={{ display: "flex", alignItems: "center", gap: ".6rem", width: "100%", justifyContent: "space-between" }}>
           <button
             type="button"
@@ -349,7 +353,7 @@ export function TrainingView({
     if (page.kind === "muscles") {
       return (
         <>
-          {backHeader("Muscle Recovery")}
+          {backHeader("Muscle Training")}
           <section className="card" style={{ display: "grid", gap: ".75rem" }}>
             <MuscleFreshnessMap entries={loads?.muscleFreshness ?? []} />
           </section>
@@ -751,7 +755,7 @@ export function TrainingView({
                 </strong>
               </div>
             </div>
-            <p style={{ fontSize: ".76rem", color: "var(--muted)", margin: 0 }}>{effectiveRecovery == null ? "Personalized strain guidance is unavailable while sleep or baseline inputs are incomplete." : target.guidance}</p>
+            <p style={{ fontSize: ".76rem", color: "var(--muted)", margin: 0 }}>{effectiveRecovery == null ? "Personalized strain guidance is unavailable until sleep and vitals sync (pull 14 or 30 days in Settings if missing)." : target.guidance}</p>
           </div>
         </div>
       </section>

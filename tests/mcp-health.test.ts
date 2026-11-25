@@ -1169,6 +1169,78 @@ test("Stage 2: syncGoogle paginates HR samples, backfills workout avgHrBpm, reco
   }
 });
 
+test("parseGoogleRecovery & parseGoogleSleep parse official Google Health v4 HRV, skin temp derivation, runVo2Max, and dataPointName", () => {
+  const hrv = parseGoogleRecovery("daily-heart-rate-variability", {
+    reconciledDataPoints: [
+      {
+        dailyHeartRateVariability: {
+          date: { year: 2026, month: 11, day: 24 },
+          averageHeartRateVariabilityMilliseconds: 68.4,
+        },
+      },
+      {
+        dailyHeartRateVariability: {
+          date: { year: 2026, month: 11, day: 25 },
+          averageHeartRateVariabilityMilliseconds: 71.9,
+        },
+      },
+    ],
+  });
+  assert.equal(hrv.rows.get("2026-11-24"), 68.4);
+  assert.equal(hrv.rows.get("2026-11-25"), 71.9);
+
+  const temp = parseGoogleRecovery("daily-sleep-temperature-derivations", {
+    reconciledDataPoints: [
+      {
+        dailySleepTemperatureDerivations: {
+          date: { year: 2026, month: 11, day: 25 },
+          nightlyTemperatureCelsius: 33.45,
+          baselineTemperatureCelsius: 33.1,
+        },
+      },
+    ],
+  });
+  assert.equal(temp.rows.get("2026-11-25"), 0.4);
+
+  const vo2 = parseGoogleRecovery("run-vo2-max", {
+    reconciledDataPoints: [
+      {
+        runVo2Max: {
+          sampleTime: { physicalTime: "2026-11-25T08:00:00Z" },
+          runVo2Max: 52.3,
+        },
+      },
+    ],
+  });
+  assert.equal(vo2.rows.get("2026-11-25"), 52.3);
+
+  const sleep = parseGoogleSleep({
+    dataPoints: [
+      {
+        dataPointName: "users/me/dataTypes/sleep/dataPoints/dp-123",
+        sleep: {
+          interval: {
+            startTime: "2026-11-24T23:00:00Z",
+            endTime: "2026-11-25T07:00:00Z",
+          },
+          summary: {
+            minutesAsleep: 440,
+            minutesAwake: 40,
+            stagesSummary: [
+              { type: "DEEP", minutes: 90 },
+              { type: "REM", minutes: 105 },
+              { type: "LIGHT", minutes: 245 },
+            ],
+          },
+          metadata: { mainSleep: true, processed: true },
+        },
+      },
+    ],
+  });
+  assert.equal(sleep.sessions.get("2026-11-25")?.sessionId, "dp-123");
+  assert.equal(sleep.sessions.get("2026-11-25")?.deepMinutes, 90);
+});
+
 test("concurrent syncGoogle calls coalesce cleanly without triggering a 409 connection-changed error", async () => {
   process.env.FITNESS_INTEGRATION_KEY = randomBytes(32).toString("hex");
   const originalFetch = globalThis.fetch;
