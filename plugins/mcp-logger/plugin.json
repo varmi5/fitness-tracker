@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "mcp-logger",
-  "version": "1.1.4",
-  "description": "Log meals and discuss nutrition, energy, measurements, sleep, recovery and workouts in your private FitnessTrackr account.",
+  "version": "1.2.0",
+  "description": "Log meals and review nutrition, energy, body measurements, sleep sessions and synced workouts in your private FitnessTrackr account.",
   "author": {
     "name": "Varmisan S",
     "email": "varmisan.work@gmail.com"
@@ -11,8 +11,8 @@
     "com.openai": {
       "interface": {
         "displayName": "FitnessTrackr",
-        "shortDescription": "Meals, macros and energy",
-        "longDescription": "Log meals and drinks, search UK and branded foods, review nutrition and body measurements, and manage personal macro targets and opt-in reminders. Connect your FitnessTrackr account securely using OAuth. Food and wearable energy values are estimates. Free personal project hosted in the UK. Discuss synced sleep schedules, recovery/vitals and workouts privately through ChatGPT, with source and freshness information.",
+        "shortDescription": "Nutrition, sleep and workouts",
+        "longDescription": "Log meals and drinks, search UK reference and branded foods, reuse saved recipes and review your own nutrition diary. Compare calorie intake with estimated total energy expenditure, review weight and waist trends, and retrieve synced sleep sessions, naps, stages, vitals and workouts when available. Manage dated calorie and macro targets and opt-in FitnessTrackr phone reminders with your explicit approval. Each user connects their own account through OAuth. Food, portion, wearable and calculated health values are estimates, not medical advice. FitnessTrackr is a free personal project by Varmisan S, hosted in the UK.",
         "developerName": "Varmisan S",
         "category": "Healthcare",
         "capabilities": [],
@@ -21,8 +21,13 @@
           "Estimate this meal and ask before logging it.",
           "Show my nutrition and waist trends."
         ],
-        "logo": "./assets/purple-dumbbell.png",
-        "composerIcon": "./assets/purple-dumbbell.png"
+        "logo": "./assets/icon.png",
+        "composerIcon": "./assets/icon.png",
+        "brandColor": "#6366F1",
+        "websiteURL": "https://fitness.hadamardsecurities.com/connect",
+        "supportURL": "https://fitness.hadamardsecurities.com/support",
+        "privacyPolicyURL": "https://fitness.hadamardsecurities.com/privacy",
+        "termsOfServiceURL": "https://fitness.hadamardsecurities.com/terms"
       }
     }
   }

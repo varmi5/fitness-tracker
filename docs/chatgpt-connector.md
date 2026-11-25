@@ -159,3 +159,12 @@ that consent includes “Stay connected using renewable access”. An unexpired
 refresh token receives the 90-day lifetime when it next rotates. A grant
 without offline_access still requires consent before it can receive a
 refresh token.
+
+## Current website package (1.2.0)
+
+The downloadable ZIP now uses the website's orange-and-purple FitnessTrackr mark
+for both the listing logo and chat composer icon. Portable and compatibility
+manifests share the same version, description and renewable OAuth scopes. Packaged
+guidance covers dated meals, repeated portions, naps/stage intervals, missing data
+and the limits of website-only features. See [plugin-package.md](plugin-package.md)
+for the repeatable build/check commands and remaining public-submission materials.

@@ -24,6 +24,7 @@ jobs:
           node-version: "24"
       - name: Install dependencies and run tests
         run: |
+          npm run plugin:check
           npm ci --no-audit --no-fund
           npm test
           npm run build

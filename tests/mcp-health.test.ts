@@ -133,6 +133,14 @@ test("MCP server enforces read vs write scopes and executes meal + energy tools 
   const [readClientT, readServerT] = InMemoryTransport.createLinkedPair();
   const readClient = new Client({ name: "test-read", version: "1.0.0" });
   await Promise.all([readServer.connect(readServerT), readClient.connect(readClientT)]);
+  const info = readClient.getServerVersion();
+  assert.equal(info?.name, "mcp-logger", "Branding changes must preserve connection identity");
+  assert.equal(info?.title, "FitnessTrackr");
+  const advertisedIcon = new URL(info?.icons?.[0].src ?? "");
+  assert.equal(advertisedIcon.origin, "https://fitness.hadamardsecurities.com");
+  assert.equal(advertisedIcon.pathname, "/icon-512.png");
+  assert.equal(advertisedIcon.searchParams.get("v"), info?.version, "Host artwork must be versioned with the package");
+  assert.equal(info?.icons?.[0].mimeType, "image/png");
   const readTools = (await readClient.listTools()).tools.map((t) => t.name);
   assert.ok(readTools.includes("get_daily_log"));
   assert.ok(readTools.includes("get_fitness_summary"));
