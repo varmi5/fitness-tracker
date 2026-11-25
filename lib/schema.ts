@@ -220,6 +220,27 @@ export const dailySleep = pgTable("daily_sleep", {
   index("daily_sleep_user_day_idx").on(t.userId, t.day),
 ]);
 
+// Raw sleep sessions preserve naps and split sleep; dailySleep remains the legacy main-night view.
+export const sleepSession = pgTable("sleep_session", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  source: text().notNull(), sessionKey: text("session_key").notNull(), day: date().notNull(),
+  sleepStart: timestamp("sleep_start", { withTimezone: true }),
+  sleepEnd: timestamp("sleep_end", { withTimezone: true }),
+  minutesAsleep: integer("minutes_asleep").notNull(), minutesAwake: integer("minutes_awake"),
+  deepMinutes: integer("deep_minutes"), remMinutes: integer("rem_minutes"), lightMinutes: integer("light_minutes"),
+  stagesJson: jsonb("stages_json").notNull().default([]),
+  isMainSleep: boolean("is_main_sleep").notNull().default(false),
+  processed: boolean(),
+  classificationMethod: text("classification_method").notNull().default("legacy"),
+  stageIntervalsJson: jsonb("stage_intervals_json").notNull().default([]),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.userId, t.source, t.sessionKey] }), index("sleep_session_user_day_idx").on(t.userId, t.day)]);
+
+export const sleepGoal = pgTable("sleep_goal", {
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  effectiveFrom: date("effective_from").notNull(), goalMinutes: integer("goal_minutes").notNull(),
+}, (t) => [primaryKey({ columns: [t.userId, t.effectiveFrom] })]);
+
 export const dailyRecovery = pgTable("daily_recovery", {
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   day: date().notNull(),

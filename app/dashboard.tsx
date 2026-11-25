@@ -1127,6 +1127,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         {tab === "Training" && trainingStrain && strainSettings && hevy && (
           <TrainingView
             today={today}
+            timezone={settings.timezone}
             selectedDay={trainingDay}
             strain={trainingStrain}
             recoveryInsights={trainingRecovery}

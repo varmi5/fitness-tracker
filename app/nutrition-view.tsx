@@ -140,10 +140,11 @@ export function NutritionView({
 
   const diaryContent = (
     <>
+      <p className="metric-provenance">Food scores are experimental heuristics, not validated health ratings. Names and available metadata can misclassify foods. Unknown nutrients remain unknown; logged totals can be partial.</p>
       {/* Sleek Bevel Calorie Intake Linear Slider */}
       <CalorieSlider
         title="Calorie Intake"
-        consumedText={dayView.totals.calories == null ? "0" : fmtKcal(dayView.totals.calories)}
+        consumedText={fmtKcal(dayView.totals.calories)}
         targetText={`${fmtKcal(dayView.target)} kcal`}
         statusText={sliderStatus}
         fillPct={calPct}
@@ -153,7 +154,7 @@ export function NutritionView({
           <div style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
             {dayView.nutritionScore.grade && (
               <span className={`pill score-pill-${dayView.nutritionScore.grade}`} style={{ fontSize: ".7rem" }}>
-                Score {dayView.nutritionScore.score} ({dayView.nutritionScore.grade})
+                Heuristic {dayView.nutritionScore.score} ({dayView.nutritionScore.grade})
               </span>
             )}
             <span
@@ -247,7 +248,7 @@ export function NutritionView({
                         {METHOD_LABELS[method]}
                       </span>
                       <span className={`pill score-pill-${meal.qualityScore.grade}`}>
-                        Score {meal.qualityScore.score} · {meal.qualityScore.grade}
+                        {meal.qualityScore.score == null ? "Unassessed" : `Heuristic ${meal.qualityScore.score} · ${meal.qualityScore.grade ?? "—"}`}
                       </span>
                       <span className="num">P {fmtGram(meal.totals.proteinG)}</span>
                       <span className="num">Fib {fmtGram(meal.totals.fibreG)}</span>

@@ -1,7 +1,7 @@
 "use client";
 
 import { RefreshCw } from "lucide-react";
-import type { RecoveryInsightView } from "./types";
+import { recoveryAvailabilityLabel, type RecoveryInsightView } from "./types";
 
 function fmtSleep(minutes: number | null): string {
   if (minutes == null) return "—";
@@ -21,13 +21,13 @@ export function RecoveryCard({
 }) {
   if (!recovery) return null;
 
-  const isPending = recovery.score == null && recovery.completeness === "unavailable";
+  const isPending = recovery.score == null;
 
   if (isPending) {
     return (
       <section className="bevel-awaiting-strip" aria-label="Recovery Insights">
         <div>
-          <strong>Recovery</strong> · Awaiting morning sleep &amp; vitals sync
+          <strong>Recovery</strong> · {recovery.summary || recoveryAvailabilityLabel(null)}
         </div>
         {onSync && (
           <button
@@ -47,7 +47,7 @@ export function RecoveryCard({
 
   const bandLabel =
     recovery.band === "optimal"
-      ? "Optimal"
+      ? "Higher readiness"
       : recovery.band === "moderate"
         ? "Moderate"
         : recovery.band === "strained"
@@ -68,7 +68,7 @@ export function RecoveryCard({
       <details className="card settings-accordion">
         <summary className="settings-accordion-summary">
         <div className="settings-accordion-title">
-          <span className="eyebrow">Recovery</span>
+          <span className="eyebrow">Readiness estimate</span>
           <div style={{ display: "flex", alignItems: "baseline", gap: ".45rem" }}>
             <strong className="num" style={{ fontSize: "1.25rem", letterSpacing: "-0.02em" }}>
               {recovery.score != null ? `${recovery.score}%` : "—"}
@@ -128,7 +128,7 @@ export function RecoveryCard({
           </div>
         </div>
         <p className="muted" style={{ fontSize: ".78rem", margin: 0 }}>
-          {recovery.summary}
+          {recovery.summary} {recovery.disclaimer}
         </p>
       </div>
       </details>

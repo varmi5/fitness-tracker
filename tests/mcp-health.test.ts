@@ -430,7 +430,7 @@ test("User-scoped syncToken updates across MCP meal/target/reminder mutations wi
   await Promise.all([swClient.close(), swServer.close()]);
 });
 
-test("parseGoogleSleep deduplicates stage enums, skips short naps, and assigns overnight sleep to wake date", () => {
+test("parseGoogleSleep deduplicates stage enums, preserves short naps separately, and assigns overnight sleep to wake date", () => {
   const parsed = parseGoogleSleep({
     dataPoints: [
       {
@@ -471,6 +471,7 @@ test("parseGoogleSleep deduplicates stage enums, skips short naps, and assigns o
 
   assert.equal(parsed.nextPageToken, "page-2");
   assert.equal(parsed.sessions.size, 1);
+  assert.equal(parsed.allSessions.length, 2);
   const nov22 = parsed.sessions.get("2026-11-22");
   assert.ok(nov22);
   assert.equal(nov22.sessionId, "overnight-1");
@@ -982,7 +983,7 @@ test("health MCP exposes only the user's synced sleep, vitals and workouts in ma
     const result=await client.callTool({name:"get_health_history",arguments:{from:"2026-11-17",to:"2026-11-18"}});
     assert.equal(result.isError,false);
     const data=JSON.parse((result.content as {text:string}[])[0].text);
-    assert.equal(data.sleep[0].minutesAsleep,420);assert.equal(data.recovery[0].restingHrBpm,55);
+    assert.equal(data.sleepSessions.length, 1);assert.equal(data.sleepSessions[0].completed, true);assert.equal(data.sleepSessions[0].minutesAsleep,420);assert.equal(data.sleep[0].minutesAsleep,420);assert.equal(data.recovery[0].restingHrBpm,55);
     assert.equal(data.workouts[0].title,"Cycling");assert.equal(data.workouts.length,1);
     assert.equal(data.days[1].hasSleep,false);assert.equal(data.days[1].hasRecovery,false);
     assert.ok(data.sleep[0].syncedAt);assert.equal(JSON.stringify(data).includes("Private run"),false);

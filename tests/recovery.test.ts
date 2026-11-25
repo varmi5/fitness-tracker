@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { computeRecoveryInsights } from "../lib/recovery-insights";
 
-test("computeRecoveryInsights handles complete signals with baseline as high confidence", () => {
+test("computeRecoveryInsights uses the same gated Pulse engine with observed prior days", () => {
   const result = computeRecoveryInsights({
     day: "2026-11-23",
     sleep: {
@@ -25,12 +25,13 @@ test("computeRecoveryInsights handles complete signals with baseline as high con
       avgHrvRmssdMs: 60,
       sampleDays: 10,
     },
+    priorDays: Array.from({ length: 14 }, () => ({ hrvRmssdMs: 60, restingHrBpm: 52, respiratoryRate: 14.5, skinTempDeltaC: 0, sleepHours: 7.5 })),
     yesterdayStrain: 58,
     sevenDayAvgStrain: 48,
   });
 
   assert.equal(result.completeness, "complete");
-  assert.equal(result.confidence, "high");
+  assert.equal(result.confidence, "medium");
   assert.equal(result.band, "optimal");
   assert.ok(result.score != null && result.score >= 75 && result.score <= 100);
   assert.deepEqual(result.missingSignals, []);
@@ -62,7 +63,7 @@ test("computeRecoveryInsights marks partial signals honestly and never invents m
   assert.deepEqual(result.missingSignals, ["Resting HR", "HRV"]);
   assert.equal(result.metrics.restingHrBpm, null);
   assert.equal(result.metrics.hrvRmssdMs, null);
-  assert.ok(result.score != null && result.score > 0 && result.score <= 100);
+  assert.equal(result.score, null);
   assert.match(result.summary, /Missing: Resting HR, HRV/);
 });
 

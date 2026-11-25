@@ -12,6 +12,7 @@ import type { LoadStatusAssessment, TrainingLoadSummary } from "../lib/training-
 import { addDays } from "../lib/nutrition-model";
 import {
   fmtRelativeSync,
+  recoveryAvailabilityLabel,
   type DailyStrainView,
   type GoogleIntegrationStatus,
   type HevyIntegrationStatus,
@@ -23,6 +24,7 @@ import {
 
 interface TrainingViewProps {
   today: string;
+  timezone?: string;
   selectedDay: string;
   strain: DailyStrainView;
   recoveryInsights?: RecoveryInsightView;
@@ -80,18 +82,15 @@ function loadPercent(
   if (status?.acwr != null) {
     return {
       pct: Math.round(status.acwr * 100),
-      subtitle: "Optimal 85–130%",
+      subtitle: "Recent / baseline load",
     };
   }
-  const indexPct = Math.min(100, Math.round(100 * (1 - Math.exp(-Math.max(0, latest.acute7d) / refLoad))));
-  return {
-    pct: indexPct,
-    subtitle: "Calibrating baseline",
-  };
+  return { pct: null, subtitle: "Calibrating baseline" };
 }
 
 export function TrainingView({
   today,
+  timezone = "Europe/London",
   selectedDay,
   strain,
   recoveryInsights,
@@ -107,22 +106,26 @@ export function TrainingView({
   onOpenSettings,
 }: TrainingViewProps) {
   const [page, setPage] = useState<DrilldownPage>(null);
-  const [loads, setLoads] = useState<TrainingLoadSummary | null>(null);
+  const [loadPayload, setLoads] = useState<TrainingLoadSummary | null>(null);
+  const loads = loadPayload?.to === selectedDay ? loadPayload : null;
   const [loadsBusy, setLoadsBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoadsBusy(true);
-    const from = addDays(selectedDay, -27);
+    setLoads(null);
+    setLoadError(null);
+    const from = addDays(selectedDay, -55);
     fetch(`/api/strain?loads=1&from=${from}&to=${selectedDay}`, {
       cache: "no-store",
       signal: controller.signal,
     })
-      .then(async (res) => (res.ok ? ((await res.json()) as TrainingLoadSummary) : null))
+      .then(async (res) => { if (!res.ok) throw new Error(`Training history failed (HTTP ${res.status})`); return await res.json() as TrainingLoadSummary; })
       .then((data) => {
         if (data && !controller.signal.aborted) setLoads(data);
       })
-      .catch(() => undefined)
+      .catch((cause: unknown) => { if (!controller.signal.aborted) setLoadError(cause instanceof Error ? cause.message : "Training history could not be loaded"); })
       .finally(() => {
         if (!controller.signal.aborted) setLoadsBusy(false);
       });
@@ -137,10 +140,14 @@ export function TrainingView({
     await onImportHevy(text);
   }
 
-  const overall = strain.overallStrain;
+  const dayStrain = strain.day === selectedDay ? strain : null;
+  const dayActivities = dayStrain?.activities ?? [];
+  const overall = dayStrain?.overallStrain ?? null;
   const activeAcwr = loads?.cardioStatus?.acwr ?? loads?.muscularStatus?.acwr ?? null;
   const dayPulse = pulseInsights?.day === selectedDay ? pulseInsights : null;
-  const effectiveRecovery = dayPulse ? dayPulse.recovery.score : recoveryInsights?.score;
+  const dayRecovery = recoveryInsights?.day === selectedDay ? recoveryInsights : null;
+  const effectiveRecovery = dayPulse ? dayPulse.recovery.score : dayRecovery?.score;
+  const recoveryStateLabel = recoveryAvailabilityLabel(dayPulse?.recovery.availability);
   const target =
     dayPulse?.strainTarget ??
     computeTargetStrain(effectiveRecovery, { acwr: activeAcwr });
@@ -154,10 +161,9 @@ export function TrainingView({
     month: "short",
   });
 
-  const fatiguedCount =
-    loads?.muscleFreshness?.filter((m) => m.status === "fatigued").length ?? 0;
-  const recoveringCount =
-    loads?.muscleFreshness?.filter((m) => m.status === "recovering").length ?? 0;
+  const trackedCount = loads?.muscleFreshness?.filter((muscle) => muscle.status === "tracked").length ?? 0;
+  const calibratingCount = loads?.muscleFreshness?.filter((muscle) => muscle.status === "calibrating").length ?? 0;
+  const unknownCount = loads?.muscleFreshness?.filter((muscle) => muscle.status === "unknown").length ?? 0;
 
   // ===========================================================================
   // FULL-PAGE BEVEL DRILL-DOWN VIEWS
@@ -227,7 +233,7 @@ export function TrainingView({
                     <strong className="num">{mPct.pct != null ? `${mPct.pct}%` : "—"}</strong>
                   </div>
                   <div className="energy-cell">
-                    <span>Optimal Zone</span>
+                    <span>Reference band</span>
                     <strong className="num">85–130%</strong>
                   </div>
                 </div>
@@ -242,7 +248,7 @@ export function TrainingView({
                         <Area
                           type="monotone"
                           dataKey="optimalMax"
-                          name="Optimal Ceiling"
+                          name="Illustrative reference ceiling"
                           stroke="none"
                           fill="var(--purple-soft, rgba(124,58,237,0.14))"
                           fillOpacity={0.4}
@@ -262,7 +268,7 @@ export function TrainingView({
           {loads?.muscleFreshness?.length ? (
             <section className="card" style={{ display: "grid", gap: ".65rem" }}>
               <div className="split-row">
-                <h2 style={{ fontSize: "1rem", margin: 0 }}>Muscle Recovery Map</h2>
+                <h2 style={{ fontSize: "1rem", margin: 0 }}>Muscle Training Map</h2>
                 <span className="pill">Hevy</span>
               </div>
               <MuscleFreshnessMap entries={loads.muscleFreshness} />
@@ -305,7 +311,7 @@ export function TrainingView({
                     <strong className="num">{cPct.pct != null ? `${cPct.pct}%` : "—"}</strong>
                   </div>
                   <div className="energy-cell">
-                    <span>Optimal Zone</span>
+                    <span>Reference band</span>
                     <strong className="num">85–130%</strong>
                   </div>
                 </div>
@@ -320,7 +326,7 @@ export function TrainingView({
                         <Area
                           type="monotone"
                           dataKey="optimalMax"
-                          name="Optimal Ceiling"
+                          name="Illustrative reference ceiling"
                           stroke="none"
                           fill="var(--teal-soft)"
                           fillOpacity={0.4}
@@ -352,7 +358,7 @@ export function TrainingView({
     }
 
     if (page.kind === "recovery") {
-      const rec = recoveryInsights;
+      const rec = dayRecovery;
       const recScore = effectiveRecovery ?? null;
       const recBand = dayPulse?.recovery.band ?? rec?.band ?? "unavailable";
       return (
@@ -360,7 +366,7 @@ export function TrainingView({
           {backHeader("Recovery")}
           <section className="card" style={{ display: "grid", gap: ".9rem", justifyItems: "center" }} aria-label="Recovery Insights">
             <BevelScoreRing
-              label="Recovery Score"
+              label="Readiness estimate"
               value={recScore}
               displayText={recScore != null ? `${Math.round(recScore)}%` : "—"}
               pct={recScore ?? 0}
@@ -369,12 +375,12 @@ export function TrainingView({
               strokeWidth={10}
               sublabel={
                 recBand === "optimal"
-                  ? "Optimal"
+                  ? "Higher readiness"
                   : recBand === "moderate"
                     ? "Moderate"
                     : recBand === "strained"
                       ? "Strained"
-                      : "Pending sync"
+                      : recoveryStateLabel
               }
             />
             <div className="energy-strip" style={{ width: "100%", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
@@ -402,7 +408,7 @@ export function TrainingView({
             )}
             <div className="bevel-awaiting-strip" style={{ width: "100%" }}>
               <span>
-                <strong>Target Strain:</strong> {target.min}–{target.max} ({target.label})
+                {effectiveRecovery == null ? "Personalized strain guidance needs completed sleep and a calibrated baseline." : `Estimated strain guide: ${target.min}–${target.max} (${target.label})`}
               </span>
             </div>
           </section>
@@ -433,7 +439,7 @@ export function TrainingView({
             <section className="card" style={{ display: "grid", gap: ".55rem" }}>
               <div className="split-row">
                 <span className="eyebrow">5-Vital Health Monitor</span>
-                <span className={`pill ${dayPulse.healthMonitor.status === "elevated" ? "danger-soft" : dayPulse.healthMonitor.status === "watch" ? "amber-soft" : "teal-soft"}`}>
+                <span className={`pill ${dayPulse.healthMonitor.status === "elevated" ? "danger-soft" : dayPulse.healthMonitor.status === "watch" ? "amber-soft" : dayPulse.healthMonitor.status === "nominal" ? "teal-soft" : ""}`}>
                   {dayPulse.healthMonitor.status}
                 </span>
               </div>
@@ -444,7 +450,7 @@ export function TrainingView({
                     <span>{v.label}</span>
                     <span className="num">
                       <strong>{v.valueText}</strong>
-                      {v.rangeText ? <span style={{ color: "var(--muted)" }}> · {v.rangeText}</span> : null}
+                      {v.rangeText ? <span style={{ color: "var(--muted)" }}> · {v.rangeText}</span> : <span style={{ color: "var(--muted)" }}> · {v.status === "calibrating" ? "Calibrating baseline" : "No observation"}</span>}
                     </span>
                   </div>
                 ))}
@@ -455,7 +461,7 @@ export function TrainingView({
           {dayPulse?.forecast.predictedScore != null && (
             <section className="card" style={{ display: "grid", gap: ".3rem" }}>
               <div className="split-row">
-                <span className="eyebrow">Next-Day Readiness Forecast</span>
+                <span className="eyebrow">Future readiness scenario</span>
                 <strong className="num" style={{ color: "var(--accent)" }}>
                   {dayPulse.forecast.predictedScore}% ({dayPulse.forecast.low}–{dayPulse.forecast.high}%)
                 </strong>
@@ -468,7 +474,7 @@ export function TrainingView({
     }
 
     if (page.kind === "activity") {
-      const act = strain.activities.find((a) => a.id === page.id);
+      const act = dayActivities.find((a) => a.id === page.id);
       if (act) {
         const groupedExercises = new Map<string, NonNullable<StrainActivityBreakdown["sets"]>>();
         for (const s of act.sets ?? []) {
@@ -500,7 +506,7 @@ export function TrainingView({
                   <span className="eyebrow">Heart Rate ({act.avgHrBpm != null ? `Avg ${act.avgHrBpm} bpm` : "Timeline"})</span>
                   <div className="chart" style={{ height: 170, marginTop: ".35rem" }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={act.hrSeries.map((p) => ({ time: p.recordedAt.slice(11, 16), bpm: p.bpm }))}>
+                      <AreaChart data={act.hrSeries.map((p) => ({ time: new Date(p.recordedAt).toLocaleTimeString("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit" }), bpm: p.bpm }))}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                         <XAxis dataKey="time" tick={{ fontSize: 10 }} />
                         <YAxis domain={["dataMin - 10", "dataMax + 10"]} tick={{ fontSize: 10 }} width={32} />
@@ -563,7 +569,7 @@ export function TrainingView({
                         <div key={i} className="split-row">
                           <span>Set {s.setIndex + 1} · {s.setType}</span>
                           <span className="num" style={{ color: "var(--text)" }}>
-                            {s.weightKg != null ? `${s.weightKg} kg` : "BW"} × {s.reps ?? "—"}
+                            {s.weightKg != null ? `${s.weightKg} kg` : "Load unknown / bodyweight"} × {s.reps ?? "—"}
                             {s.rpe != null ? ` · RPE ${s.rpe}` : ""}
                           </span>
                         </div>
@@ -593,7 +599,7 @@ export function TrainingView({
           <div className="page-sub">
             <span>{formattedDate}</span>
             <span className={`pill ${inZone ? "teal-soft" : overZone ? "amber-soft" : ""}`}>
-              Target {target.min}–{target.max}
+              {effectiveRecovery == null ? "Readiness unavailable" : `Guide ${target.min}–${target.max}`}
             </span>
           </div>
         </div>
@@ -658,6 +664,8 @@ export function TrainingView({
         </div>
       </section>
 
+      {loadError && <p className="metric-provenance" role="alert">{loadError}. Change date or recalculate to retry.</p>}
+
       {/* Recovery Insights Card (Taps into full-page Recovery view) */}
       <div className="unlock-gate">
         <section
@@ -679,10 +687,10 @@ export function TrainingView({
                 </strong>
                 <span style={{ fontSize: ".78rem", color: "var(--muted)" }}>
                   {recoveryPending
-                    ? "Awaiting morning sync"
-                    : `${fmtSleep(recoveryInsights?.metrics.sleepMinutes ?? null)} sleep${
-                        recoveryInsights?.metrics.restingHrBpm != null
-                          ? ` · ${Math.round(recoveryInsights.metrics.restingHrBpm)} bpm RHR`
+                    ? recoveryStateLabel
+                    : `${fmtSleep(dayRecovery?.metrics.sleepMinutes ?? null)} sleep${
+                        dayRecovery?.metrics.restingHrBpm != null
+                          ? ` · ${Math.round(dayRecovery.metrics.restingHrBpm)} bpm RHR`
                           : ""
                       }`}
                 </span>
@@ -717,33 +725,33 @@ export function TrainingView({
             displayText={overall == null ? "—" : overall.toFixed(1)}
             pct={overall ?? 0}
             color="var(--strain-color)"
-            targetRange={[target.min, target.max]}
+            targetRange={effectiveRecovery == null ? null : [target.min, target.max]}
             size={110}
             strokeWidth={9.5}
-            sublabel={target.label}
+            sublabel={effectiveRecovery == null ? "Needs readiness inputs" : `Estimated · ${target.label}`}
           />
           <div className="hero-stats">
             <div className="hero-figures">
               <div className="stat-mini">
                 <span>Muscular</span>
                 <strong className="num" style={{ color: "var(--purple)" }}>
-                  {strain.muscularStrain == null ? "—" : strain.muscularStrain.toFixed(1)}
+                  {dayStrain?.muscularStrain == null ? "—" : dayStrain.muscularStrain.toFixed(1)}
                 </strong>
               </div>
               <div className="stat-mini">
                 <span>Cardio</span>
                 <strong className="num" style={{ color: "var(--blue)" }}>
-                  {strain.cardioStrain == null ? "—" : strain.cardioStrain.toFixed(1)}
+                  {dayStrain?.cardioStrain == null ? "—" : dayStrain.cardioStrain.toFixed(1)}
                 </strong>
               </div>
               <div className="stat-mini">
                 <span>Walking</span>
                 <strong className="num" style={{ color: "var(--teal)" }}>
-                  +{strain.walkingPoints.toFixed(1)}
+                  {dayStrain == null || dayStrain.confidence === "incomplete" ? "—" : `+${dayStrain.walkingPoints.toFixed(1)}`}
                 </strong>
               </div>
             </div>
-            <p style={{ fontSize: ".76rem", color: "var(--muted)", margin: 0 }}>{target.guidance}</p>
+            <p style={{ fontSize: ".76rem", color: "var(--muted)", margin: 0 }}>{effectiveRecovery == null ? "Personalized strain guidance is unavailable while sleep or baseline inputs are incomplete." : target.guidance}</p>
           </div>
         </div>
       </section>
@@ -844,33 +852,29 @@ export function TrainingView({
         );
       })()}
 
-      {/* Inline Anatomical Muscle Recovery Map */}
+      {/* Inline Anatomical Muscle Training Map */}
       <div className="unlock-gate">
         <section
           className={`card unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
           style={{ display: "grid", gap: ".65rem" }}
-          aria-label="Muscle Recovery Map"
+          aria-label="Muscle Training Map"
         >
           <div className="split-row">
             <div>
-              <span className="eyebrow">Muscle Recovery Map</span>
+              <span className="eyebrow">Muscle Training Map</span>
               <div style={{ fontSize: ".78rem", color: "var(--muted)", marginTop: ".15rem" }}>
                 {loadsBusy && !loads
                   ? "Loading Hevy muscle map…"
-                  : fatiguedCount > 0
-                    ? `${fatiguedCount} fatigued · ${recoveringCount} recovering`
-                    : recoveringCount > 0
-                      ? `${recoveringCount} muscle group(s) recovering`
-                      : "All muscle groups fresh & ready"}
+                  : loadError ?? `${trackedCount} tracked · ${calibratingCount} calibrating · ${unknownCount} unknown`}
               </div>
             </div>
-            <span className={`pill ${fatiguedCount > 0 ? "danger-soft" : recoveringCount > 0 ? "amber-soft" : "teal-soft"}`}>
-              {fatiguedCount > 0 ? "Fatigued" : recoveringCount > 0 ? "Recovering" : "Fresh"}
+            <span className="pill">
+              Recorded training
             </span>
           </div>
 
           {loadsBusy && !loads ? (
-            <p className="empty" style={{ padding: "1.25rem 0" }}>Loading muscle recovery readiness…</p>
+            <p className="empty" style={{ padding: "1.25rem 0" }}>Loading muscle training history…</p>
           ) : (
             <MuscleFreshnessMap
               entries={loads?.muscleFreshness ?? []}
@@ -881,8 +885,8 @@ export function TrainingView({
         </section>
         {!hevy.connected && (
           <div className="unlock-overlay">
-            <h3>Unlock Muscle Recovery</h3>
-            <p>Connect Hevy to view anatomical recovery &amp; strain heatmaps.</p>
+            <h3>Unlock Muscle Training</h3>
+            <p>Connect Hevy to view recorded training by muscle group.</p>
             {hevy.oauthAvailable ? (
               <a className="unlock-btn" href="/api/integrations/hevy/connect">
                 Connect Hevy to Unlock
@@ -900,17 +904,17 @@ export function TrainingView({
       <section className="card" aria-label="Daily Strain Breakdown" style={{ display: "grid", gap: ".2rem" }}>
         <div className="split-row" style={{ marginBottom: ".25rem" }}>
           <h2 style={{ fontSize: "1rem", margin: 0 }}>Today&apos;s Activities</h2>
-          <span className="pill">{strain.activities.length}</span>
+          <span className="pill">{dayActivities.length}</span>
         </div>
 
         {loading ? (
           <p className="empty">Loading activities…</p>
-        ) : strain.activities.length === 0 ? (
+        ) : dayActivities.length === 0 ? (
           <p className="empty" style={{ padding: ".5rem 0" }}>
-            No workouts or steps recorded for {formattedDate}.
+            No workouts or steps recorded for {formattedDate}. Missing records do not confirm a rest day.
           </p>
         ) : (
-          strain.activities.map((act: StrainActivityBreakdown) => (
+          dayActivities.map((act: StrainActivityBreakdown) => (
             <button
               key={act.id}
               type="button"
@@ -950,11 +954,12 @@ export function TrainingView({
 
       {/* Auto Habit Impact on Next-Day Recovery */}
       {dayPulse && dayPulse.behaviorImpacts.length > 0 && (
-        <section className="card" style={{ display: "grid", gap: ".45rem" }} aria-label="Habit Impact on Recovery">
+        <section className="card" style={{ display: "grid", gap: ".45rem" }} aria-label="Habit associations with recovery">
           <div className="split-row">
-            <span className="eyebrow">Auto Habit Impact on Recovery</span>
-            <span className="pill">45d trend</span>
+            <span className="eyebrow">Habit associations with recovery</span>
+            <span className="pill">Exploratory</span>
           </div>
+          <p className="metric-provenance">Small observational samples; association does not establish cause.</p>
           <div style={{ display: "grid", gap: ".35rem" }}>
             {dayPulse.behaviorImpacts.map((b) => (
               <div key={b.key} className="split-row" style={{ fontSize: ".8rem" }}>
@@ -963,7 +968,7 @@ export function TrainingView({
                   <span style={{ color: "var(--muted)" }}>({b.withCount}d vs {b.withoutCount}d)</span>
                 </span>
                 <span className={`pill num ${b.deltaRecovery >= 0 ? "teal-soft" : "danger-soft"}`}>
-                  {b.deltaRecovery >= 0 ? `+${b.deltaRecovery}` : b.deltaRecovery}%
+                  {b.deltaRecovery >= 0 ? `+${b.deltaRecovery}` : b.deltaRecovery} pts
                 </span>
               </div>
             ))}

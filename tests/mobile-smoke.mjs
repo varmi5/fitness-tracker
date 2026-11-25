@@ -47,6 +47,14 @@ try {
   const encrypted = Buffer.concat([cipher.update(JSON.stringify({ accessToken: "synthetic", refreshToken: "synthetic", expiresAt: Date.now() + 3600000, scopes: ["https://www.googleapis.com/auth/googlehealth.nutrition.writeonly"] })), cipher.final()]);
   await db.query("INSERT INTO health_integration(user_id,provider,account_label,credential) VALUES ($1,'google','synthetic@example.test',$2)", [ownerId, Buffer.concat([iv,cipher.getAuthTag(),encrypted]).toString("base64url")]);
 
+  // Synthetic imported strength sessions unlock the actual anatomy component without remote credentials.
+  for (const daysAgo of [1, 3, 5]) {
+    const day = new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 10);
+    const id = `anatomy-${daysAgo}`;
+    await db.query("INSERT INTO hevy_workout(user_id,hevy_id,day,title,start_time,end_time,duration_seconds) VALUES($1,$2,$3,'Synthetic bench session',$4,$5,3600)", [ownerId, id, day, `${day}T10:00:00Z`, `${day}T11:00:00Z`]);
+    await db.query("INSERT INTO hevy_set(id,user_id,hevy_id,exercise_index,exercise_title,set_index,set_type,weight_kg,reps,rpe) VALUES($1,$2,$3,0,'Bench Press',0,'normal',60,5,8)", [`set-${id}`, ownerId, id]);
+  }
+
   for (const [name, preferredEngine, device] of [["iphone", webkit, devices["iPhone 15"]], ["desktop", chromium, { viewport: { width: 1280, height: 900 } }]]) {
     if (process.env.UI_ENGINE && process.env.UI_ENGINE !== name) continue;
     const useFallbackChromium = !existsSync(preferredEngine.executablePath()) && Boolean(systemChromium);
@@ -184,7 +192,7 @@ try {
       if (tab === "Training") {
         await page.getByRole("heading", { name: "Training & Strain", exact: true }).waitFor();
         await page.getByText(/Cardio Load|Daily Walking/).first().waitFor();
-        await page.getByText("Unlock Muscular Load").first().waitFor();
+        await page.getByText("Muscular Load", { exact: true }).first().waitFor();
       }
       if (tab === "Body") {
         await page.getByRole("heading", { name: "Body", exact: true }).waitFor();
@@ -250,6 +258,24 @@ try {
     await page.getByRole("button", { name: "Overall Strain summary", exact: true }).click();
     await page.getByRole("heading", { name: "Training & Strain", exact: true }).waitFor();
     await page.getByRole("region", { name: "Recovery Insights", exact: true }).waitFor();
+    const recoveryRegion = page.getByRole("region", { name: "Recovery Insights", exact: true });
+    const anatomyRegion = page.getByRole("region", { name: "Muscle Training Map", exact: true });
+    await anatomyRegion.locator(".muscle-svg").waitFor();
+    assert.ok(await anatomyRegion.locator(".muscle-svg path").count() > 40);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+    if (screenshotDir) {
+      await page.screenshot({ path: `${screenshotDir}/${name}-training.png`, fullPage: true });
+      await anatomyRegion.screenshot({ path: `${screenshotDir}/${name}-anatomy-front.png` });
+      await anatomyRegion.getByRole("button", { name: "Back", exact: true }).click();
+      await anatomyRegion.screenshot({ path: `${screenshotDir}/${name}-anatomy-back.png` });
+    }
+    await recoveryRegion.getByRole("button").click();
+    await page.getByText("Readiness estimate", { exact: true }).waitFor();
+
+    assert.equal(await recoveryRegion.locator(".bevel-ring-center").innerText(), "—", "No recorded sleep or baseline must never produce a recovery percentage");
+    assert.match(await recoveryRegion.innerText(), /needs completed sleep|Waiting for completed sleep|Awaiting sleep/);
+    await page.getByRole("button", { name: "Back", exact: true }).first().click();
+
 
     await page.getByRole("navigation").getByRole("button", { name: "Nutrition", exact: true }).click();
     const londonToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date());

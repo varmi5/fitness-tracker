@@ -1,5 +1,7 @@
 # FitnessTrackr — Strain, Cardio Load, Muscular Load & Walking Algorithm Specification
 
+> Historical specification. The current `strain-v3.0-evidence` and sleep/readiness changes are documented in [metrics-methodology.md](metrics-methodology.md). Superseded percentages, statuses and fallback assumptions below are not the current implementation.
+
 **Algorithm Version:** `strain-v1.0-provisional`  
 **Status:** Implemented (`lib/strain-engine.ts`, `lib/training-load.ts`, `lib/recovery-insights.ts`, `app/training-view.tsx`)
 

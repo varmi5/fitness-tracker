@@ -248,62 +248,16 @@ export function evaluateEnergyBalance(avgDeficitKcal: number | null, isBulkMode:
       summary: "Log meals & sync expenditure to track your balance.",
     };
   }
-  if (isBulkMode) {
-    if (avgDeficitKcal <= -150 && avgDeficitKcal >= -500) {
-      return {
-        label: "On Track · Lean Bulk",
-        tone: "teal",
-        summary: `Averaging ~${Math.abs(avgDeficitKcal)} kcal/d surplus — ideal steady gain zone.`,
-      };
-    }
-    if (avgDeficitKcal < -500) {
-      return {
-        label: "High Surplus",
-        tone: "amber",
-        summary: `Averaging ~${Math.abs(avgDeficitKcal)} kcal/d surplus — above typical lean-bulk pace.`,
-      };
-    }
-    if (avgDeficitKcal > 150) {
-      return {
-        label: "Under Target",
-        tone: "danger",
-        summary: `Averaging ~${avgDeficitKcal} kcal/d deficit — eat more to hit your bulk goal.`,
-      };
-    }
-    return {
-      label: "Maintaining",
-      tone: "blue",
-      summary: "Intake closely matches expenditure — add ~200–350 kcal/d for a lean bulk.",
-    };
-  }
-
-  // Cut / Fat-Loss mode (default)
-  if (avgDeficitKcal >= 200 && avgDeficitKcal <= 750) {
-    return {
-      label: "On Track · Fat Loss",
-      tone: "teal",
-      summary: `Averaging ~${avgDeficitKcal} kcal/d deficit — sustainable fat-loss zone.`,
-    };
-  }
-  if (avgDeficitKcal > 750) {
-    return {
-      label: "Aggressive Cut",
-      tone: "amber",
-      summary: `Averaging ~${avgDeficitKcal} kcal/d deficit — steep cut; protect protein & recovery.`,
-    };
-  }
-  if (avgDeficitKcal < -150) {
-    return {
-      label: "Over Target",
-      tone: "danger",
-      summary: `Averaging ~${Math.abs(avgDeficitKcal)} kcal/d surplus — above your cut target.`,
-    };
-  }
-  return {
-    label: "Maintaining",
-    tone: "blue",
-    summary: "Near energy balance — right around maintenance calories.",
+  void isBulkMode;
+  if (avgDeficitKcal > 0) return {
+    label: "Estimated deficit", tone: "neutral",
+    summary: `Recorded intake is ~${Math.round(avgDeficitKcal)} kcal/d below estimated expenditure on comparable days.`,
   };
+  if (avgDeficitKcal < 0) return {
+    label: "Estimated surplus", tone: "neutral",
+    summary: `Recorded intake is ~${Math.round(Math.abs(avgDeficitKcal))} kcal/d above estimated expenditure on comparable days.`,
+  };
+  return { label: "Estimated balance", tone: "neutral", summary: "Recorded intake and estimated expenditure match on comparable days; measurement uncertainty still applies." };
 }
 
 export function EnergyBalanceScale({
@@ -332,12 +286,6 @@ export function EnergyBalanceScale({
   const clampedKcal = Math.max(-1000, Math.min(1000, netPositionKcal));
   const pinPct = Math.round(((clampedKcal + 1000) / 2000) * 100);
 
-  // Target zone band on the 0..100% scale:
-  // Cut mode: -750 to -200 kcal (12.5% to 40%)
-  // Bulk mode: +150 to +500 kcal (57.5% to 75%)
-  const targetLeftPct = isBulkMode ? 57.5 : 12.5;
-  const targetWidthPct = isBulkMode ? 17.5 : 27.5;
-
   const pinColor =
     verdict.tone === "teal"
       ? "var(--status-good)"
@@ -357,12 +305,6 @@ export function EnergyBalanceScale({
       {/* Visual Balance Scale */}
       <div className="balance-scale-wrap">
         <div className="balance-scale-track">
-          {/* Optimal target zone highlight */}
-          <div
-            className="balance-scale-target"
-            style={{ left: `${targetLeftPct}%`, width: `${targetWidthPct}%` }}
-            title={isBulkMode ? "Target lean bulk zone" : "Target fat-loss zone"}
-          />
           {/* Center maintenance tick */}
           <span className="balance-scale-center" />
           {/* Current position pin */}

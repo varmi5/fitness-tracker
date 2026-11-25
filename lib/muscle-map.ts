@@ -18,27 +18,23 @@ export interface MuscleMapping {
   secondary: MuscleGroup[];
 }
 
+// Specific movements precede broad keywords: a leg curl is not a biceps curl,
+// and a Romanian deadlift is not a conventional deadlift. This is an explicit
+// title heuristic, not measured muscle activation. Unrecognised titles stay unmapped.
 const KEYWORD_RULES: { match: RegExp; mapping: MuscleMapping }[] = [
-  // Chest
-  { match: /\b(bench press|chest press|incline.*press|decline.*press|pec deck|chest fly|dumbbell fly|cable fly|push[\s-]?up|dip)\b/i, mapping: { primary: ["Chest"], secondary: ["Triceps", "Shoulders"] } },
-  // Back
-  { match: /\b(pull[\s-]?up|chin[\s-]?up|lat pulldown|pulldown|barbell row|dumbbell row|cable row|seated row|t-bar row|pendlay|face pull|shrug|back extension)\b/i, mapping: { primary: ["Back"], secondary: ["Biceps", "Shoulders"] } },
-  { match: /\b(deadlift)\b/i, mapping: { primary: ["Back", "Hamstrings", "Glutes"], secondary: ["Quads", "Core"] } },
-  // Shoulders
-  { match: /\b(overhead press|shoulder press|military press|arnold press|lateral raise|front raise|rear delt|upright row|ohp)\b/i, mapping: { primary: ["Shoulders"], secondary: ["Triceps"] } },
-  // Biceps
-  { match: /\b(bicep|biceps|curl|hammer curl|preacher curl|concentration curl|ez bar curl)\b/i, mapping: { primary: ["Biceps"], secondary: ["Back"] } },
-  // Triceps
-  { match: /\b(tricep|triceps|pushdown|skullcrusher|skull crusher|overhead extension|close[\s-]?grip bench)\b/i, mapping: { primary: ["Triceps"], secondary: ["Chest", "Shoulders"] } },
-  // Quads
-  { match: /\b(squat|leg press|leg extension|lunge|split squat|bulgarian|hack squat|goblet|step[\s-]?up)\b/i, mapping: { primary: ["Quads", "Glutes"], secondary: ["Hamstrings", "Core"] } },
-  // Hamstrings
-  { match: /\b(romanian deadlift|rdl|stiff[\s-]?leg|leg curl|hamstring|good morning)\b/i, mapping: { primary: ["Hamstrings"], secondary: ["Glutes", "Back"] } },
-  // Glutes
-  { match: /\b(hip thrust|glute bridge|kickback|abductor|adductor)\b/i, mapping: { primary: ["Glutes"], secondary: ["Hamstrings", "Quads"] } },
-  // Calves
+  { match: /\b(leg curl|hamstring curl|hamstring)\b/i, mapping: { primary: ["Hamstrings"], secondary: [] } },
+  { match: /\b(romanian deadlift|rdl|stiff[\s-]?leg|good morning)\b/i, mapping: { primary: ["Hamstrings", "Glutes"], secondary: ["Back"] } },
+  { match: /\b(tricep[s]? kickback|tricep[s]?|pushdown|skull\s?crusher|overhead extension|close[\s-]?grip bench)\b/i, mapping: { primary: ["Triceps"], secondary: [] } },
+  { match: /\b(glute kickback|hip thrust|glute bridge|hip abduction|abductor)\b/i, mapping: { primary: ["Glutes"], secondary: [] } },
+  { match: /\b(hip adduction|adductor)\b/i, mapping: { primary: [], secondary: [] } },
   { match: /\b(calf|calves|calf raise|seated calf|standing calf)\b/i, mapping: { primary: ["Calves"], secondary: [] } },
-  // Core
+  { match: /\b(overhead press|shoulder press|military press|arnold press|lateral raise|front raise|rear delt|upright row|ohp|face pull)\b/i, mapping: { primary: ["Shoulders"], secondary: [] } },
+  { match: /\b(bench press|chest press|incline.*press|decline.*press|pec deck|chest fly|dumbbell fly|cable fly|push[\s-]?up|dip)\b/i, mapping: { primary: ["Chest"], secondary: ["Triceps", "Shoulders"] } },
+  { match: /\b(pull[\s-]?up|chin[\s-]?up|lat pulldown|pulldown|barbell row|dumbbell row|cable row|seated row|t-bar row|pendlay|shrug|back extension)\b/i, mapping: { primary: ["Back"], secondary: ["Biceps"] } },
+  { match: /\b(deadlift)\b/i, mapping: { primary: ["Hamstrings", "Glutes"], secondary: ["Back", "Quads", "Core"] } },
+  { match: /\b(bicep[s]?|curl|hammer curl|preacher curl|concentration curl|ez bar curl)\b/i, mapping: { primary: ["Biceps"], secondary: [] } },
+  { match: /\b(leg extension)\b/i, mapping: { primary: ["Quads"], secondary: [] } },
+  { match: /\b(squat|leg press|lunge|split squat|bulgarian|hack squat|goblet|step[\s-]?up)\b/i, mapping: { primary: ["Quads", "Glutes"], secondary: ["Core"] } },
   { match: /\b(plank|crunch|sit[\s-]?up|leg raise|hanging knee|ab wheel|pallof|russian twist|cable crunch|core)\b/i, mapping: { primary: ["Core"], secondary: [] } },
 ];
 
@@ -51,8 +47,8 @@ export function resolveExerciseMuscles(
   for (const rule of KEYWORD_RULES) {
     if (rule.match.test(exerciseTitle)) return rule.mapping;
   }
-  // Conservative fallback for unrecognized strength exercises
-  return { primary: ["Core"], secondary: [] };
+  // No muscle-specific evidence: keep the workout, do not invent Core load.
+  return { primary: [], secondary: [] };
 }
 
 export function distributeMuscleLoad(

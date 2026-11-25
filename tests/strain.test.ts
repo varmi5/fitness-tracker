@@ -5,7 +5,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { importHevyWorkouts } from "../lib/hevy";
 import { MUSCLE_GROUPS, resolveExerciseMuscles } from "../lib/muscle-map";
-import { strainData } from "../lib/strain-data";
+import { overlapStepsForWindows, strainData } from "../lib/strain-data";
 import {
   computeCompositeStrain,
   computeEdwardsTrimp,
@@ -230,7 +230,7 @@ test("strainData combines Hevy + matched Google workout + HR samples + step inte
   assert.equal(st2View.confidence, "incomplete");
 });
 
-test("strainData estimates provisional Muscular Load for unmatched Google Health strength workouts and invalidates history cache when Hevy pairs", async () => {
+test("Google session duration does not invent muscular sets; Hevy pairing invalidates history cache", async () => {
   const s1 = strainData(db, "ST-1");
   await db.insert(schema.dailyWorkout).values({
     userId: "ST-1",
@@ -251,9 +251,9 @@ test("strainData estimates provisional Muscular Load for unmatched Google Health
   const strengthAct = provisional.activities.find((a) => a.id === "google:gw-nov24" || a.id === "gw-nov24");
   assert.ok(strengthAct, "Unmatched Google Health strength workout must be present");
   assert.equal(strengthAct.kind, "strength");
-  assert.ok(provisional.mRaw > 0, "Unmatched Google Health strength workout must generate provisional Muscular Load (mRaw > 0)");
-  assert.ok((provisional.muscularStrain ?? 0) > 0, "muscularStrain must be > 0");
-  assert.ok((provisional.muscleLoads.Chest ?? 0) > 0, "Push Workout must attribute provisional sets to Chest");
+  assert.equal(provisional.mRaw, 0, "Duration cannot establish sets or muscular load");
+  assert.equal(provisional.muscularStrain ?? 0, 0);
+  assert.equal(provisional.muscleLoads.Chest, 0, "Session titles cannot establish muscle-specific sets");
 
   // Simulate later Hevy sync for the same workout timestamp and verify history() invalidates the cached row
   await new Promise((r) => setTimeout(r, 15));
@@ -284,3 +284,65 @@ test("strainData estimates provisional Muscular Load for unmatched Google Health
   assert.equal(pairedAct.sets?.length, 3);
 });
 
+
+
+test("exercise title specificity prevents false muscle attribution and unknown Core load", () => {
+  assert.deepEqual(resolveExerciseMuscles("Seated Leg Curl").primary, ["Hamstrings"]);
+  assert.deepEqual(resolveExerciseMuscles("Romanian Deadlift (Barbell)").primary, ["Hamstrings", "Glutes"]);
+  assert.deepEqual(resolveExerciseMuscles("Close-grip Bench Press").primary, ["Triceps"]);
+  assert.deepEqual(resolveExerciseMuscles("Triceps Kickback").primary, ["Triceps"]);
+  assert.deepEqual(resolveExerciseMuscles("Hip Adduction").primary, []);
+  assert.deepEqual(resolveExerciseMuscles("Unrecognised Exercise").primary, []);
+  const result = computeMuscularWorkload([{ exerciseTitle: "Unrecognised Exercise", setType: "normal", reps: 8, rpe: 8, weightKg: 40 }]);
+  assert.equal(result.unmappedSetCount, 1);
+  assert.equal(result.muscleLoads.Core, 0);
+  assert.ok(result.mRaw > 0, "Unmapped sets remain part of recorded total workload");
+});
+
+test("TRIMP integrates observed time only, deduplicates timestamps and excludes outages", () => {
+  const lone = { recordedAt: "2026-11-23T10:00:00Z", bpm: 155 };
+  assert.equal(computeEdwardsTrimp([lone], 190).status, "unavailable");
+  assert.equal(computeEdwardsTrimp([lone, lone], 190).coveredMinutes, 0);
+  assert.equal(computeEdwardsTrimp([lone, { ...lone, recordedAt: "2026-11-23T11:00:00Z" }], 190).cRaw, 0);
+  const adjacent = computeEdwardsTrimp([lone, { ...lone, recordedAt: "2026-11-23T10:01:00Z" }], 190);
+  assert.equal(adjacent.cRaw, 4);
+  assert.equal(adjacent.coveredMinutes, 1);
+  const fallback = computeEdwardsTrimp([], 190, { fallbackActiveZoneMinutes: 20 });
+  assert.equal(fallback.zones.reduce((sum, zone) => sum + zone.minutes, 0), 0, "Weighted AZM are not observed zone duration");
+});
+
+test("personal same-exercise references distinguish intensity without naive cross-exercise tonnage", () => {
+  const set = { exerciseTitle: "Bench Press", setType: "normal", reps: 8, rpe: null, weightKg: 20, reference1RmKg: 100 };
+  const light = computeMuscularWorkload([set]);
+  const heavy = computeMuscularWorkload([{ ...set, weightKg: 80 }]);
+  assert.ok(heavy.mRaw > light.mRaw);
+  assert.equal(heavy.relativeIntensitySetCount, 1);
+  assert.equal(heavy.externalVolumeKg, 640);
+  const knownEffort = computeMuscularWorkload([{ ...set, rpe: 9 }]);
+  const sameRelativeEffort = computeMuscularWorkload([{ ...set, rpe: 9, weightKg: 80 }]);
+  assert.equal(knownEffort.mRaw, sameRelativeEffort.mRaw, "Known effort is not scaled by arbitrary absolute kg");
+});
+
+
+test("workout step exclusion uses interval union across disjoint and overlapping sessions", () => {
+  const time = (minute: number) => new Date(Date.UTC(2026, 10, 25, 10, minute));
+  const intervals = [{ startTime: time(0), endTime: time(60), steps: 6000 }];
+  const windows = [
+    { startTime: time(0), endTime: time(10) },
+    { startTime: time(30), endTime: time(40) },
+    { startTime: time(35), endTime: time(45) },
+  ];
+  assert.equal(overlapStepsForWindows(intervals, windows), 2500);
+  assert.equal(overlapStepsForWindows(intervals, [...windows, windows[0]]), 2500, "Repeated workout windows do not duplicate excluded steps");
+  assert.equal(overlapStepsForWindows([], windows), null);
+  assert.equal(overlapStepsForWindows(intervals, []), 0);
+});
+
+test("TRIMP discloses estimated versus configured maximum HR provenance", () => {
+  const samples = [
+    { recordedAt: "2026-11-25T10:00:00Z", bpm: 140 },
+    { recordedAt: "2026-11-25T10:01:00Z", bpm: 140 },
+  ];
+  assert.match(computeEdwardsTrimp(samples, 190, { maxHrIsEstimated: true }).note, /Maximum HR 190 bpm is estimated/);
+  assert.match(computeEdwardsTrimp(samples, 180, { maxHrIsEstimated: false }).note, /user-configured, not verified/);
+});

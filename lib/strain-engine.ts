@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { distributeMuscleLoad, MUSCLE_GROUPS, resolveExerciseMuscles, type MuscleGroup, type MuscleMapping } from "./muscle-map";
 
-export const STRAIN_ALGORITHM_VERSION = "strain-v2.1";
+export const STRAIN_ALGORITHM_VERSION = "strain-v3.0-evidence";
 export const CARDIO_REFERENCE_C_RAW = 220;
 export const MUSCULAR_REFERENCE_M_RAW = 18;
 export const STRENGTH_CARDIO_FACTOR = 0.30;
@@ -74,10 +74,13 @@ export interface TrimpResult {
 export function computeEdwardsTrimp(
   samples: HrSampleInput[],
   maxHrBpm: number,
-  options: { maxGapSeconds?: number; fallbackActiveZoneMinutes?: number | null } = {},
+  options: { maxGapSeconds?: number; fallbackActiveZoneMinutes?: number | null; maxHrIsEstimated?: boolean } = {},
 ): TrimpResult {
   const maxHr = Math.max(120, Math.min(230, maxHrBpm || 190));
   const maxGapSec = options.maxGapSeconds ?? 180;
+  const maxHrNote = options.maxHrIsEstimated !== false
+    ? `Maximum HR ${maxHr} bpm is estimated; zones and load depend on this uncertain reference.`
+    : `Maximum HR ${maxHr} bpm is user-configured, not verified by this app.`;
   const zoneDefs: { zone: 1 | 2 | 3 | 4 | 5; label: string; minPct: number; maxPct: number; weight: number }[] = [
     { zone: 1, label: "Zone 1 (50–59%)", minPct: 0.5, maxPct: 0.6, weight: 1 },
     { zone: 2, label: "Zone 2 (60–69%)", minPct: 0.6, maxPct: 0.7, weight: 2 },
@@ -102,23 +105,19 @@ export function computeEdwardsTrimp(
     return 5;
   };
 
+  // Integrate only observed adjacent intervals. A lone reading establishes no
+  // duration; a telemetry outage must not acquire invented minutes at either end.
+  const unique = [...new Map(sorted.map((sample) => [sample.ms, sample])).values()];
   let coveredSec = 0;
-  if (sorted.length >= 2) {
-    for (let i = 0; i < sorted.length; i++) {
-      const prevDt = i > 0 ? (sorted[i].ms - sorted[i - 1].ms) / 1000 : 60;
-      const nextDt = i < sorted.length - 1 ? (sorted[i + 1].ms - sorted[i].ms) / 1000 : 60;
-      const dt = Math.min(maxGapSec, Math.max(1, (Math.min(prevDt, maxGapSec) + Math.min(nextDt, maxGapSec)) / 2));
-      coveredSec += dt;
-      const z = zoneForBpm(sorted[i].bpm);
-      if (z) zoneSeconds[z] += dt;
-    }
-  } else if (sorted.length === 1) {
-    coveredSec = 60;
-    const z = zoneForBpm(sorted[0].bpm);
-    if (z) zoneSeconds[z] += 60;
+  for (let i = 1; i < unique.length; i++) {
+    const seconds = (unique[i].ms - unique[i - 1].ms) / 1000;
+    if (seconds <= 0 || seconds > maxGapSec) continue;
+    coveredSec += seconds;
+    const zone = zoneForBpm((unique[i - 1].bpm + unique[i].bpm) / 2);
+    if (zone) zoneSeconds[zone] += seconds;
   }
 
-  if (sorted.length > 0) {
+  if (coveredSec > 0) {
     const zones: TrimpZoneBreakdown[] = zoneDefs.map((d) => {
       const minutes = Math.round((zoneSeconds[d.zone] / 60) * 100) / 100;
       const trimp = Math.round(minutes * d.weight * 100) / 100;
@@ -136,10 +135,10 @@ export function computeEdwardsTrimp(
     return {
       cRaw,
       zones,
-      sampleCount: sorted.length,
+      sampleCount: unique.length,
       coveredMinutes: Math.round((coveredSec / 60) * 10) / 10,
       status: "measured",
-      note: `Edwards TRIMP from ${sorted.length} timestamped HR sample(s).`,
+      note: `Edwards TRIMP estimate over ${Math.round(coveredSec / 60 * 10) / 10} observed minute(s); telemetry gaps excluded. ${maxHrNote}`,
     };
   }
 
@@ -152,16 +151,16 @@ export function computeEdwardsTrimp(
       minBpm: Math.round(maxHr * d.minPct),
       maxBpm: d.zone === 5 ? maxHr : Math.round(maxHr * d.maxPct) - 1,
       weight: d.weight,
-      minutes: d.zone === 2 ? azm : 0,
-      trimp: d.zone === 2 ? Math.round(azm * 2 * 100) / 100 : 0,
+      minutes: 0,
+      trimp: 0,
     }));
     return {
       cRaw: Math.round(azm * 2 * 100) / 100,
       zones,
       sampleCount: 0,
-      coveredMinutes: azm,
+      coveredMinutes: 0,
       status: "estimated_azm",
-      note: `Estimated from ${azm} Active Zone Minute(s) (timestamped HR unavailable).`,
+      note: `Provisional load proxy from ${azm} provider Active Zone Minute(s). These are weighted minutes, not observed time in HR zones or measured TRIMP. ${maxHrNote}`,
     };
   }
 
@@ -176,10 +175,10 @@ export function computeEdwardsTrimp(
       minutes: 0,
       trimp: 0,
     })),
-    sampleCount: 0,
+    sampleCount: unique.length,
     coveredMinutes: 0,
     status: "unavailable",
-    note: "Timestamped HR samples unavailable; Cardio Strain not invented.",
+    note: `Insufficient timestamped HR coverage; Cardio Strain unavailable. ${maxHrNote}`,
   };
 }
 
@@ -190,6 +189,8 @@ export interface HevySetForStrain {
   rpe: number | null;
   weightKg: number | null;
   durationSeconds?: number | null;
+  /** Personal exercise-specific reference; do not compare tonnage between exercises. */
+  reference1RmKg?: number | null;
 }
 
 export interface MuscularLoadResult {
@@ -198,6 +199,10 @@ export interface MuscularLoadResult {
   warmupSetCount: number;
   assumedRpeSetCount: number;
   muscleLoads: Record<MuscleGroup, number>;
+  unmappedSetCount: number;
+  relativeIntensitySetCount: number;
+  externalVolumeKg: number;
+  modelNote: string;
 }
 
 export function setTypeWeight(setType: string): number {
@@ -228,6 +233,18 @@ export function repetitionWeight(reps: number | null | undefined, durationSecond
   return 0.8;
 }
 
+/** Same-exercise reference only, from short high-effort sets; not a tested 1RM. */
+export function buildExerciseStrengthReferences(sets: HevySetForStrain[]): Map<string, number> {
+  const references = new Map<string, number>();
+  for (const set of sets) {
+    if (setTypeWeight(set.setType) <= 0 || set.weightKg == null || !Number.isFinite(set.weightKg) || set.weightKg <= 0 || set.reps == null || !Number.isFinite(set.reps) || set.reps < 1 || set.reps > 10 || set.rpe == null || !Number.isFinite(set.rpe) || set.rpe < 8 || set.rpe > 10) continue;
+    const estimate = set.weightKg * (1 + set.reps / 30);
+    const key = set.exerciseTitle.trim().toLowerCase();
+    references.set(key, Math.max(references.get(key) ?? 0, estimate));
+  }
+  return references;
+}
+
 export function computeMuscularWorkload(
   sets: HevySetForStrain[],
   muscleOverrides?: Record<string, MuscleMapping>,
@@ -236,6 +253,9 @@ export function computeMuscularWorkload(
   let workingSetCount = 0;
   let warmupSetCount = 0;
   let assumedRpeSetCount = 0;
+  let unmappedSetCount = 0;
+  let relativeIntensitySetCount = 0;
+  let externalVolumeKg = 0;
   const muscleLoads = Object.fromEntries(MUSCLE_GROUPS.map((m) => [m, 0])) as Record<MuscleGroup, number>;
 
   for (const s of sets) {
@@ -249,10 +269,21 @@ export function computeMuscularWorkload(
     if (assumed) assumedRpeSetCount += 1;
     const repWeight = repetitionWeight(s.reps, s.durationSeconds);
 
-    const setLoad = effWeight * repWeight * stWeight;
+    // RPE is the preferred effort signal. Where RPE is absent, a personal,
+    // same-exercise strength reference can differentiate external intensity.
+    // No absolute-kg multiplier: bodyweight, machines and exercise mechanics differ.
+    const relative = s.reference1RmKg && s.reference1RmKg > 0 && s.weightKg != null && s.weightKg >= 0
+      ? Math.min(1, s.weightKg / s.reference1RmKg) : null;
+    if (assumed && relative != null) relativeIntensitySetCount += 1;
+    const effort = assumed && relative != null ? relative : effWeight;
+    if (s.weightKg != null && s.weightKg >= 0 && s.reps != null && s.reps > 0) {
+      externalVolumeKg += s.weightKg * s.reps;
+    }
+    const setLoad = effort * repWeight * stWeight;
     mRaw += setLoad;
 
     const mapping = resolveExerciseMuscles(s.exerciseTitle, muscleOverrides);
+    if (mapping.primary.length === 0 && mapping.secondary.length === 0) unmappedSetCount += 1;
     const dist = distributeMuscleLoad(setLoad, mapping);
     for (const g of MUSCLE_GROUPS) {
       muscleLoads[g] += dist[g];
@@ -269,6 +300,10 @@ export function computeMuscularWorkload(
     warmupSetCount,
     assumedRpeSetCount,
     muscleLoads,
+    unmappedSetCount,
+    relativeIntensitySetCount,
+    externalVolumeKg: Math.round(externalVolumeKg * 10) / 10,
+    modelNote: "Heuristic effort-weighted set load; not measured muscle damage or recovery. Missing RPE lowers confidence. External volume is descriptive and is not comparable across exercises.",
   };
 }
 

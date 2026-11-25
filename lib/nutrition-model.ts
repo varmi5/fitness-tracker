@@ -254,6 +254,13 @@ export const sleepStageInput = z.object({
 });
 
 export const sleepInput = z.object({
+  isMainSleep: z.boolean().optional(),
+  processed: z.boolean().nullable().optional(),
+  classificationMethod: z.enum(["provider", "longest_session", "legacy"]).optional(),
+  stageIntervalsJson: z.array(z.object({
+    stage: z.enum(["AWAKE", "ASLEEP", "RESTLESS", "LIGHT", "DEEP", "REM"]),
+    startTime: z.iso.datetime({ offset: true }), endTime: z.iso.datetime({ offset: true }),
+  })).max(2000).optional().default([]),
   day: z.iso.date(),
   source: z.enum(ENERGY_SOURCES).default("google"),
   sessionId: z.string().max(160).nullable().optional(),
@@ -364,11 +371,13 @@ export const targetInput = z.object({
 });
 
 export const preferencesInput = z.object({
-  timezone: z.string().trim().min(1).max(80).refine(isValidTimezone, { message: "Invalid timezone." }),
+  timezone: z.string().trim().min(1).max(80).refine(isValidTimezone, { message: "Invalid timezone." }).optional(),
   trackingMode: z.enum(TRACKING_MODES).optional(),
   preferredEnergySource: z.enum(ENERGY_SOURCES).optional(),
-  googleTwoWaySync: z.boolean().optional().default(false),
+  googleTwoWaySync: z.boolean().optional(),
   sleepRolloverEnabled: z.boolean().optional(),
+  sleepGoalMinutes: z.number().int().min(240).max(720).optional(),
+  sleepGoalEffectiveFrom: z.iso.date().optional(),
   bulkMode: z.boolean().optional(),
 });
 

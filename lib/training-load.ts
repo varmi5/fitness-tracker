@@ -1,8 +1,9 @@
 import { and, asc, eq, gte, lte } from "drizzle-orm";
 import type { AuthDatabase } from "./auth";
 import { MUSCLE_GROUPS, resolveExerciseMuscles, type MuscleGroup } from "./muscle-map";
-import { hevySet, hevyWorkout } from "./schema";
-import { setTypeWeight } from "./strain-engine";
+import { hevySet, hevyWorkout, nutritionPreference } from "./schema";
+import { addDays, localDay, resolveLocalDateTime } from "./nutrition-model";
+import { buildExerciseStrengthReferences, computeMuscularWorkload, setTypeWeight } from "./strain-engine";
 import { strainData, type DailyStrainView } from "./strain-data";
 
 export const ACUTE_EWMA_LAMBDA = 2 / (7 + 1); // 0.25
@@ -58,8 +59,16 @@ export interface MuscleLoadSummary {
 
 export interface MuscleFreshnessEntry {
   muscle: MuscleGroup;
-  freshnessPct: number;
-  status: "fresh" | "recovering" | "fatigued";
+  /** Not derivable from workout logs alone; retained nullable for client compatibility. */
+  freshnessPct: number | null;
+  status: "unknown" | "calibrating" | "tracked" | "fresh" | "recovering" | "fatigued";
+  lastTrainedAt?: string | null;
+  hoursSinceTrained?: number | null;
+  trainingDays?: number;
+  confidence?: "unknown" | "low" | "moderate";
+  sessionLoadRatio?: number | null;
+  referenceSessionLoad?: number | null;
+  modelNote?: string;
   daysSinceTrained: number | null;
   lastTrainedDay: string | null;
   weeklyWorkingSets: number;
@@ -97,11 +106,9 @@ export function computeEwmaSeries(
   const out: EwmaSeriesPoint[] = [];
 
   for (const d of days) {
+    if ((d.confidence === "incomplete" || d.confidence === "partial") && d.rawLoad === 0) continue;
     // Cold-start handling: initialize EWMA on first day with recorded data (or measured rest)
     if (acute === null || chronic === null) {
-      if (d.confidence === "incomplete" && d.rawLoad === 0) {
-        continue;
-      }
       trackedDays = 1;
       acute = d.rawLoad;
       chronic = d.rawLoad;
@@ -134,7 +141,7 @@ export function classifyLoadStatus(
 ): LoadStatusAssessment | null {
   if (series.length === 0) return null;
   const latest = series[series.length - 1];
-  const requiredDays = 7;
+  const requiredDays = 28;
   const baselineDays = series.filter((p) => p.confidence !== "incomplete" || p.rawLoad > 0).length;
   const activeWorkDays = series.filter((p) => p.rawLoad > 0).length;
   const minChronicFloor = domain === "cardio" ? 5 : 1.0;
@@ -148,7 +155,7 @@ export function classifyLoadStatus(
       acwr: null,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Building your ${noun} baseline (${Math.min(baselineDays, requiredDays)}/${requiredDays} days). Keep logging workouts to unlock Detraining / Optimal / Overtraining status.`,
+      guidance: `Building your ${noun} baseline (${Math.min(baselineDays, requiredDays)}/${requiredDays} days). Incomplete days are not treated as rest. This is a descriptive workload comparison, not a recovery or injury prediction.`,
       baselineDays,
       requiredDays,
     };
@@ -161,12 +168,12 @@ export function classifyLoadStatus(
   if (acwr < 0.8) {
     return {
       status: "detraining",
-      label: "Detraining",
+      label: "Lower recent load",
       tone: "blue",
       acwr,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Recent 7-day ${noun} load is below your usual baseline. Gradually return to your normal routine unless this is an intentional deload.`,
+      guidance: `Recent 7-day ${noun} load is below your usual baseline. This can reflect a lighter week, missing imports, or a change in routine; it does not establish detraining.`,
       baselineDays,
       requiredDays,
     };
@@ -174,12 +181,12 @@ export function classifyLoadStatus(
   if (acwr < 0.95 && chronicDelta > 0) {
     return {
       status: "peaking",
-      label: "Peaking",
+      label: "Reduced recent load",
       tone: "teal",
       acwr,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Strong chronic ${noun} base with a controlled taper. Good freshness window for PRs or peak performance.`,
+      guidance: `Recent ${noun} load is slightly lower while the longer trend has risen. This does not establish peak readiness.`,
       baselineDays,
       requiredDays,
     };
@@ -187,12 +194,12 @@ export function classifyLoadStatus(
   if (acwr <= 1.05) {
     return {
       status: "maintaining",
-      label: "Maintaining",
+      label: "Stable recent load",
       tone: "teal",
       acwr,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Your ${noun} load is holding steady, supporting current conditioning without excess fatigue.`,
+      guidance: `Recent ${noun} load is similar to your recorded baseline. This does not measure conditioning or tissue recovery.`,
       baselineDays,
       requiredDays,
     };
@@ -200,12 +207,12 @@ export function classifyLoadStatus(
   if (acwr <= 1.3) {
     return {
       status: "productive",
-      label: "Productive",
+      label: "Higher recent load",
       tone: "teal",
       acwr,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Optimal overload zone — building ${noun} fitness faster than fatigue accumulates.`,
+      guidance: `Recent ${noun} load is higher than your recorded baseline. The ratio alone cannot show whether this is beneficial.`,
       baselineDays,
       requiredDays,
     };
@@ -213,24 +220,24 @@ export function classifyLoadStatus(
   if (acwr <= 1.5) {
     return {
       status: "fatigued",
-      label: "Fatigued",
+      label: "Elevated recent load",
       tone: "amber",
       acwr,
       optimalMin: latest.optimalMin,
       optimalMax: latest.optimalMax,
-      guidance: `Short-term ${noun} load is elevated above your baseline. Watch sleep and recovery closely before adding more volume.`,
+      guidance: `Short-term ${noun} load is elevated above your baseline. This descriptive ratio does not diagnose fatigue or predict injury.`,
       baselineDays,
       requiredDays,
     };
   }
   return {
     status: "overtraining",
-    label: "Overtraining",
+    label: "Very elevated recent load",
     tone: "danger",
     acwr,
     optimalMin: latest.optimalMin,
     optimalMax: latest.optimalMax,
-    guidance: `Short-term ${noun} load is significantly above your established baseline. Reduce volume or intensity and prioritize recovery.`,
+    guidance: `Short-term ${noun} load is significantly above your established baseline. Check recording completeness and how you feel; this ratio does not diagnose overtraining.`,
     baselineDays,
     requiredDays,
   };
@@ -238,8 +245,9 @@ export function classifyLoadStatus(
 
 export function estimateEpley1Rm(weightKg: number | null, reps: number | null): number | null {
   if (weightKg == null || weightKg <= 0 || reps == null || reps <= 0) return null;
+  if (!Number.isFinite(weightKg) || !Number.isFinite(reps) || reps > 10) return null;
   if (reps === 1) return Math.round(weightKg * 10) / 10;
-  return Math.round(weightKg * (1 + Math.min(reps, 20) / 30) * 10) / 10;
+  return Math.round(weightKg * (1 + reps / 30) * 10) / 10;
 }
 
 export async function getTrainingLoadSummary(
@@ -248,7 +256,9 @@ export async function getTrainingLoadSummary(
   from: string,
   to: string,
 ): Promise<TrainingLoadSummary> {
-  const days = await strainData(db, userId).history(from, to);
+  // Warm the long-term comparison with history preceding the visible range.
+  const historyFrom = from < addDays(to, -41) ? from : addDays(to, -41);
+  const days = await strainData(db, userId).history(historyFrom, to);
 
   const cardioSeries = computeEwmaSeries(
     days.map((d) => ({ day: d.day, rawLoad: d.cRaw, confidence: d.confidence })),
@@ -261,7 +271,7 @@ export async function getTrainingLoadSummary(
   const muscleWorkingSets = Object.fromEntries(MUSCLE_GROUPS.map((m) => [m, 0])) as Record<MuscleGroup, number>;
 
   // Last 7 days working sets & muscle load (aligned to the exact same 7-day window)
-  const recent7Start = days[Math.max(0, days.length - 7)]?.day ?? from;
+  const recent7Start = addDays(to, -6);
   for (const d of days) {
     if (d.day < recent7Start) continue;
     for (const g of MUSCLE_GROUPS) {
@@ -271,7 +281,7 @@ export async function getTrainingLoadSummary(
   const workouts = await db
     .select()
     .from(hevyWorkout)
-    .where(and(eq(hevyWorkout.userId, userId), gte(hevyWorkout.day, from), lte(hevyWorkout.day, to)))
+    .where(and(eq(hevyWorkout.userId, userId), gte(hevyWorkout.day, historyFrom), lte(hevyWorkout.day, to)))
     .orderBy(asc(hevyWorkout.day), asc(hevyWorkout.startTime));
 
   const sets = workouts.length
@@ -282,6 +292,8 @@ export async function getTrainingLoadSummary(
         .orderBy(asc(hevySet.exerciseIndex), asc(hevySet.setIndex))
     : [];
 
+  const workoutById = new Map(workouts.map((w) => [w.hevyId, w]));
+  sets.sort((a, b) => (workoutById.get(a.hevyId)?.startTime.getTime() ?? 0) - (workoutById.get(b.hevyId)?.startTime.getTime() ?? 0) || a.setIndex - b.setIndex);
   const workoutDayById = new Map(workouts.map((w) => [w.hevyId, w.day]));
   const progressionMap = new Map<
     string,
@@ -292,6 +304,7 @@ export async function getTrainingLoadSummary(
       latestReps: number | null;
       best1Rm: number | null;
       prevBest1Rm: number | null;
+      sessionBests: Map<string, number>;
     }
   >();
 
@@ -320,6 +333,7 @@ export async function getTrainingLoadSummary(
         latestReps: s.reps,
         best1Rm: est1Rm,
         prevBest1Rm: null,
+        sessionBests: new Map(),
       };
       progressionMap.set(s.exerciseTitle, entry);
     }
@@ -330,6 +344,7 @@ export async function getTrainingLoadSummary(
       if (s.reps != null) entry.latestReps = s.reps;
     }
     if (est1Rm != null) {
+      entry.sessionBests.set(s.hevyId, Math.max(entry.sessionBests.get(s.hevyId) ?? 0, est1Rm));
       if (entry.best1Rm == null || est1Rm > entry.best1Rm) {
         if (entry.best1Rm != null) entry.prevBest1Rm = entry.best1Rm;
         entry.best1Rm = est1Rm;
@@ -343,72 +358,61 @@ export async function getTrainingLoadSummary(
     weeklyWorkingSets: Math.round(muscleWorkingSets[muscle] * 10) / 10,
   }));
 
-  const toMs = new Date(`${to}T12:00:00Z`).getTime();
-  const muscleFreshness: MuscleFreshnessEntry[] = MUSCLE_GROUPS.map((muscle) => {
-    let residualLoad = 0;
-    let lastTrainedDay: string | null = null;
-    for (const d of days) {
-      const load = d.muscleLoads?.[muscle] ?? 0;
-      if (load <= 0) continue;
-      const dayMs = new Date(`${d.day}T12:00:00Z`).getTime();
-      const daysAgo = Math.max(0, Math.round((toMs - dayMs) / 86_400_000));
-      if (daysAgo <= 7) {
-        // Exponential recovery curve (~30h half-life; heavy 8-10 load takes ~48-60h to recover to >=80%)
-        residualLoad += load * Math.exp(-daysAgo / 1.8);
-      }
-      if (!lastTrainedDay || d.day > lastTrainedDay) {
-        lastTrainedDay = d.day;
-      }
-    }
-    const freshnessPct =
-      residualLoad <= 0.05
-        ? 100
-        : Math.max(5, Math.min(100, Math.round(100 * Math.exp(-residualLoad / 8.5))));
-    const status: MuscleFreshnessEntry["status"] =
-      freshnessPct >= 80 ? "fresh" : freshnessPct >= 45 ? "recovering" : "fatigued";
-    const daysSinceTrained =
-      lastTrainedDay != null
-        ? Math.max(0, Math.round((toMs - new Date(`${lastTrainedDay}T12:00:00Z`).getTime()) / 86_400_000))
-        : null;
-    return {
-      muscle,
-      freshnessPct,
-      status,
-      daysSinceTrained,
-      lastTrainedDay,
-      weeklyWorkingSets: Math.round(muscleWorkingSets[muscle] * 10) / 10,
-      recentLoad: Math.round(muscleTotals[muscle] * 100) / 100,
-    };
-  });
+  const [preferences] = await db.select({ timezone: nutritionPreference.timezone }).from(nutritionPreference)
+    .where(eq(nutritionPreference.userId, userId)).limit(1);
+  const timezone = preferences?.timezone ?? "Europe/London";
+  const now = new Date();
+  const referenceAt = to === localDay(now, timezone)
+    ? now : new Date(resolveLocalDateTime(addDays(to, 1), "00:00", timezone).getTime() - 1);
+  const muscleFreshness = summarizeMuscleHistory(
+    workouts.map((workout) => {
+      const priorSets = sets.filter((set) => {
+        const prior = workoutById.get(set.hevyId);
+        return prior && prior.day < workout.day;
+      });
+      const references = buildExerciseStrengthReferences(priorSets);
+      return {
+        day: workout.day, endedAt: workout.endTime.toISOString(),
+        loads: computeMuscularWorkload(sets.filter((set) => set.hevyId === workout.hevyId)
+          .map((set) => ({ ...set, reference1RmKg: references.get(set.exerciseTitle.trim().toLowerCase()) }))).muscleLoads,
+      };
+    }),
+    referenceAt,
+    muscleWorkingSets,
+    muscleTotals,
+  );
 
   const exerciseProgression: ExerciseProgressionEntry[] = [...progressionMap.entries()]
-    .map(([exerciseTitle, e]) => ({
-      exerciseTitle,
-      sessions: e.sessions.size,
-      latestDay: e.latestDay,
-      latestWeightKg: e.latestWeightKg,
-      latestReps: e.latestReps,
-      bestEstimated1RmKg: e.best1Rm,
-      previousBest1RmKg: e.prevBest1Rm,
-      deltaKg: e.best1Rm != null && e.prevBest1Rm != null ? Math.round((e.best1Rm - e.prevBest1Rm) * 10) / 10 : null,
-    }))
+    .map(([exerciseTitle, e]) => {
+      const sessionIds = [...e.sessions].sort((a, b) => (workoutById.get(a)?.startTime.getTime() ?? 0) - (workoutById.get(b)?.startTime.getTime() ?? 0));
+      const latestId = sessionIds.at(-1)!;
+      const prior = sessionIds.slice(0, -1).map((id) => e.sessionBests.get(id)).filter((value): value is number => value != null);
+      const previousBest = prior.length ? Math.max(...prior) : null;
+      const latestBest = e.sessionBests.get(latestId) ?? null;
+      return {
+        exerciseTitle, sessions: e.sessions.size, latestDay: e.latestDay,
+        latestWeightKg: e.latestWeightKg, latestReps: e.latestReps,
+        bestEstimated1RmKg: e.best1Rm, previousBest1RmKg: previousBest,
+        deltaKg: latestBest != null && previousBest != null ? Math.round((latestBest - previousBest) * 10) / 10 : null,
+      };
+    })
     .sort((a, b) => b.latestDay.localeCompare(a.latestDay) || b.sessions - a.sessions)
     .slice(0, 20);
 
   const lastCardio = cardioSeries[cardioSeries.length - 1] ?? null;
   const lastMuscular = muscularSeries[muscularSeries.length - 1] ?? null;
-  const cardioStatus = classifyLoadStatus(cardioSeries, "cardio");
-  const muscularStatus = classifyLoadStatus(muscularSeries, "muscular");
+  const cardioStatus = lastCardio?.day === to ? classifyLoadStatus(cardioSeries, "cardio") : null;
+  const muscularStatus = lastMuscular?.day === to ? classifyLoadStatus(muscularSeries, "muscular") : null;
 
   return {
     from,
     to,
-    cardioSeries,
-    muscularSeries,
-    latestCardio: lastCardio
+    cardioSeries: cardioSeries.filter((point) => point.day >= from),
+    muscularSeries: muscularSeries.filter((point) => point.day >= from),
+    latestCardio: lastCardio?.day === to
       ? { daily: lastCardio.rawLoad, acute7d: lastCardio.acute7d, chronic42d: lastCardio.chronic42d }
       : null,
-    latestMuscular: lastMuscular
+    latestMuscular: lastMuscular?.day === to
       ? { daily: lastMuscular.rawLoad, acute7d: lastMuscular.acute7d, chronic42d: lastMuscular.chronic42d }
       : null,
     cardioStatus,
@@ -424,6 +428,47 @@ export async function getTrainingLoadSummary(
       restDays: days.filter((d) => d.confidence === "rest").length,
     },
     disclaimer:
-      "Cardio Status and Muscular Status compare 7d Acute vs 42d Chronic EWMA (Detraining, Maintaining, Productive, Peaking, Fatigued, Overtraining). Descriptive training-trend guidance, not a medical diagnosis.",
+      "App-specific estimated workload, not a validated recovery, fitness or injury score. Acute/chronic comparisons describe recorded load; missing days are not rest. Muscle activation is title-based; workout logs cannot establish a physiological recovery percentage.",
   };
+}
+
+
+/** Observed load history, deliberately not a tissue-repair model. */
+export function summarizeMuscleHistory(
+  sessions: { day: string; endedAt: string; loads: Partial<Record<MuscleGroup, number>> }[],
+  at: Date,
+  weeklySets: Partial<Record<MuscleGroup, number>> = {},
+  recentLoads: Partial<Record<MuscleGroup, number>> = {},
+): MuscleFreshnessEntry[] {
+  const atMs = at.getTime();
+  return MUSCLE_GROUPS.map((muscle) => {
+    const history = sessions.filter((session) => {
+      const ms = new Date(session.endedAt).getTime();
+      return Number.isFinite(ms) && ms <= atMs && atMs - ms <= 42 * 86_400_000 && (session.loads[muscle] ?? 0) > 0;
+    }).sort((a, b) => new Date(a.endedAt).getTime() - new Date(b.endedAt).getTime());
+    const trainingDays = new Set(history.map((session) => session.day)).size;
+    const last = history.at(-1);
+    const hours = last ? (atMs - new Date(last.endedAt).getTime()) / 3_600_000 : null;
+    const previousLoads = history.slice(0, -1).map((session) => session.loads[muscle]!).sort((a, b) => a - b);
+    const middle = Math.floor(previousLoads.length / 2);
+    const reference = trainingDays >= 3 && previousLoads.length >= 2
+      ? (previousLoads.length % 2 ? previousLoads[middle] : (previousLoads[middle - 1] + previousLoads[middle]) / 2)
+      : null;
+    return {
+      muscle,
+      freshnessPct: null,
+      status: !last ? "unknown" : reference == null ? "calibrating" : "tracked",
+      lastTrainedAt: last?.endedAt ?? null,
+      hoursSinceTrained: hours == null ? null : Math.round(hours * 10) / 10,
+      daysSinceTrained: hours == null ? null : Math.floor(hours / 24),
+      lastTrainedDay: last?.day ?? null,
+      weeklyWorkingSets: Math.round((weeklySets[muscle] ?? 0) * 10) / 10,
+      recentLoad: Math.round((recentLoads[muscle] ?? 0) * 100) / 100,
+      trainingDays,
+      confidence: !last ? "unknown" : reference == null ? "low" : "moderate",
+      sessionLoadRatio: reference && last ? Math.round(last.loads[muscle]! / reference * 100) / 100 : null,
+      referenceSessionLoad: reference == null ? null : Math.round(reference * 100) / 100,
+      modelNote: "Observed, title-mapped effort-weighted set load. Personal comparison uses prior sessions of this muscle (at least three distinct training days in 42 days). It is not a measured recovery percentage; soreness, tissue repair and readiness are unknown.",
+    };
+  });
 }

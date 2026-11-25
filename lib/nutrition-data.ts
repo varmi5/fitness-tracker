@@ -1,3 +1,4 @@
+import { saveSleepSession } from "./sleep-session-data";
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { z } from "zod";
@@ -47,6 +48,8 @@ import {
   dailyEnergy,
   dailyRecovery,
   dailySleep,
+  sleepSession,
+  sleepGoal,
   dailyWorkout,
   healthIntegration,
   idempotencyRecord,
@@ -262,11 +265,12 @@ export function nutritionData(db: AuthDatabase, userId: string) {
   if (!userId) throw new Error("A session user ID is required.");
 
   async function getPrefs() {
-    const [prefRows, targets, integrations] = await Promise.all([
+    const [prefRows, targets, integrations, sleepGoals] = await Promise.all([
       db.select().from(nutritionPreference).where(eq(nutritionPreference.userId, userId)),
       db.select().from(calorieTarget).where(eq(calorieTarget.userId, userId)).orderBy(desc(calorieTarget.effectiveFrom)),
       db.select({ provider: healthIntegration.provider, status: healthIntegration.status })
         .from(healthIntegration).where(eq(healthIntegration.userId, userId)),
+      db.select().from(sleepGoal).where(eq(sleepGoal.userId, userId)).orderBy(desc(sleepGoal.effectiveFrom)),
     ]);
     const pref = prefRows[0];
     const trackingMode: TrackingMode = pref
@@ -282,6 +286,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       googleTwoWaySync: pref?.googleTwoWaySync ?? false,
       sleepRolloverEnabled: pref?.sleepRolloverEnabled ?? true,
       bulkMode: pref?.bulkMode ?? false,
+      sleepGoals: sleepGoals.map(g => ({ effectiveFrom: g.effectiveFrom, goalMinutes: g.goalMinutes })),
+      sleepGoalMinutes: sleepGoals.find(g => g.effectiveFrom <= localDay(new Date(), pref?.timezone ?? DEFAULT_TIMEZONE))?.goalMinutes ?? 480,
       targets: targets.map((t) => ({ id: t.id, effectiveFrom: t.effectiveFrom, calories: t.calories, proteinG: t.proteinG, carbsG: t.carbsG, fatG: t.fatG, fibreG: t.fibreG })),
       hasGoogleConnected: integrations.some((i) => i.provider === "google"),
     };
@@ -501,15 +507,24 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     };
   }
 
-  async function healthHistory(from: string, to: string) {
+  async function healthHistory(from: string, to: string, options: { includeStageIntervals?: boolean } = {}) {
     historyInput.parse({ from, to });
     const prefs = await getPrefs();
-    const [sleep, recovery, workouts] = await Promise.all([
+    const [sleep, recovery, workouts, rawSessions] = await Promise.all([
       db.select().from(dailySleep).where(and(eq(dailySleep.userId, userId), gte(dailySleep.day, from), lte(dailySleep.day, to))).orderBy(asc(dailySleep.day)),
       db.select().from(dailyRecovery).where(and(eq(dailyRecovery.userId, userId), gte(dailyRecovery.day, from), lte(dailyRecovery.day, to))).orderBy(asc(dailyRecovery.day)),
       db.select().from(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), gte(dailyWorkout.day, from), lte(dailyWorkout.day, to))).orderBy(asc(dailyWorkout.startTime)),
+      db.select().from(sleepSession).where(and(eq(sleepSession.userId, userId), gte(sleepSession.day, from), lte(sleepSession.day, to))).orderBy(asc(sleepSession.sleepStart)),
     ]);
-    return { from, to, timezone: prefs.timezone, sleep: sleep.map(mapSleepRow), recovery: recovery.map(mapRecoveryRow), workouts: workouts.map(mapWorkoutRow),
+    if (options.includeStageIntervals && dayRange(from, to).length > 31) throw new NutritionError("Request at most 31 days for sleep stage intervals.");
+    const now = new Date();
+    const sessions = rawSessions.map(({ userId: _owner, ...s }) => ({ ...s,
+      stageIntervalsJson: options.includeStageIntervals ? s.stageIntervalsJson : undefined,
+      sleepStart: s.sleepStart?.toISOString() ?? null, sleepEnd: s.sleepEnd?.toISOString() ?? null,
+      syncedAt: s.syncedAt.toISOString(), completed: Boolean(s.sleepStart && s.sleepEnd && s.sleepEnd > s.sleepStart && s.sleepEnd <= now && s.processed !== false && s.minutesAsleep > 0 && s.minutesAsleep <= (s.sleepEnd.getTime() - s.sleepStart.getTime()) / 60000 + 1),
+    }));
+    return { from, to, timezone: prefs.timezone, sleepGoals: prefs.sleepGoals, sleepSessions: sessions,
+      sleepInterpretation: "Sessions include main sleep, naps and split sleep. Stages are wearable estimates; absent stages/awake time are unknown. Summary stages cannot establish timing, sleep continuity or latency. Incomplete or overlapping observations must not be added blindly. Goals are user preferences, not measured physiological need.", sleep: sleep.map(mapSleepRow), recovery: recovery.map(mapRecoveryRow), workouts: workouts.map(mapWorkoutRow),
       days: dayRange(from, to).map((day) => ({ day, hasSleep: sleep.some((row) => row.day === day), hasRecovery: recovery.some((row) => row.day === day), workoutCount: workouts.filter((row) => row.day === day).length })),
       note: "Stored synced records only. Missing records do not establish no sleep or no workout. Check syncedAt for freshness. Display preferences do not restrict this authorised health history." };
   }
@@ -944,6 +959,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       preferredEnergySource: prefs.preferredEnergySource,
       googleTwoWaySync: prefs.googleTwoWaySync,
       sleepRolloverEnabled: prefs.sleepRolloverEnabled,
+      sleepGoalMinutes: prefs.sleepGoalMinutes,
+      sleepGoals: prefs.sleepGoals,
       bulkMode: prefs.bulkMode,
       targetToday: resolveTargetForDay(prefs.targets, today),
       macroTargets: resolveMacroTargets(prefs.targets, today),
@@ -973,24 +990,33 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const resolved = resolveTrackingPreferences(input, existing);
     const sleepRolloverEnabled = input.sleepRolloverEnabled ?? existing.sleepRolloverEnabled;
     const bulkMode = input.bulkMode ?? existing.bulkMode;
-    await db.insert(nutritionPreference).values({
+    const timezone = input.timezone ?? existing.timezone;
+    const googleTwoWaySync = input.googleTwoWaySync ?? existing.googleTwoWaySync;
+    await db.transaction(async tx => {
+    await tx.insert(nutritionPreference).values({
       userId,
-      timezone: input.timezone,
+      timezone,
       trackingMode: resolved.trackingMode,
       preferredEnergySource: resolved.preferredEnergySource,
-      googleTwoWaySync: input.googleTwoWaySync,
+      googleTwoWaySync,
       sleepRolloverEnabled,
       bulkMode,
     }).onConflictDoUpdate({
       target: nutritionPreference.userId,
       set: {
-        timezone: input.timezone,
+        timezone,
         trackingMode: resolved.trackingMode,
         preferredEnergySource: resolved.preferredEnergySource,
-        googleTwoWaySync: input.googleTwoWaySync,
+        googleTwoWaySync,
         sleepRolloverEnabled,
         bulkMode,
       },
+    });
+    if (input.sleepGoalMinutes !== undefined) {
+      const effectiveFrom = input.sleepGoalEffectiveFrom ?? localDay(new Date(), timezone);
+      await tx.insert(sleepGoal).values({ userId, effectiveFrom, goalMinutes: input.sleepGoalMinutes })
+        .onConflictDoUpdate({ target: [sleepGoal.userId, sleepGoal.effectiveFrom], set: { goalMinutes: input.sleepGoalMinutes } });
+    }
     });
     return settings();
   }
@@ -1259,9 +1285,11 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       db.select().from(mealItem).where(eq(mealItem.userId, userId)).orderBy(asc(mealItem.sortOrder)),
       db.select().from(savedFood).where(eq(savedFood.userId, userId)),
     ]);
-    const [energy, sleepRows] = await Promise.all([
+    const [energy, sleepRows, rawSleepSessions, sleepGoals] = await Promise.all([
       db.select().from(dailyEnergy).where(eq(dailyEnergy.userId, userId)).orderBy(desc(dailyEnergy.day)),
       db.select().from(dailySleep).where(eq(dailySleep.userId, userId)).orderBy(desc(dailySleep.day)),
+      db.select().from(sleepSession).where(eq(sleepSession.userId, userId)),
+      db.select().from(sleepGoal).where(eq(sleepGoal.userId, userId)).orderBy(asc(sleepGoal.effectiveFrom)),
     ]);
     const [recoveryRows, workoutRows] = await Promise.all([
       db.select().from(dailyRecovery).where(eq(dailyRecovery.userId, userId)).orderBy(desc(dailyRecovery.day)),
@@ -1297,6 +1325,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       savedFoods: saved,
       dailyEnergy: energy.map(mapEnergyRow),
       dailySleep: sleepRows.map(mapSleepRow),
+      sleepSessions: rawSleepSessions.map(({ userId: _owner, ...s }) => s),
+      sleepGoals: sleepGoals.map(({ userId: _owner, ...g }) => g),
       dailyRecovery: recoveryRows.map(mapRecoveryRow),
       dailyWorkout: workoutRows.map(mapWorkoutRow),
     };
@@ -1369,35 +1399,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
 
       for (const rawSleep of payload.sleepEntries ?? []) {
         const entry = sleepInput.parse(rawSleep);
-        await tx.insert(dailySleep).values({
-          userId,
-          day: entry.day,
-          source: entry.source,
-          sessionId: entry.sessionId ?? null,
-          sleepStart: entry.sleepStart ? new Date(entry.sleepStart) : null,
-          sleepEnd: entry.sleepEnd ? new Date(entry.sleepEnd) : null,
-          minutesAsleep: entry.minutesAsleep,
-          minutesAwake: entry.minutesAwake ?? null,
-          deepMinutes: entry.deepMinutes ?? null,
-          remMinutes: entry.remMinutes ?? null,
-          lightMinutes: entry.lightMinutes ?? null,
-          stagesJson: entry.stagesJson,
-          syncedAt: new Date(),
-        }).onConflictDoUpdate({
-          target: [dailySleep.userId, dailySleep.source, dailySleep.day],
-          set: {
-            sessionId: entry.sessionId ?? null,
-            sleepStart: entry.sleepStart ? new Date(entry.sleepStart) : null,
-            sleepEnd: entry.sleepEnd ? new Date(entry.sleepEnd) : null,
-            minutesAsleep: entry.minutesAsleep,
-            minutesAwake: entry.minutesAwake ?? null,
-            deepMinutes: entry.deepMinutes ?? null,
-            remMinutes: entry.remMinutes ?? null,
-            lightMinutes: entry.lightMinutes ?? null,
-            stagesJson: entry.stagesJson,
-            syncedAt: new Date(),
-          },
-        });
+        await saveSleepSession(tx, userId, entry);
         sleepImported += 1;
       }
 
@@ -1654,6 +1656,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       preferredEnergySource: prefs.preferredEnergySource,
       googleTwoWaySync: prefs.googleTwoWaySync,
       sleepRolloverEnabled: prefs.sleepRolloverEnabled,
+      sleepGoalMinutes: prefs.sleepGoalMinutes,
+      sleepGoals: prefs.sleepGoals,
       bulkMode: prefs.bulkMode,
       targetToday: resolveTargetForDay(prefs.targets, calendarToday),
       macroTargets: resolveMacroTargets(prefs.targets, calendarToday),

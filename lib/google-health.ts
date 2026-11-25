@@ -1,3 +1,4 @@
+import { saveSleepSession, sleepSessionKey } from "./sleep-session-data";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { and, asc, eq, gt, gte, inArray, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
@@ -19,6 +20,7 @@ import {
   dailyEnergy,
   dailyRecovery,
   dailySleep,
+  sleepSession,
   dailyWorkout,
   googleMealSync,
   healthIntegration,
@@ -231,6 +233,7 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
       await tx.update(meal).set({ googleDatapointName: null }).where(eq(meal.userId, userId));
       await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
       await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google")));
+      await tx.delete(sleepSession).where(and(eq(sleepSession.userId, userId), eq(sleepSession.source, "google")));
       await tx.delete(dailyRecovery).where(and(eq(dailyRecovery.userId, userId), eq(dailyRecovery.source, "google")));
       await tx.delete(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google")));
     }
@@ -1181,6 +1184,7 @@ const own = (userId: string) => and(eq(healthIntegration.userId, userId), eq(hea
 type SleepStageType = "AWAKE" | "LIGHT" | "DEEP" | "REM";
 
 export interface ParsedSleepSession {
+  source?: "google" | "apple" | "manual";
   day: string;
   sessionId: string | null;
   sleepStart: string | null;
@@ -1191,10 +1195,30 @@ export interface ParsedSleepSession {
   remMinutes: number | null;
   lightMinutes: number | null;
   stagesJson: { stage: SleepStageType; minutes: number }[];
+  isMainSleep?: boolean;
+  processed?: boolean | null;
+  classificationMethod?: "provider" | "longest_session" | "legacy";
+  stageIntervalsJson?: { stage: "AWAKE" | "ASLEEP" | "RESTLESS" | "LIGHT" | "DEEP" | "REM"; startTime: string; endTime: string }[];
+}
+
+function classifySleepSessions(rows: ParsedSleepSession[]) {
+  const sessions = new Map<string, ParsedSleepSession>();
+  const unique = [...new Map(rows.map(row => [sleepSessionKey(row), row])).values()];
+  const providerMain = (row: ParsedSleepSession) => row.classificationMethod === "provider" && row.isMainSleep === true;
+  for (const row of unique) {
+    if (row.classificationMethod === "provider" && row.isMainSleep === false) continue;
+    if (!providerMain(row) && row.minutesAsleep < 90) continue;
+    const previous = sessions.get(row.day);
+    if (!previous || Number(providerMain(row)) > Number(providerMain(previous)) || providerMain(row) === providerMain(previous) && row.minutesAsleep > previous.minutesAsleep) sessions.set(row.day, row);
+  }
+  return { sessions, allSessions: unique.map(row => ({ ...row,
+    isMainSleep: sessions.has(row.day) && sleepSessionKey(sessions.get(row.day)!) === sleepSessionKey(row),
+  })) };
 }
 
 export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE): {
   sessions: Map<string, ParsedSleepSession>;
+  allSessions: ParsedSleepSession[];
   nextPageToken?: string;
 } {
   const envelope = z
@@ -1205,7 +1229,7 @@ export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE):
     })
     .parse(payload);
 
-  const sessions = new Map<string, ParsedSleepSession>();
+  const all = new Map<string, ParsedSleepSession>();
   const points = [...envelope.reconciledDataPoints, ...envelope.dataPoints];
 
   for (const raw of points) {
@@ -1234,7 +1258,7 @@ export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE):
     for (const stRaw of rawStages) {
       if (!stRaw || typeof stRaw !== "object") continue;
       const stObj = stRaw as Record<string, unknown>;
-      const stageName = String(stObj.stage ?? "").toUpperCase();
+      const stageName = String(stObj.type ?? stObj.stage ?? "").toUpperCase();
       if (stageName !== "AWAKE" && stageName !== "LIGHT" && stageName !== "DEEP" && stageName !== "REM") continue;
       const mins = Number(stObj.minutes ?? (typeof stObj.durationSeconds === "number" ? Math.round(stObj.durationSeconds / 60) : NaN));
       if (!Number.isFinite(mins) || mins < 0 || mins > 1440) continue;
@@ -1253,9 +1277,9 @@ export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE):
     let minutesAsleep = summary.minutesAsleep != null ? Number(summary.minutesAsleep) : NaN;
     if (!Number.isFinite(minutesAsleep)) {
       const stageAsleep = (deepMinutes ?? 0) + (remMinutes ?? 0) + (lightMinutes ?? 0);
-      if (stageAsleep > 0) {
+      if (deepMinutes !== null && remMinutes !== null && lightMinutes !== null && stageAsleep > 0) {
         minutesAsleep = stageAsleep;
-      } else if (startTimeRaw && endTimeRaw) {
+      } else if (startTimeRaw && endTimeRaw && minutesAwake !== null) {
         const diffMin = Math.round((new Date(endTimeRaw).getTime() - new Date(startTimeRaw).getTime()) / 60000);
         if (Number.isFinite(diffMin) && diffMin > 0) {
           minutesAsleep = Math.max(0, diffMin - (minutesAwake ?? 0));
@@ -1263,7 +1287,7 @@ export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE):
       }
     }
 
-    if (!Number.isFinite(minutesAsleep) || minutesAsleep < 90 || minutesAsleep > 1440) continue;
+    if (!Number.isFinite(minutesAsleep) || minutesAsleep <= 0 || minutesAsleep > 1440) continue;
 
     const sleepStart = startTimeRaw && !Number.isNaN(new Date(startTimeRaw).getTime()) ? new Date(startTimeRaw).toISOString() : null;
     const sleepEnd = endTimeRaw && !Number.isNaN(new Date(endTimeRaw).getTime()) ? new Date(endTimeRaw).toISOString() : null;
@@ -1272,6 +1296,18 @@ export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE):
       .filter((s) => stageMap.has(s))
       .map((s) => ({ stage: s, minutes: stageMap.get(s)! }));
 
+    const metadata = (sleepObj.metadata ?? {}) as Record<string, unknown>;
+    const stageIntervalsJson: NonNullable<ParsedSleepSession["stageIntervalsJson"]> = [];
+    for (const rawStage of Array.isArray(sleepObj.stages) ? sleepObj.stages : []) {
+      if (!rawStage || typeof rawStage !== "object") continue;
+      const st = rawStage as Record<string, unknown>;
+      const stage = String(st.type ?? st.stage ?? "").toUpperCase();
+      if (!["AWAKE", "ASLEEP", "RESTLESS", "LIGHT", "DEEP", "REM"].includes(stage)) continue;
+      const start = typeof st.startTime === "string" ? new Date(st.startTime) : null;
+      const end = typeof st.endTime === "string" ? new Date(st.endTime) : null;
+      if (!start || !end || !Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) continue;
+      stageIntervalsJson.push({ stage: stage as typeof stageIntervalsJson[number]["stage"], startTime: start.toISOString(), endTime: end.toISOString() });
+    }
     const parsed: ParsedSleepSession = {
       day,
       sessionId,
@@ -1283,20 +1319,23 @@ export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE):
       remMinutes,
       lightMinutes,
       stagesJson,
+      isMainSleep: typeof metadata.mainSleep === "boolean" ? metadata.mainSleep : typeof metadata.main === "boolean" ? metadata.main : metadata.nap === true ? false : undefined,
+      processed: typeof metadata.processed === "boolean" ? metadata.processed : null,
+      classificationMethod: typeof metadata.mainSleep === "boolean" || typeof metadata.main === "boolean" || metadata.nap === true ? "provider" : "longest_session",
+      stageIntervalsJson,
     };
 
-    const existing = sessions.get(day);
-    if (!existing || parsed.minutesAsleep > existing.minutesAsleep) {
-      sessions.set(day, parsed);
-    }
+    all.set(sleepSessionKey(parsed), parsed);
   }
 
-  return { sessions, nextPageToken: envelope.nextPageToken };
+  const { sessions, allSessions } = classifySleepSessions([...all.values()]);
+  return { sessions, allSessions, nextPageToken: envelope.nextPageToken };
 }
 
 export async function fetchSleepSessions(grant: Tokens, from: string, endExclusive: string, timezone = DEFAULT_TIMEZONE) {
   let pageToken: string | undefined;
-  const merged = new Map<string, ParsedSleepSession>();
+  const allSessions: ParsedSleepSession[] = [];
+  const merged = Object.assign(new Map<string, ParsedSleepSession>(), { allSessions });
   const filter = `sleep.interval.civil_end_time >= "${from}T00:00:00" AND sleep.interval.civil_end_time < "${endExclusive}T00:00:00"`;
 
   for (let page = 0; page < 10; page++) {
@@ -1312,13 +1351,21 @@ export async function fetchSleepSessions(grant: Tokens, from: string, endExclusi
     });
     if (!response.ok) throw new NutritionError("Google Health could not retrieve sleep data.", 502);
     const parsed = parseGoogleSleep(await response.json(), timezone);
+    allSessions.push(...parsed.allSessions.filter(s => s.day >= from && s.day < endExclusive));
     for (const [day, s] of parsed.sessions) {
       if (day < from || day >= endExclusive) continue;
       const prev = merged.get(day);
       if (!prev || s.minutesAsleep > prev.minutesAsleep) merged.set(day, s);
     }
     pageToken = parsed.nextPageToken;
-    if (!pageToken) return merged;
+    if (!pageToken) {
+      // Re-evaluate inferred main sleep across all pages, not separately per page.
+      const classified = classifySleepSessions(allSessions);
+      merged.clear();
+      for (const [day, session] of classified.sessions) merged.set(day, session);
+      merged.allSessions = classified.allSessions;
+      return merged;
+    }
   }
   throw new NutritionError("Google returned too many sleep pages for one sync.", 502);
 }
@@ -1593,23 +1640,9 @@ async function runSyncGoogle(db: AuthDatabase, userId: string, from: string, to:
         await tx
           .delete(dailySleep)
           .where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google"), gte(dailySleep.day, from), lte(dailySleep.day, through)));
-        for (const s of sleepSessions.values()) {
-          const valid = sleepInput.parse({ ...s, source: "google" });
-          await tx.insert(dailySleep).values({
-            userId,
-            source: "google",
-            day: valid.day,
-            sessionId: valid.sessionId ?? null,
-            sleepStart: valid.sleepStart ? new Date(valid.sleepStart) : null,
-            sleepEnd: valid.sleepEnd ? new Date(valid.sleepEnd) : null,
-            minutesAsleep: valid.minutesAsleep,
-            minutesAwake: valid.minutesAwake ?? null,
-            deepMinutes: valid.deepMinutes ?? null,
-            remMinutes: valid.remMinutes ?? null,
-            lightMinutes: valid.lightMinutes ?? null,
-            stagesJson: valid.stagesJson,
-            syncedAt: new Date(),
-          });
+        await tx.delete(sleepSession).where(and(eq(sleepSession.userId, userId), eq(sleepSession.source, "google"), gte(sleepSession.day, from), lte(sleepSession.day, through)));
+        for (const s of ("allSessions" in sleepSessions ? sleepSessions.allSessions as ParsedSleepSession[] : [...sleepSessions.values()])) {
+          await saveSleepSession(tx, userId, { ...s, source: "google" });
         }
       }
 
@@ -2101,17 +2134,14 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
       // 0b. Saved sleep point (FitnessTrackr export or Google Health v4 dataPoint with .sleep)
       if (pt.sleep && typeof pt.sleep === "object") {
         const parsedSleep = parseGoogleSleep({ dataPoints: [pt] }, timezone);
-        for (const [day, s] of parsedSleep.sessions) {
-          const prev = sleepMap.get(day);
-          if (!prev || s.minutesAsleep > prev.minutesAsleep) sleepMap.set(day, s);
-        }
+        for (const s of parsedSleep.allSessions) sleepMap.set(`google:${sleepSessionKey(s)}`, s);
         return;
       }
       if (typeof pt.day === "string" && z.iso.date().safeParse(pt.day).success && typeof pt.minutesAsleep === "number") {
         const validSleep = sleepInput.safeParse({
           day: pt.day,
           source: pt.source === "manual" || pt.source === "apple" ? pt.source : "google",
-          sessionId: typeof pt.sessionId === "string" ? pt.sessionId : null,
+          sessionId: typeof pt.sessionId === "string" ? pt.sessionId : typeof pt.sessionKey === "string" && pt.sessionKey.startsWith("id:") ? pt.sessionKey.slice(3) : null,
           sleepStart: typeof pt.sleepStart === "string" ? pt.sleepStart : null,
           sleepEnd: typeof pt.sleepEnd === "string" ? pt.sleepEnd : null,
           minutesAsleep: Math.round(pt.minutesAsleep),
@@ -2119,10 +2149,15 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
           deepMinutes: typeof pt.deepMinutes === "number" ? Math.round(pt.deepMinutes) : null,
           remMinutes: typeof pt.remMinutes === "number" ? Math.round(pt.remMinutes) : null,
           lightMinutes: typeof pt.lightMinutes === "number" ? Math.round(pt.lightMinutes) : null,
+          classificationMethod: pt.classificationMethod,
+          isMainSleep: typeof pt.isMainSleep === "boolean" ? pt.isMainSleep : undefined,
+          processed: typeof pt.processed === "boolean" ? pt.processed : null,
+          stageIntervalsJson: Array.isArray(pt.stageIntervalsJson) ? pt.stageIntervalsJson : [],
           stagesJson: Array.isArray(pt.stages) ? pt.stages : Array.isArray(pt.stagesJson) ? pt.stagesJson : [],
         });
-        if (validSleep.success && validSleep.data.minutesAsleep >= 90) {
-          sleepMap.set(pt.day, {
+        if (validSleep.success && validSleep.data.minutesAsleep > 0) {
+          sleepMap.set(`${validSleep.data.source}:${sleepSessionKey(validSleep.data)}`, {
+            source: validSleep.data.source,
             day: validSleep.data.day,
             sessionId: validSleep.data.sessionId ?? null,
             sleepStart: validSleep.data.sleepStart ?? null,
@@ -2133,6 +2168,10 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
             remMinutes: validSleep.data.remMinutes ?? null,
             lightMinutes: validSleep.data.lightMinutes ?? null,
             stagesJson: validSleep.data.stagesJson,
+            isMainSleep: validSleep.data.isMainSleep,
+            processed: validSleep.data.processed,
+            classificationMethod: validSleep.data.classificationMethod,
+            stageIntervalsJson: validSleep.data.stageIntervalsJson,
           });
         }
         return;
@@ -2319,7 +2358,7 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
         }
       } else if (typeof pt.dateOfSleep === "string" && typeof pt.minutesAsleep === "number") {
         const day = normalizeDateString(pt.dateOfSleep);
-        if (day && pt.minutesAsleep >= 90) {
+        if (day && pt.minutesAsleep > 0) {
           const deep = (pt.levels as { summary?: { deep?: { minutes?: number }; rem?: { minutes?: number }; light?: { minutes?: number } } } | undefined)?.summary?.deep?.minutes;
           const rem = (pt.levels as { summary?: { rem?: { minutes?: number } } } | undefined)?.summary?.rem?.minutes;
           const light = (pt.levels as { summary?: { light?: { minutes?: number } } } | undefined)?.summary?.light?.minutes;
@@ -2335,7 +2374,7 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
             lightMinutes: typeof light === "number" ? Math.round(light) : null,
           });
           if (valid.success) {
-            sleepMap.set(day, {
+            sleepMap.set(`google:${sleepSessionKey(valid.data)}`, {
               day: valid.data.day,
               sessionId: valid.data.sessionId ?? null,
               sleepStart: valid.data.sleepStart ?? null,
@@ -2370,6 +2409,7 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
         "entries",
         "dailyEnergy",
         "dailySleep",
+        "sleepSessions",
         "dailyRecovery",
         "recovery",
         "dailyWorkout",
@@ -2517,8 +2557,8 @@ export function parseSavedHealthImport(rawText: string, timezone = DEFAULT_TIMEZ
     );
 
   const sleepEntries = [...sleepMap.values()]
-    .slice(0, 365)
-    .map((s) => sleepInput.parse({ ...s, source: "google" }));
+    .slice(0, 1460)
+    .map((s) => sleepInput.parse({ ...s, source: (s as ParsedSleepSession & {source?: string}).source ?? "google" }));
 
   const recoveryEntries = [...recoveryByDay.values()]
     .slice(0, 365)
@@ -2562,6 +2602,7 @@ export async function disconnectGoogle(db: AuthDatabase, userId: string) {
       .returning({ credential: healthIntegration.credential });
     await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
     await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google")));
+      await tx.delete(sleepSession).where(and(eq(sleepSession.userId, userId), eq(sleepSession.source, "google")));
     await tx.delete(dailyRecovery).where(and(eq(dailyRecovery.userId, userId), eq(dailyRecovery.source, "google")));
     await tx.delete(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google")));
     await tx.delete(heartRateSample).where(and(eq(heartRateSample.userId, userId), eq(heartRateSample.source, "google")));

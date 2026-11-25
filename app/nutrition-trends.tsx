@@ -41,7 +41,7 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
     const base: [TrendView, string][] = [
       ["energy", "Intake vs Burn"],
       ["protein", "Protein & Fibre"],
-      ["quality", "Quality & Fibre"],
+      ["quality", "Food estimates & Fibre"],
       ["body", "Weight & Waist"],
     ];
     if (isFitbitMode) {
@@ -103,6 +103,7 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
         </div>
       </div>
 
+      <p className="metric-provenance">Missing values remain gaps. Nutrition totals may be partial. Food scores and processing shares are heuristics inferred from available metadata, not clinical ratings.</p>
       <div className="chart" style={{ marginTop: ".75rem" }}>
         {activeView === "energy" && (
           <>
@@ -113,7 +114,7 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
                 <YAxis width={50} stroke="var(--muted)" tick={{ fontSize: 11 }} />
                 <Tooltip contentStyle={tooltipStyle} />
                 <Bar name="Intake (kcal)" dataKey="intake" fill="var(--accent)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-                <Line name="Total TDEE (kcal)" type="monotone" dataKey="burn" stroke="var(--accent-2)" strokeWidth={2.3} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
+                <Line name="Total TDEE (kcal)" type="monotone" dataKey="burn" stroke="var(--accent-2)" strokeWidth={2.3} dot={{ r: 2.5 }} connectNulls={false} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
             <div className="chart-legend">
@@ -132,8 +133,8 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
                 <YAxis width={46} stroke="var(--muted)" tick={{ fontSize: 11 }} />
                 <Tooltip contentStyle={tooltipStyle} />
                 <Bar name="Protein (g)" dataKey="protein" fill="var(--macro-protein)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-                <Line name="Fibre (g)" type="monotone" dataKey="fibre" stroke="var(--macro-fibre)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
-                <Line name="7d avg protein (g)" type="monotone" dataKey="rollingProtein" stroke="var(--accent)" strokeWidth={2} strokeDasharray="4 4" dot={false} connectNulls isAnimationActive={false} />
+                <Line name="Fibre (g)" type="monotone" dataKey="fibre" stroke="var(--macro-fibre)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls={false} isAnimationActive={false} />
+                <Line name="7d avg protein (g)" type="monotone" dataKey="rollingProtein" stroke="var(--accent)" strokeWidth={2} strokeDasharray="4 4" dot={false} connectNulls={false} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
             <div className="chart-legend">
@@ -150,16 +151,17 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
               <ComposedChart data={data} margin={{ left: -12, right: 10, top: 10 }}>
                 <CartesianGrid vertical={false} stroke="var(--border)" />
                 <XAxis dataKey="day" stroke="var(--muted)" tick={{ fontSize: 11 }} />
-                <YAxis width={46} domain={[0, 100]} stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="score" width={46} domain={[0, 100]} stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="fibre" orientation="right" width={36} stroke="var(--macro-fibre)" tick={{ fontSize: 11 }} />
                 <Tooltip contentStyle={tooltipStyle} />
-                <Bar name="Nutrition Score (/100)" dataKey="score" fill="var(--teal)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-                <Line name="Whole foods (%)" type="monotone" dataKey="wholeFoodPct" stroke="var(--accent)" strokeWidth={2} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
-                <Line name="Fibre (g)" type="monotone" dataKey="fibre" stroke="var(--macro-fibre)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
+                <Bar yAxisId="score" name="Food heuristic (/100)" dataKey="score" fill="var(--teal)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                <Line yAxisId="score" name="Estimated whole-food share (%)" type="monotone" dataKey="wholeFoodPct" stroke="var(--accent)" strokeWidth={2} dot={{ r: 2.5 }} connectNulls={false} isAnimationActive={false} />
+                <Line yAxisId="fibre" name="Fibre (g)" type="monotone" dataKey="fibre" stroke="var(--macro-fibre)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls={false} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
             <div className="chart-legend">
-              <span style={{ color: "var(--teal)" }}>Nutrition Score (/100)</span>
-              <span style={{ color: "var(--accent)" }}>Whole food (%)</span>
+              <span style={{ color: "var(--teal)" }}>Food heuristic (/100)</span>
+              <span style={{ color: "var(--accent)" }}>Estimated whole-food share (%)</span>
               <span style={{ color: "var(--macro-fibre)" }}>Fibre (g)</span>
             </div>
           </>
@@ -171,10 +173,11 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
               <LineChart data={data} margin={{ left: -12, right: 10, top: 10 }}>
                 <CartesianGrid vertical={false} stroke="var(--border)" />
                 <XAxis dataKey="day" stroke="var(--muted)" tick={{ fontSize: 11 }} />
-                <YAxis width={48} domain={["auto", "auto"]} stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="weight" width={48} domain={["auto", "auto"]} stroke="var(--muted)" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="waist" orientation="right" width={40} domain={["auto", "auto"]} stroke="var(--amber)" tick={{ fontSize: 11 }} />
                 <Tooltip contentStyle={tooltipStyle} />
-                <Line name="Weight (kg)" type="monotone" dataKey="weight" stroke="var(--teal)" strokeWidth={2.3} dot={{ r: 3 }} connectNulls isAnimationActive={false} />
-                <Line name="Waist (cm)" type="monotone" dataKey="waist" stroke="var(--amber)" strokeWidth={2.3} dot={{ r: 3 }} connectNulls isAnimationActive={false} />
+                <Line yAxisId="weight" name="Weight (kg)" type="monotone" dataKey="weight" stroke="var(--teal)" strokeWidth={2.3} dot={{ r: 3 }} connectNulls={false} isAnimationActive={false} />
+                <Line yAxisId="waist" name="Waist (cm)" type="monotone" dataKey="waist" stroke="var(--amber)" strokeWidth={2.3} dot={{ r: 3 }} connectNulls={false} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
             <div className="chart-legend">
@@ -194,8 +197,8 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
                 <YAxis yAxisId="right" orientation="right" width={36} domain={[0, 14]} stroke="var(--muted)" tick={{ fontSize: 11 }} />
                 <Tooltip contentStyle={tooltipStyle} />
                 <Bar yAxisId="right" name="Sleep (hrs)" dataKey="sleepHours" fill="var(--teal)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-                <Line yAxisId="left" name="Resting HR (bpm)" type="monotone" dataKey="rhr" stroke="var(--amber)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
-                <Line yAxisId="left" name="HRV RMSSD (ms)" type="monotone" dataKey="hrv" stroke="var(--accent)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
+                <Line yAxisId="left" name="Resting HR (bpm)" type="monotone" dataKey="rhr" stroke="var(--amber)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls={false} isAnimationActive={false} />
+                <Line yAxisId="left" name="HRV RMSSD (ms)" type="monotone" dataKey="hrv" stroke="var(--accent)" strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls={false} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
             <div className="chart-legend">
@@ -216,7 +219,7 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
                 <YAxis yAxisId="azm" orientation="right" width={40} stroke="var(--muted)" tick={{ fontSize: 11 }} />
                 <Tooltip contentStyle={tooltipStyle} />
                 <Bar yAxisId="steps" name="Steps" dataKey="steps" fill="var(--accent)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-                <Line yAxisId="azm" name="Active Zone Minutes" type="monotone" dataKey="azm" stroke="var(--amber)" strokeWidth={2.3} dot={{ r: 2.5 }} connectNulls isAnimationActive={false} />
+                <Line yAxisId="azm" name="Active Zone Minutes" type="monotone" dataKey="azm" stroke="var(--amber)" strokeWidth={2.3} dot={{ r: 2.5 }} connectNulls={false} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
             <div className="chart-legend">

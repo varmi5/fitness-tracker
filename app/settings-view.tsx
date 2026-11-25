@@ -76,6 +76,8 @@ export function SettingsView({
   const [targetCalories, setTargetCalories] = useState(String(settings.targetToday));
   const [effectiveFrom, setEffectiveFrom] = useState(today);
   const [timezone, setTimezone] = useState(settings.timezone);
+  const [sleepGoalHours, setSleepGoalHours] = useState(String((settings.sleepGoalMinutes ?? 480) / 60));
+  const [sleepGoalFrom, setSleepGoalFrom] = useState(today);
   const [trackingMode, setTrackingMode] = useState<TrackingMode>(resolvedInitialMode);
   const [preferredSource, setPreferredSource] = useState<EnergySource>(
     resolvedInitialMode === "fitbit" ? "google" : "manual",
@@ -108,8 +110,10 @@ export function SettingsView({
     setTwoWaySync(Boolean(settings.googleTwoWaySync));
     setBulkMode(Boolean(settings.bulkMode));
     setTargetCalories(String(settings.targetToday));
+    setSleepGoalHours(String((settings.sleepGoalMinutes ?? 480) / 60));
   }, [
     settings.timezone,
+    settings.sleepGoalMinutes,
     settings.trackingMode,
     settings.preferredEnergySource,
     settings.googleTwoWaySync,
@@ -346,6 +350,26 @@ export function SettingsView({
             ))}
           </div>
         )}
+      </SettingsDropdown>
+
+      <SettingsDropdown title="Sleep goal" subtitle="Personal goal with dated history; used for sleep estimates" badge="Sleep">
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          const minutes = Math.round(Number(sleepGoalHours) * 60);
+          if (!Number.isFinite(minutes) || minutes < 240 || minutes > 720 || !sleepGoalFrom) {
+            onMessage("Enter a sleep goal from 4 to 12 hours and an effective date.");
+            return;
+          }
+          void onNutritionAction({ action: "preferences", data: { sleepGoalMinutes: minutes, sleepGoalEffectiveFrom: sleepGoalFrom } }, "Sleep goal saved.");
+        }}>
+          <div className="input-grid">
+            <label>Sleep goal (hours)<input type="number" min="4" max="12" step="0.25" inputMode="decimal" value={sleepGoalHours} onChange={(event) => setSleepGoalHours(event.target.value)} required /></label>
+            <label>Effective from<input type="date" value={sleepGoalFrom} onChange={(event) => setSleepGoalFrom(event.target.value)} required /></label>
+          </div>
+          <p className="metric-provenance">A personal planning goal, not a measured sleep requirement. Changes apply from the selected date and preserve earlier goals.</p>
+          <Button type="submit" disabled={busy}>Save sleep goal</Button>
+        </form>
+        {(settings.sleepGoals?.length ?? 0) > 0 && <div>{settings.sleepGoals?.map((goal) => <div className="list-item" key={goal.effectiveFrom}><span>From {goal.effectiveFrom}</span><strong>{Number((goal.goalMinutes / 60).toFixed(2))}h</strong></div>)}</div>}
       </SettingsDropdown>
 
       {/* Manual Daily Expenditure (TDEE) — promoted clearly ABOVE source selector & Google Health */}
@@ -942,62 +966,37 @@ export function SettingsView({
       {/* Methodology & Calculation Guide */}
       <SettingsDropdown
         title="How Everything Is Calculated"
-        subtitle="Formulas behind Recovery, Strain, Sleep, Load, Muscle Map & Bio Age"
+        subtitle="Data requirements, estimates and limitations"
         badge="Guide"
       >
         <div className="calc-guide-list">
           <div className="calc-guide-item">
-            <strong>Recovery Score (0–100%)</strong>
-            <p>
-              Combines overnight HRV (50%), Resting HR (25%), Sleep duration vs. need (15%), plus Respiratory Rate and
-              Skin Temperature penalties against your 28-day outlier-filtered adaptive baseline. Stays blank until that
-              day&apos;s sleep or vitals arrive.
-            </p>
+            <strong>Readiness estimate</strong>
+            <p>A completed main sleep, HRV, resting heart rate and enough fresh, prior personal observations are required. Missing sleep, missing inputs, calibration and stale baselines are shown separately. The versioned score is a transparent product estimate, not a measurement of recovery or a clinical assessment. A previous sleep keeps its original date.</p>
           </div>
           <div className="calc-guide-item">
-            <strong>Daily Strain &amp; Dynamic Target</strong>
-            <p>
-              Measures total daily demand (0–100 scale) from Hevy resistance sets (load × reps × RPE), heart-rate zone
-              cardio effort (TRIMP), and daily walking/NEAT steps. Your target range shifts with today&apos;s Recovery and
-              recent training load balance.
-            </p>
+            <strong>Daily strain and guidance</strong>
+            <p>Combines recorded working-set effort, observed heart-rate load and eligible walking steps into an estimated 0–100 index. Heart-rate coverage and inferred contributions remain distinct. Working sets, repetitions, available load and effort are context, not a direct measurement of tissue fatigue. Personalized guidance is withheld when readiness is unavailable.</p>
           </div>
           <div className="calc-guide-item">
-            <strong>Cardio &amp; Muscular Load (7d vs. 42d)</strong>
-            <p>
-              Compares your 7-day exponentially weighted acute workload against your 42-day chronic base (ACWR under the
-              hood). Staying near 85–130% builds fitness steadily; pushing above 135% softens your target strain ceiling.
-            </p>
+            <strong>Recent training load</strong>
+            <p>Compares short-term and longer-term exponentially weighted workload. Missing days are not confirmed rest. Calibration and limited history reduce what can be assessed. Load ratios describe recent training patterns; they do not diagnose overtraining, predict injury or guarantee fitness improvements.</p>
           </div>
           <div className="calc-guide-item">
-            <strong>Muscle Recovery Map</strong>
-            <p>
-              Distributes Hevy working sets into primary (100%) and secondary (50%) muscle groups over the last 7 days,
-              applying a time-decay recovery curve to classify each muscle as Fatigued, Recovering, or Fresh (80%+).
-            </p>
+            <strong>Muscle training map</strong>
+            <p>Maps known exercises to primary and secondary muscle groups and shows recorded training history. Unmapped movements and unobserved muscles stay unknown. Training exposure is not a measurement of muscle repair; the map does not claim a physiological recovery percentage.</p>
           </div>
           <div className="calc-guide-item">
-            <strong>Sleep Score, Debt &amp; Regularity (SRI)</strong>
-            <p>
-              Scores duration against dynamic Sleep Need (baseline 7.75h plus previous-day strain and sleep debt), sleep
-              efficiency, Deep &amp; REM stages, and bedtime/wake consistency over the last 7 nights.
-            </p>
+            <strong>Sleep, debt and schedule</strong>
+            <p>Uses your configured, historical sleep goal and observed duration; known awake time also contributes to the sleep estimate. Deep/REM observations are displayed separately because consumer stage estimates do not justify a universal ideal percentage. Missing stages or awake time are not filled with favourable defaults. Main sleep and naps retain their sessions; debt reports history coverage. The sleep plan uses your dated goal; it does not claim that a fixed extra allowance repays biological sleep debt. Schedule variability is not a fully observed 24-hour Sleep Regularity Index. Times use your configured timezone.</p>
           </div>
           <div className="calc-guide-item">
-            <strong>Energy Bank, Stress &amp; 5-Vital Health Monitor</strong>
-            <p>
-              Energy Bank starts from your morning Recovery and Sleep scores and drains across the day via minute-level
-              heart-rate reserve. Daytime Stress (0–3) tracks non-workout HR elevation, while the Health Monitor alerts
-              when 2 or more overnight vitals drift outside your personal baseline range.
-            </p>
+            <strong>Experimental energy and HR elevation</strong>
+            <p>The energy index needs valid sleep/readiness inputs and observed heart rate. HR elevation summarizes available non-workout, non-sleep observations; it does not measure psychological stress. Wear gaps remain unknown. Vital comparisons require a fresh personal baseline and describe deviations, not illness probability.</p>
           </div>
           <div className="calc-guide-item">
-            <strong>Biological Age &amp; VO2 Max Percentile (Body tab)</strong>
-            <p>
-              Uses a 180-day rolling log of sleep duration &amp; regularity, moderate and vigorous cardio minutes,
-              strength work, daily steps, Resting HR, lean mass, and VO2 Max benchmarked against FRIEND age/sex norms,
-              alongside a 30-day Pace of Aging indicator.
-            </p>
+            <strong>Fitness references and unsupported predictions</strong>
+            <p>Provider VO₂ max is an estimate whose method and age affect comparisons with population references. Biological age, pace of ageing and future readiness percentages are unavailable pending validation. Habit comparisons are exploratory associations, not proof that a habit caused a recovery change. Consumer sleep stages also carry measurement uncertainty.</p>
           </div>
         </div>
       </SettingsDropdown>
