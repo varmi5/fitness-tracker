@@ -1,0 +1,14 @@
+# GitHub Actions already tested and built this exact standalone artifact.
+FROM node:24.13.0-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
+COPY --chown=node:node .next/standalone ./
+COPY --chown=node:node .next/static ./.next/static
+COPY --chown=node:node public ./public
+COPY --chown=node:node migrations ./migrations
+COPY --chown=node:node scripts/migrate.mjs ./scripts/migrate.mjs
+COPY --chown=node:node scripts/set-password.mjs scripts/set-password.ts ./scripts/
+COPY --chown=node:node scripts/google-meals.mjs ./scripts/
+USER node
+EXPOSE 3000
+CMD ["sh", "-c", "node scripts/migrate.mjs --if-configured && exec node server.js"]

@@ -168,3 +168,34 @@ manifests share the same version, description and renewable OAuth scopes. Packag
 guidance covers dated meals, repeated portions, naps/stage intervals, missing data
 and the limits of website-only features. See [plugin-package.md](plugin-package.md)
 for the repeatable build/check commands and remaining public-submission materials.
+
+## A newly added tool is held for publication
+
+`This new tool definition needs further review before it can be published` is a
+publication-review hold, not a database connection error. `get_health_history` is
+registered as read-only, non-destructive and closed-world (stored account data),
+uses the existing `fitness:read` permission, validates date ranges and scopes every
+query to the authenticated user. No extra Google grant is requested by this tool.
+These facts do not guarantee OpenAI approval.
+
+Keep the existing FitnessTrackr plugin and MCP URL. In the plugin submission
+portal, open the existing submission/version and inspect the MCP review issues
+for `get_health_history`. Complete any explicit requested action or provide the
+reviewer access and cases requested by the portal. If the only issue is the review
+hold, allow OpenAI's review to complete; if it remains held, contact OpenAI Support
+from `help.openai.com` with the plugin ID privately and the exact tool/error text.
+Do not send OAuth secrets, user health records or passwords in a public post.
+
+Suggested support message:
+
+> FitnessTrackr's get_health_history tool is held with “This new tool definition
+> needs further review before it can be published.” It reads only the authenticated
+> user's stored sleep/workout/vitals records under the existing fitness:read scope,
+> with readOnlyHint=true, destructiveHint=false and openWorldHint=false. Please
+> clarify whether any action is required from me or whether it is awaiting review.
+
+OpenAI's continuous review can approve new tool definitions without a new plugin
+ZIP. A held tool is not available to public users until its review passes. Do not
+recreate the plugin, rename the tool to evade review, or reconnect OAuth merely to
+try to clear a publication hold. Package metadata/skill changes have a separate
+new-version submission flow. See the official [MCP review requirements](https://developers.openai.com/plugins/deploy/app-review).

@@ -1,0 +1,13 @@
+**
+!.next/
+!.next/standalone/**
+!.next/static/**
+!public/**
+!migrations/**
+!scripts/
+!scripts/migrate.mjs
+!scripts/set-password.mjs
+!scripts/set-password.ts
+!scripts/google-meals.mjs
+**/.env*
+**/.git/**

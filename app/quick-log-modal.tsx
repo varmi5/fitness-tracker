@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
-import { Camera, Dumbbell, RefreshCw, Scale, Search, Sparkles, Utensils, X } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ArrowLeft, Camera, Dumbbell, History, RefreshCw, Scale, Search, Sparkles, Utensils, X } from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { displayUnit, displayValue, metrics } from "../lib/metrics";
 import type { FoodLibrary, GoogleIntegrationStatus, HevyIntegrationStatus, TrackerSnapshot } from "./types";
 
-type QuickTab = "meal" | "workout" | "body";
+type QuickTab = "actions" | "meal" | "workout" | "body";
 type BodyMode = "weight" | "circumference" | "physique";
 
 export type QuickLogSavedFood = FoodLibrary["saved"][number];
@@ -13,6 +14,7 @@ export type QuickLogSavedFood = FoodLibrary["saved"][number];
 interface QuickLogModalProps {
   open: boolean;
   defaultDay: string;
+  mcpConnected: boolean | null;
   tracker: TrackerSnapshot;
   google: GoogleIntegrationStatus;
   hevy?: HevyIntegrationStatus;
@@ -31,6 +33,7 @@ interface QuickLogModalProps {
 export function QuickLogModal({
   open,
   defaultDay,
+  mcpConnected,
   tracker,
   google,
   hevy,
@@ -45,14 +48,38 @@ export function QuickLogModal({
   onOpenPhysiqueCheckin,
   onOpenSettings,
 }: QuickLogModalProps) {
-  const [tab, setTab] = useState<QuickTab>("meal");
+  const [tab, setTab] = useState<QuickTab>("actions");
   const [bodyMode, setBodyMode] = useState<BodyMode>("weight");
   const [query, setQuery] = useState("");
   const [foods, setFoods] = useState<QuickLogSavedFood[]>([]);
   const [loadingFoods, setLoadingFoods] = useState(false);
   const [loggingId, setLoggingId] = useState<string | null>(null);
   const [weightInput, setWeightInput] = useState("");
-  const [mcpHintOpen, setMcpHintOpen] = useState(false);
+
+  const content = useRef<HTMLDivElement>(null);
+  const handingOff = useRef(false);
+  useEffect(() => {
+    if (!open) return;
+    setTab("actions"); handingOff.current = false;
+    const viewport = window.visualViewport;
+    let frame = 0;
+    const resize = () => {
+      frame = 0;
+      const height = viewport?.height ?? window.innerHeight;
+      const top = viewport?.offsetTop ?? 0;
+      content.current?.style.setProperty("--quick-height", `${height}px`);
+      content.current?.style.setProperty("--quick-top", `${top}px`);
+      content.current?.style.setProperty("--quick-bottom", `${Math.max(0, window.innerHeight - height - top)}px`);
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(resize); };
+    resize(); viewport?.addEventListener("resize", schedule); viewport?.addEventListener("scroll", schedule); window.addEventListener("resize", schedule);
+    return () => { cancelAnimationFrame(frame); viewport?.removeEventListener("resize", schedule); viewport?.removeEventListener("scroll", schedule); window.removeEventListener("resize", schedule); };
+  }, [open]);
+  function launch(action: () => void) {
+    handingOff.current = true; onClose();
+    window.setTimeout(action, 160); // Let the action picker release focus and scroll locks first.
+  }
+
 
   const units = tracker.settings.units;
   const weightMetric = metrics.find((m) => m.key === "weight")!;
@@ -78,7 +105,6 @@ export function QuickLogModal({
     };
   }, [open, tab, query]);
 
-  if (!open) return null;
 
   async function handleQuickFood(food: QuickLogSavedFood) {
     setLoggingId(food.id);
@@ -124,39 +150,38 @@ export function QuickLogModal({
   }
 
   return (
-    <dialog className="modal-backdrop" open aria-label="Quick Log" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal-sheet" style={{ maxHeight: "88dvh", height: "auto" }}>
-        <div className="modal-top">
-          <div className="sheet-grabber" />
-          <div className="split-row modal-header">
-            <h2>Quick Log · {defaultDay}</h2>
-            <button type="button" className="secondary icon-btn modal-close-btn" aria-label="Close quick log" onClick={onClose}>
-              <X size={18} />
-            </button>
+    <Dialog.Root open={open} onOpenChange={next => { if (!next && !busy) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="quick-sheet-overlay" />
+        <Dialog.Content
+          ref={content}
+          className={`quick-sheet ${tab === "actions" ? "quick-sheet-launcher" : "quick-sheet-editor"}`}
+          aria-describedby="quick-sheet-description"
+          onOpenAutoFocus={event => { event.preventDefault(); content.current?.focus(); }}
+          onCloseAutoFocus={event => { event.preventDefault(); if (!handingOff.current) document.querySelector<HTMLButtonElement>('[aria-label="Quick log"]')?.focus(); }}
+        >
+          <div className="quick-sheet-header">
+            <div className="sheet-grabber" aria-hidden="true" />
+            <div className="split-row">
+              {tab !== "actions" && <button className="secondary icon-btn" type="button" aria-label="Back to logging actions" onClick={() => setTab("actions")}><ArrowLeft size={20} /></button>}
+              <Dialog.Title>{tab === "actions" ? "Quick Log" : tab === "meal" ? "Recent foods" : tab === "workout" ? "Workout" : "Body measurements"}</Dialog.Title>
+              <button type="button" className="secondary icon-btn" aria-label="Close quick log" disabled={busy} onClick={onClose}><X size={20} /></button>
+            </div>
+            <Dialog.Description id="quick-sheet-description" className="ow-detail">{tab === "actions" ? "Choose what to log" : `Logging for ${defaultDay}`}</Dialog.Description>
           </div>
-          <div className="segmented" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }} role="tablist" aria-label="Quick log category">
-            {(
-              [
-                ["meal", "Meal"],
-                ["workout", "Workout"],
-                ["body", "Body"],
-              ] as [QuickTab, string][]
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={tab === key}
-                className={tab === key ? "active" : ""}
-                onClick={() => setTab(key)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
+          <div className="quick-sheet-body" onFocusCapture={event => {
+            const target = event.target;
+            if (target instanceof HTMLElement && target.matches("input,textarea,select")) window.setTimeout(() => target.scrollIntoView({ block: "nearest", inline: "nearest" }), 180);
+          }}>
+            {tab === "actions" && <div className="quick-action-grid">
+              <button type="button" onClick={() => launch(() => onOpenMealComposer())}><span><Search size={25} /></span>Search food</button>
+              <button type="button" onClick={() => setTab("meal")}><span><History size={25} /></span>Recent foods</button>
+              <button type="button" onClick={() => launch(() => onOpenMealComposer({ openBarcode: true }))}><span><Camera size={25} /></span>Scan food</button>
+              <button type="button" className={`mcp-connection ${mcpConnected === true ? "is-connected" : mcpConnected === false ? "is-disconnected" : ""}`} onClick={() => launch(onOpenSettings)}><span><Sparkles size={25} /></span>{mcpConnected === true ? "ChatGPT authorised" : mcpConnected === false ? "Connect ChatGPT" : "ChatGPT Settings"}</button>
+              <button type="button" onClick={() => setTab("workout")}><span><Dumbbell size={25} /></span>Workout</button>
+              <button type="button" onClick={() => setTab("body")}><span><Scale size={25} /></span>Body</button>
+            </div>}
 
-        <div className="modal-body">
           {tab === "meal" && (
             <>
               <div className="search-field-row">
@@ -175,8 +200,7 @@ export function QuickLogModal({
                   type="button"
                   className="compact"
                   onClick={() => {
-                    onClose();
-                    onOpenMealComposer();
+                    launch(() => onOpenMealComposer());
                   }}
                 >
                   <Utensils size={14} /> Full Meal Composer
@@ -185,37 +209,19 @@ export function QuickLogModal({
                   type="button"
                   className="secondary compact"
                   onClick={() => {
-                    onClose();
-                    onOpenMealComposer({ openBarcode: true });
+                    launch(() => onOpenMealComposer({ openBarcode: true }));
                   }}
                 >
                   <Camera size={14} /> Barcode Scan
                 </button>
                 <button
                   type="button"
-                  className="secondary compact"
-                  onClick={() => setMcpHintOpen((v) => !v)}
+                  className={`secondary compact mcp-connection ${mcpConnected === true ? "is-connected" : mcpConnected === false ? "is-disconnected" : ""}`}
+                  onClick={() => launch(onOpenSettings)}
                 >
-                  <Sparkles size={14} /> ChatGPT MCP
+                  <Sparkles size={14} /> {mcpConnected === true ? "ChatGPT authorised" : mcpConnected === false ? "Connect ChatGPT · Settings" : "ChatGPT · Check in Settings"}
                 </button>
               </div>
-
-              {mcpHintOpen && (
-                <div className="bevel-awaiting-strip" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-                  <span>Send a meal photo to your connected ChatGPT MCP connector to auto-score &amp; log directly.</span>
-                  <button
-                    type="button"
-                    className="secondary compact"
-                    style={{ minHeight: "30px", fontSize: ".74rem" }}
-                    onClick={() => {
-                      onClose();
-                      onOpenSettings();
-                    }}
-                  >
-                    View MCP Setup in Settings
-                  </button>
-                </div>
-              )}
 
               <div style={{ display: "grid", gap: ".45rem" }}>
                 <span className="eyebrow">1-Tap Frequent Foods</span>
@@ -304,8 +310,7 @@ export function QuickLogModal({
                 type="button"
                 className="secondary"
                 onClick={() => {
-                  onClose();
-                  onOpenTraining();
+                  launch(onOpenTraining);
                 }}
               >
                 Open Training &amp; Strain
@@ -334,8 +339,7 @@ export function QuickLogModal({
                   type="button"
                   className={bodyMode === "physique" ? "compact" : "secondary compact"}
                   onClick={() => {
-                    onClose();
-                    onOpenPhysiqueCheckin();
+                    launch(onOpenPhysiqueCheckin);
                   }}
                 >
                   <Camera size={14} /> Physique Photo
@@ -382,7 +386,8 @@ export function QuickLogModal({
             </div>
           )}
         </div>
-      </div>
-    </dialog>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

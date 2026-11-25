@@ -106,7 +106,10 @@ try {
     assert.ok(fabBox && navBox && fabBox.x >= navBox.x && fabBox.x + fabBox.width <= navBox.x + navBox.width + 2);
     assert.ok(fabBox.y >= navBox.y - 2 && fabBox.y + fabBox.height <= navBox.y + navBox.height + 2);
     await fab.click();
-    await page.getByRole("button", { name: "Full Meal Composer", exact: true }).click();
+    const mcpButton = page.getByRole("button", { name: "Connect ChatGPT", exact: true });
+    await mcpButton.waitFor();
+    assert.ok((await mcpButton.getAttribute("class")).includes("is-disconnected"));
+    await page.getByRole("button", { name: "Search food", exact: true }).click();
     const modal = page.getByRole("dialog");
     await modal.waitFor();
     const search = modal.getByRole("combobox", { name: "Find a food" });
@@ -161,7 +164,7 @@ try {
 
     if (name === "iphone") {
       await fab.click();
-      await page.getByRole("button", { name: "Full Meal Composer", exact: true }).click();
+      await page.getByRole("button", { name: "Search food", exact: true }).click();
       await modal.waitFor();
       await page.setViewportSize({ width: 390, height: 430 });
       await search.click();
@@ -215,7 +218,7 @@ try {
         const optionTexts = await sourceSelect.locator("option").allInnerTexts();
         assert.deepEqual(optionTexts, ["Manual TDEE entry", "Google Health (Fitbit Air)"]);
         const settingsText = await page.locator("main").innerText();
-        assert.equal(settingsText.includes("Apple Health"), false, "Settings must not reference Apple Health");
+        assert.equal(settingsText.includes("Wearables"), true, "Settings must include the shared Wearables setup");
 
         // Stage 6: Training & Strain -> Walking Contribution settings
         const walkingHeading = page.getByRole("heading", { name: /Walking Contribution/ });
@@ -299,7 +302,7 @@ try {
 
     // Stage 1 regression: toast auto-dismiss (~3s), manual dismiss, and live camera barcode scanner
     await fab.click();
-    await page.getByRole("button", { name: "Full Meal Composer", exact: true }).click();
+    await page.getByRole("button", { name: "Search food", exact: true }).click();
     await page.getByRole("button", { name: "Barcode", exact: true }).click();
     await page.evaluate(() => {
       window.__stoppedCameraTracks = 0;

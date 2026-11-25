@@ -70,8 +70,16 @@ try {
   const loggedIn = await fetch(url("/"), { headers: { Cookie: cookie } });
   assert.equal(loggedIn.status, 200);
   const dashboard = await loggedIn.text();
-  assert.match(dashboard, /Calorie Intake/);
-  assert.match(dashboard, /Training/);
+  assert.match(dashboard, /Opening FitnessTrackr/);
+  assert.doesNotMatch(dashboard, /Owner|owner@example.test/); // Generic shell contains no account data.
+  assert.equal((await fetch(url("/api/bootstrap"))).status, 401);
+  const bootstrapResponse = await fetch(url("/api/bootstrap"), { headers: { Cookie: cookie } });
+  assert.equal(bootstrapResponse.status, 200);
+  assert.match(bootstrapResponse.headers.get("cache-control"), /private.*no-store/);
+  const bootstrap = await bootstrapResponse.json();
+  assert.ok(bootstrap.userId);
+  assert.equal(bootstrap.daily.day, bootstrap.calendarToday);
+  assert.equal((await fetch(url("/api/mcp-status"))).status, 401);
   assert.doesNotMatch(dashboard, /class="masthead"/);
   const result = await post("/api/tracker", {
     action: "log", data: { date: "2026-11-01", values: [{ key: "waist", value: 80 }], note: "Test" },

@@ -548,7 +548,7 @@ export function MealComposer({
   }
 
   return (
-    <dialog ref={dialog} className="modal-backdrop" aria-labelledby="meal-dialog-title"
+    <dialog ref={dialog} className="modal-backdrop meal-screen" aria-labelledby="meal-dialog-title"
       onCancel={(event) => { event.preventDefault(); if (!working) onClose(); }}>
       <div
         ref={sheet}

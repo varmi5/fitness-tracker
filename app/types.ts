@@ -71,6 +71,7 @@ export interface OpenWearablesIntegrationStatus {
 }
 
 export interface InitialAppData {
+  userId?: string;
   userName?: string | null;
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
