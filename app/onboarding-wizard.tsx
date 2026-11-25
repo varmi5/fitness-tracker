@@ -8,13 +8,16 @@ import {
   Copy,
   Dumbbell,
   ExternalLink,
-  Flame,
-  Smartphone,
   Sparkles,
   Upload,
-  Watch,
   X,
 } from "lucide-react";
+import {
+  AppleHealthIcon,
+  FitbitBrandIcon,
+  GarminBrandIcon,
+  ManualTdeeIcon,
+} from "../components/icons";
 import {
   ACTIVITY_LEVELS,
   buildChatGptTdeePrompt,
@@ -83,13 +86,13 @@ export function OnboardingWizard({
   const [saving, setSaving] = useState(false);
 
   // Step 1: Source & TDEE
-  const [sourceChoice, setSourceChoice] = useState<"fitbit" | "open_wearables" | "manual">(
-    google.connected || settings.trackingMode === "fitbit"
-      ? openWearables?.connected && !google.connected
-        ? "open_wearables"
-        : "fitbit"
-      : openWearables?.connected
-        ? "open_wearables"
+  const [sourceChoice, setSourceChoice] = useState<"apple" | "fitbit" | "other_wearable" | "manual">(
+    openWearables?.connected && !google.connected
+      ? openWearables.providers.some((p) => p !== "apple")
+        ? "other_wearable"
+        : "apple"
+      : google.connected || settings.trackingMode === "fitbit"
+        ? "fitbit"
         : "manual",
   );
   const trackingMode: TrackingMode = sourceChoice === "manual" ? "manual" : "fitbit";
@@ -137,7 +140,9 @@ export function OnboardingWizard({
     setStep(1);
     setSourceChoice(
       openWearables?.connected && !google.connected
-        ? "open_wearables"
+        ? openWearables.providers.some((p) => p !== "apple")
+          ? "other_wearable"
+          : "apple"
         : google.connected || settings.trackingMode === "fitbit"
           ? "fitbit"
           : "manual",
@@ -379,49 +384,66 @@ export function OnboardingWizard({
           />
         </div>
 
-        {/* STEP 1: Wearable vs Manual TDEE */}
+        {/* STEP 1: Watch / TDEE */}
         {step === 1 && (
-          <section className="card" style={{ display: "grid", gap: ".9rem" }}>
+          <section className="card" style={{ display: "grid", gap: ".85rem" }}>
             <div>
-              <h2>1. How do you want to track daily burn (TDEE)?</h2>
-              <p style={{ fontSize: ".83rem", marginTop: ".25rem" }}>
-                Fitbit Air syncs via Google Health. Using <strong>Apple Watch</strong>, <strong>Garmin</strong>,{" "}
-                <strong>Android Health Connect</strong>, <strong>Oura</strong> or <strong>Whoop</strong>? Link live via Open Wearables or
-                choose Manual TDEE below.
+              <h2>1. Connect your watch</h2>
+              <p style={{ fontSize: ".82rem", marginTop: ".2rem" }}>
+                Pick what you wear, or track manually.
               </p>
             </div>
 
             <div className="onboarding-choice-grid">
               <button
                 type="button"
-                className={`onboarding-choice${sourceChoice === "fitbit" ? " is-active" : ""}`}
-                onClick={() => setSourceChoice("fitbit")}
+                className={`onboarding-choice${sourceChoice === "apple" ? " is-active" : ""}`}
+                onClick={() => setSourceChoice("apple")}
               >
-                <div className="split-row" style={{ width: "100%" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: ".4rem", fontWeight: 700 }}>
-                    <Watch size={17} /> Fitbit Air (Google Health)
+                <div className="onboarding-choice-row">
+                  <span className="onboarding-choice-title">
+                    <span className="device-logo-tile" aria-hidden="true">
+                      <AppleHealthIcon size={21} />
+                    </span>
+                    Apple Watch / Health
                   </span>
-                  {google.connected && <span className="pill teal-soft">Connected</span>}
+                  {openWearables?.connected && <span className="pill teal-soft">Connected</span>}
                 </div>
-                <p>Auto-syncs TDEE, sleep stages, HRV, RHR, workouts &amp; two-way meal writes.</p>
+                <p>Sleep, HRV, workouts &amp; steps</p>
               </button>
 
               <button
                 type="button"
-                className={`onboarding-choice${sourceChoice === "open_wearables" ? " is-active" : ""}`}
-                onClick={() => setSourceChoice("open_wearables")}
+                className={`onboarding-choice${sourceChoice === "fitbit" ? " is-active" : ""}`}
+                onClick={() => setSourceChoice("fitbit")}
               >
-                <div className="split-row" style={{ width: "100%" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: ".4rem", fontWeight: 700 }}>
-                    <Smartphone size={17} /> Apple Health / Garmin / Health Connect
+                <div className="onboarding-choice-row">
+                  <span className="onboarding-choice-title">
+                    <span className="device-logo-tile" aria-hidden="true">
+                      <FitbitBrandIcon size={21} />
+                    </span>
+                    Fitbit / Google Health
                   </span>
-                  {openWearables?.connected ? (
-                    <span className="pill teal-soft">Connected</span>
-                  ) : (
-                    <span className="pill accent-soft">Live Sync</span>
-                  )}
+                  {google.connected && <span className="pill teal-soft">Connected</span>}
                 </div>
-                <p>Links via Open Wearables (8-char mobile app code or Garmin/Oura/Whoop portal) with smart dual-wear dedup.</p>
+                <p>TDEE, sleep, vitals &amp; meal sync</p>
+              </button>
+
+              <button
+                type="button"
+                className={`onboarding-choice${sourceChoice === "other_wearable" ? " is-active" : ""}`}
+                onClick={() => setSourceChoice("other_wearable")}
+              >
+                <div className="onboarding-choice-row">
+                  <span className="onboarding-choice-title">
+                    <span className="device-logo-tile" aria-hidden="true">
+                      <GarminBrandIcon size={21} />
+                    </span>
+                    Garmin, Oura &amp; Android
+                  </span>
+                  {openWearables?.connected && <span className="pill teal-soft">Connected</span>}
+                </div>
+                <p>Health Connect, Whoop &amp; Strava</p>
               </button>
 
               <button
@@ -429,22 +451,32 @@ export function OnboardingWizard({
                 className={`onboarding-choice${sourceChoice === "manual" ? " is-active" : ""}`}
                 onClick={() => setSourceChoice("manual")}
               >
-                <div className="split-row" style={{ width: "100%" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: ".4rem", fontWeight: 700 }}>
-                    <Flame size={17} /> Manual TDEE (No sync)
+                <div className="onboarding-choice-row">
+                  <span className="onboarding-choice-title">
+                    <span className="device-logo-tile" aria-hidden="true">
+                      <ManualTdeeIcon size={21} />
+                    </span>
+                    No watch / Manual TDEE
                   </span>
                   {sourceChoice === "manual" && <span className="pill accent-soft">Selected</span>}
                 </div>
-                <p>Enter your estimated maintenance calories manually &amp; log body weight on the scale.</p>
+                <p>Quick calorie calculator</p>
               </button>
             </div>
 
             {sourceChoice === "fitbit" && (
-              <div className="card" style={{ background: "var(--surface-soft)", display: "grid", gap: ".65rem" }}>
-                <strong>Google Health (Fitbit Air) Link</strong>
-                <p style={{ fontSize: ".8rem" }}>
-                  Connect your Google account with Fitbit Health data so FitnessTrackr can pull TDEE, sleep stages, HRV, and workouts automatically.
-                </p>
+              <div className="card" style={{ background: "var(--surface-soft)", display: "grid", gap: ".6rem" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: ".55rem" }}>
+                  <span className="device-logo-tile" aria-hidden="true">
+                    <FitbitBrandIcon size={21} />
+                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <strong style={{ fontSize: ".88rem", display: "block" }}>Fitbit / Google Health</strong>
+                    <span style={{ fontSize: ".76rem", color: "var(--muted)" }}>
+                      One-tap Google sign-in syncs TDEE, sleep, HRV &amp; workouts.
+                    </span>
+                  </div>
+                </div>
                 {google.connected ? (
                   <div className="pill teal-soft" style={{ justifySelf: "start" }}>
                     <CheckCircle2 size={14} /> Connected{google.accountLabel ? ` · ${google.accountLabel}` : ""}
@@ -459,20 +491,22 @@ export function OnboardingWizard({
                     Connect Google Health
                   </button>
                 ) : (
-                  <p style={{ fontSize: ".78rem" }}>
-                    Google OAuth isn’t enabled on this server yet — you can import saved Fitbit/Takeout JSON or switch to Manual TDEE below.
+                  <p style={{ fontSize: ".77rem", margin: 0 }}>
+                    Google OAuth isn’t enabled on this server yet — use Manual TDEE or Settings import instead.
                   </p>
                 )}
               </div>
             )}
 
-            {sourceChoice === "open_wearables" && (
-              <div className="card" style={{ background: "var(--surface-soft)", display: "grid", gap: ".65rem", minWidth: 0 }}>
+            {(sourceChoice === "apple" || sourceChoice === "other_wearable") && (
+              <div className="card" style={{ background: "var(--surface-soft)", display: "grid", gap: ".6rem", minWidth: 0 }}>
                 <OpenWearablesGuide
                   openWearables={openWearables}
                   invite={owInvite}
                   busy={saving || busy}
                   compact
+                  initialPlatform={sourceChoice === "apple" ? "apple" : "cloud"}
+                  hideTabs={sourceChoice === "apple"}
                   onGenerateInvite={
                     onCreateOpenWearablesInvite
                       ? async () => {
@@ -484,9 +518,8 @@ export function OnboardingWizard({
                   onMessage={onMessage}
                 />
                 {!openWearables?.available && (
-                  <p style={{ fontSize: ".78rem", margin: 0 }}>
-                    Open Wearables API credentials aren’t configured on this host yet — you can continue with Manual TDEE or link in Settings
-                    later.
+                  <p style={{ fontSize: ".77rem", margin: 0 }}>
+                    Live sync isn’t configured on this host yet — you can continue manually for now.
                   </p>
                 )}
               </div>
@@ -939,11 +972,13 @@ export function OnboardingWizard({
               <div className="list-item">
                 <span>Tracking mode</span>
                 <strong>
-                  {sourceChoice === "open_wearables"
-                    ? "Apple Health / Open Wearables"
-                    : trackingMode === "fitbit"
-                      ? "Fitbit Air (Google Health)"
-                      : "Manual TDEE"}
+                  {sourceChoice === "apple"
+                    ? "Apple Watch / Apple Health"
+                    : sourceChoice === "other_wearable"
+                      ? "Garmin / Oura / Health Connect"
+                      : sourceChoice === "fitbit"
+                        ? "Fitbit / Google Health"
+                        : "Manual TDEE"}
                 </strong>
               </div>
               <div className="list-item">

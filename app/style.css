@@ -2692,3 +2692,72 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   margin: 0;
   line-height: 1.45;
 }
+.device-logo-tile {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-raised);
+  box-shadow: var(--silk-raised-sm);
+  flex-shrink: 0;
+}
+.onboarding-choice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem;
+  width: 100%;
+  min-width: 0;
+}
+.onboarding-choice-title {
+  display: inline-flex;
+  align-items: center;
+  gap: .6rem;
+  font-weight: 700;
+  font-size: .88rem;
+  min-width: 0;
+}
+.ow-step-list {
+  display: grid;
+  gap: .45rem;
+  min-width: 0;
+}
+.ow-step-row {
+  display: flex;
+  align-items: flex-start;
+  gap: .6rem;
+  padding: .62rem .72rem;
+  border-radius: 13px;
+  background: var(--bg);
+  box-shadow: var(--silk-inset);
+  min-width: 0;
+}
+.ow-step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .72rem;
+  font-weight: 700;
+  background: var(--surface-raised);
+  color: var(--accent);
+  box-shadow: var(--silk-raised-sm);
+  flex-shrink: 0;
+  margin-top: .08rem;
+}
+.ow-step-copy {
+  display: grid;
+  gap: .1rem;
+  font-size: .76rem;
+  line-height: 1.38;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ow-step-copy strong {
+  font-size: .8rem;
+  color: var(--text);
+}
