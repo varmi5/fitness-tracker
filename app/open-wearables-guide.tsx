@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, ExternalLink } from "lucide-react";
+import { Copy, ExternalLink } from "lucide-react";
 import type { OpenWearablesIntegrationStatus } from "./types";
 
 type DataSource = "apple" | "android" | "cloud";
@@ -130,9 +130,7 @@ export function OpenWearablesGuide({
                 aria-label={index < completed ? `${label} complete` : label}
                 aria-current={step === index ? "step" : undefined}
               >
-                <span className="ow-progress-dot" aria-hidden="true">
-                  {index < completed ? <Check size={13} /> : step === index ? index + 1 : null}
-                </span>
+                <span className="ow-progress-segment" aria-hidden="true" />
               </li>
             ))}
           </ol>
