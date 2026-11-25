@@ -37,6 +37,19 @@ Add these runtime variables in Coolify when ready to enable the private ChatGPT 
 
 Authorized Google OAuth redirect URI: `https://<your-fitness-domain>/api/integrations/google/callback`.
 
+## Open Wearables beta pairing
+
+Set these runtime variables on the FitnessTrackr application in Coolify.
+
+| Name | Purpose |
+|---|---|
+| `OPEN_WEARABLES_API_URL` | HTTPS API origin for your Open Wearables instance |
+| `OPEN_WEARABLES_API_KEY` | API key from the same instance for user provisioning and syncing |
+| `OPEN_WEARABLES_DEVELOPER_EMAIL` | Email for a dedicated Open Wearables developer account on that instance |
+| `OPEN_WEARABLES_DEVELOPER_PASSWORD` | Password for that account, stored as a server-side secret |
+
+The last two variables let FitnessTrackr authenticate at the invitation endpoint, which expects a developer session. Create the account on your own Open Wearables instance. Keep both credentials in Coolify. Restart or redeploy FitnessTrackr after changing the runtime variables, then generate a code from **Settings → Wearables → Get code**. Confirm an iPhone can redeem it with the Host URL shown.
+
 ## Password recovery
 
 In the Fitness application terminal, run `node scripts/set-password.mjs <email>`. Enter the new password at the hidden prompt. Existing sessions are revoked. For a source checkout, use `npx tsx scripts/set-password.ts <email>`.

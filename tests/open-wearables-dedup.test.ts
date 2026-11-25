@@ -172,7 +172,11 @@ test("syncOpenWearables ingests Apple Health + Garmin safely, isolates users, sk
   const prevUrl = process.env.OPEN_WEARABLES_API_URL;
   const prevKey = process.env.OPEN_WEARABLES_API_KEY;
   const originalFetch = globalThis.fetch;
+  const prevDeveloperEmail = process.env.OPEN_WEARABLES_DEVELOPER_EMAIL;
+  const prevDeveloperPassword = process.env.OPEN_WEARABLES_DEVELOPER_PASSWORD;
 
+  process.env.OPEN_WEARABLES_DEVELOPER_EMAIL = "ow-developer@example.test";
+  process.env.OPEN_WEARABLES_DEVELOPER_PASSWORD = "test-developer-password";
   process.env.OPEN_WEARABLES_API_URL = "https://ow.local.test";
   process.env.OPEN_WEARABLES_API_KEY = "sk-test-123";
 
@@ -189,10 +193,20 @@ test("syncOpenWearables ingests Apple Health + Garmin safely, isolates users, sk
 
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.endsWith("/api/v1/auth/login")) {
+      assert.equal(init?.method, "POST");
+      assert.ok(init?.body instanceof URLSearchParams);
+      assert.equal(init.body.get("username"), "ow-developer@example.test");
+      assert.equal(init.body.get("password"), "test-developer-password");
+      return Response.json({ access_token: "developer-jwt", expires_in: 900 });
+    }
     if (url.endsWith("/api/v1/users") && init?.method === "POST") {
+      assert.equal(new Headers(init.headers).get("X-Open-Wearables-API-Key"), "sk-test-123");
+      assert.equal(new Headers(init.headers).get("Authorization"), null);
       return Response.json({ id: owUserUuid });
     }
     if (url.endsWith(`/api/v1/users/${owUserUuid}/invitation-code`)) {
+      assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer developer-jwt");
       return Response.json({ id: "inv-1", code: "ABCD1234", expires_at: "2026-11-26T00:00:00Z" });
     }
     if (url.includes(`/api/v1/users/${owUserUuid}/connections`)) {
@@ -337,8 +351,14 @@ test("syncOpenWearables ingests Apple Health + Garmin safely, isolates users, sk
     assert.equal(afterDisconnect.connected, false);
   } finally {
     globalThis.fetch = originalFetch;
-    process.env.OPEN_WEARABLES_API_URL = prevUrl;
-    process.env.OPEN_WEARABLES_API_KEY = prevKey;
+    if (prevUrl === undefined) delete process.env.OPEN_WEARABLES_API_URL;
+    else process.env.OPEN_WEARABLES_API_URL = prevUrl;
+    if (prevKey === undefined) delete process.env.OPEN_WEARABLES_API_KEY;
+    else process.env.OPEN_WEARABLES_API_KEY = prevKey;
+    if (prevDeveloperEmail === undefined) delete process.env.OPEN_WEARABLES_DEVELOPER_EMAIL;
+    else process.env.OPEN_WEARABLES_DEVELOPER_EMAIL = prevDeveloperEmail;
+    if (prevDeveloperPassword === undefined) delete process.env.OPEN_WEARABLES_DEVELOPER_PASSWORD;
+    else process.env.OPEN_WEARABLES_DEVELOPER_PASSWORD = prevDeveloperPassword;
   }
 });
 
