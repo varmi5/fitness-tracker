@@ -12,7 +12,7 @@ const sources: Record<DataSource, string> = {
   cloud: "Garmin, Oura, WHOOP or Strava",
 };
 
-const steps = ["Install", "Get code", "Sync"];
+const steps = ["Prepare", "Install", "Get code", "Sync"];
 
 export interface OpenWearablesInvitePayload {
   code: string;
@@ -84,12 +84,16 @@ export function OpenWearablesGuide({
     }
   }
 
+  if (openWearables?.connected) return null;
+
   return (
     <div className="ow-guide-box">
       <div className="ow-guide-heading">
         <strong>Open Wearables</strong>
         <span className="pill amber-soft">Beta</span>
       </div>
+
+      <a href="https://openwearables.io/docs/app/introduction#see-it-in-action" target="_blank" rel="noreferrer">Open Wearables setup guide</a>
 
       {hideSourcePicker ? (
         <p className="ow-detail">{sources[source]}</p>
@@ -141,22 +145,32 @@ export function OpenWearablesGuide({
             {step < steps.length && <p className="ow-detail">Step {step + 1} of {steps.length}</p>}
             {step === 0 && (
               <>
+                <strong>{apple ? "Install TestFlight first" : "Prepare Health Connect"}</strong>
+                <p className="ow-detail">{apple ? "TestFlight is Apple's app for installing beta apps. Install it on your iPhone before joining the Open Wearables beta." : "Make sure Health Connect is available on your Android phone before installing the beta."}</p>
+                <a className="ow-install-link" href={apple ? "https://apps.apple.com/app/testflight/id899247664" : "https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata"} target="_blank" rel="noreferrer">
+                  {apple ? "Download TestFlight" : "Get Health Connect"} <ExternalLink size={13} aria-hidden="true" />
+                </a>
+                <button type="button" className="unlock-btn" onClick={() => advanceTo(1)}>{apple ? "I have TestFlight" : "Continue to Open Wearables"}</button>
+              </>
+            )}
+            {step === 1 && (
+              <>
                 <strong>Install Open Wearables</strong>
-                <p className="ow-detail">{apple ? "Open the invite on your iPhone and install the beta in TestFlight." : "Request the Android beta APK and enable Health Connect."}</p>
+                <p className="ow-detail">{apple ? "Open the invite on your iPhone and install the beta in TestFlight." : "Open the Firebase invitation on your Android phone and install the beta."}</p>
                 <a
                   className="ow-install-link"
-                  href={apple ? "https://testflight.apple.com/join/h2Pv8Dbe" : "https://discord.gg/qrcfFnNE6H"}
+                  href={apple ? "https://testflight.apple.com/join/h2Pv8Dbe" : "https://appdistribution.firebase.dev/i/004703f73822edf9"}
                   target="_blank"
                   rel="noreferrer"
                 >
                   {apple ? "Open TestFlight invite" : "Get Android beta"} <ExternalLink size={13} aria-hidden="true" />
                 </a>
-                <button type="button" className="unlock-btn" onClick={() => advanceTo(1)}>
+                <button type="button" className="unlock-btn" onClick={() => advanceTo(2)}>
                   I have the app
                 </button>
               </>
             )}
-            {step === 1 && (
+            {step === 2 && (
               <>
                 <strong>Get your pairing code</strong>
                 <p className="ow-detail">Use this one-time code and Host URL in Open Wearables.</p>
@@ -195,17 +209,17 @@ export function OpenWearablesGuide({
                   </div>
                 )}
                 {invite && (
-                  <button type="button" className="unlock-btn" onClick={() => advanceTo(2)}>Next · Sync</button>
+                  <button type="button" className="unlock-btn" onClick={() => advanceTo(3)}>Next · Sync</button>
                 )}
                 {canGenerate && invite && (
                   <button type="button" className="secondary compact ow-regenerate" disabled={busy} onClick={() => void onGenerateInvite()}>
                     {busy ? "Getting code…" : "Get a new code"}
                   </button>
                 )}
-                <button type="button" className="secondary compact ow-regenerate" onClick={() => advanceTo(0)}>Back to install</button>
+                <button type="button" className="secondary compact ow-regenerate" onClick={() => advanceTo(1)}>Back to install</button>
               </>
             )}
-            {step === 2 && (
+            {step === 3 && (
               <>
                 <strong>Connect and sync</strong>
                 <ol className="ow-steps-list">
@@ -215,7 +229,7 @@ export function OpenWearablesGuide({
                 </ol>
                 {apple && <p className="ow-detail">Fitbit Air syncs separately through Google Health.</p>}
                 <button type="button" className="unlock-btn" onClick={() => advanceTo(steps.length)}>I started sync</button>
-                <button type="button" className="secondary compact ow-regenerate" onClick={() => advanceTo(1)}>Back to pairing code</button>
+                <button type="button" className="secondary compact ow-regenerate" onClick={() => advanceTo(2)}>Back to pairing code</button>
               </>
             )}
             {step === steps.length && (

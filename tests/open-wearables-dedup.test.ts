@@ -13,6 +13,7 @@ import {
   disconnectOpenWearables,
   handleOpenWearablesWebhookEvent,
   openWearablesStatus,
+  refreshOpenWearablesConnection,
   syncOpenWearables,
   verifySvixSignature,
 } from "../lib/open-wearables";
@@ -426,5 +427,38 @@ test("Google Health API v4 webhook enforces 2-step verification handshake and Ti
     assert.equal(await verifyGoogleWebhookSignature(`${payload}x`, headerSig, mockKeyset), false);
   } finally {
     process.env.GOOGLE_HEALTH_WEBHOOK_SECRET = prevSecret;
+  }
+});
+
+
+test("pairing detects remote connection before the first import and isolates the mapped account", async () => {
+  const originalFetch = globalThis.fetch;
+  const oldUrl = process.env.OPEN_WEARABLES_API_URL;
+  const oldKey = process.env.OPEN_WEARABLES_API_KEY;
+  process.env.OPEN_WEARABLES_API_URL = "https://ow.local.test";
+  process.env.OPEN_WEARABLES_API_KEY = "test-pairing-key";
+  await db.insert(schema.user).values({ id: "OW-PAIR", name: "Pairing Test", email: "pairing@example.test", createdAt: new Date(), updatedAt: new Date() });
+  await db.insert(schema.healthIntegration).values({ userId: "OW-PAIR", provider: "open_wearables", externalUserId: "remote-pair", credential: "test-only", status: "pending" });
+  let active = false;
+  let remoteId = "remote-pair";
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    assert.equal(String(input), "https://ow.local.test/api/v1/users/remote-pair");
+    return Response.json({ id: remoteId, has_active_connection: active, last_synced_at: null });
+  }) as typeof fetch;
+  try {
+    assert.equal((await refreshOpenWearablesConnection(typedDb, "OW-PAIR")).connected, false);
+    active = true;
+    remoteId = "someone-else";
+    assert.equal((await refreshOpenWearablesConnection(typedDb, "OW-PAIR")).connected, false);
+    remoteId = "remote-pair";
+    const status = await refreshOpenWearablesConnection(typedDb, "OW-PAIR");
+    assert.equal(status.connected, true);
+    assert.equal(status.status, "connected");
+    assert.equal(status.lastSync, null); // background importer must still run
+    assert.equal((await openWearablesStatus(typedDb, "OW-2")).connected, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (oldUrl === undefined) delete process.env.OPEN_WEARABLES_API_URL; else process.env.OPEN_WEARABLES_API_URL = oldUrl;
+    if (oldKey === undefined) delete process.env.OPEN_WEARABLES_API_KEY; else process.env.OPEN_WEARABLES_API_KEY = oldKey;
   }
 });
