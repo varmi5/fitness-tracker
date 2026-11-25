@@ -3,7 +3,7 @@ import type { z } from "zod";
 import type { AuthDatabase } from "./auth";
 import { findMatchingGoogleWorkout } from "./hevy";
 import { MUSCLE_GROUPS, type MuscleGroup } from "./muscle-map";
-import { dayRange } from "./nutrition-model";
+import { addDays, dayRange } from "./nutrition-model";
 import {
   dailyEnergy,
   dailyStrain,
@@ -15,6 +15,7 @@ import {
   trainingPreference,
 } from "./schema";
 import {
+  buildExerciseStrengthReferences,
   computeCompositeStrain,
   computeEdwardsTrimp,
   computeMuscularWorkload,
@@ -94,27 +95,27 @@ export function overlapStepsForWindows(
   if (windows.length === 0) return 0;
   if (intervals.length === 0) return null;
 
-  let excluded = 0;
-  for (const iv of intervals) {
-    const ivStart = iv.startTime.getTime();
-    const ivEnd = iv.endTime.getTime();
-    const ivDur = ivEnd - ivStart;
-    if (ivDur <= 0 || iv.steps <= 0) continue;
-
-    let maxFrac = 0;
-    for (const w of windows) {
-      const wStart = w.startTime.getTime();
-      const wEnd = w.endTime.getTime();
-      const overlap = Math.max(0, Math.min(ivEnd, wEnd) - Math.max(ivStart, wStart));
-      if (overlap > 0) {
-        maxFrac = Math.min(1, Math.max(maxFrac, overlap / ivDur));
-      }
-    }
-    if (maxFrac > 0) {
-      excluded += Math.round(iv.steps * maxFrac);
-    }
+  const sorted = windows.map((window) => ({ start: window.startTime.getTime(), end: window.endTime.getTime() }))
+    .filter((window) => Number.isFinite(window.start) && Number.isFinite(window.end) && window.end > window.start)
+    .sort((a, b) => a.start - b.start);
+  const merged: { start: number; end: number }[] = [];
+  for (const window of sorted) {
+    const previous = merged.at(-1);
+    if (previous && window.start <= previous.end) previous.end = Math.max(previous.end, window.end);
+    else merged.push({ ...window });
   }
-  return excluded;
+  let excluded = 0;
+  for (const interval of intervals) {
+    const start = interval.startTime.getTime();
+    const end = interval.endTime.getTime();
+    const duration = end - start;
+    if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(interval.steps) || interval.steps <= 0) continue;
+    const overlap = merged.reduce((sum, window) => sum + Math.max(0, Math.min(end, window.end) - Math.max(start, window.start)), 0);
+    // Uniform-within-interval allocation is an estimate. Union first so two
+    // disjoint sessions both count, while overlapping sessions count once.
+    excluded += interval.steps * Math.min(1, overlap / duration);
+  }
+  return Math.round(excluded);
 }
 
 const STRENGTH_KEYWORDS =
@@ -128,33 +129,15 @@ export function estimateMuscularFromGoogleStrength(
   title: string,
   durationSeconds: number | null,
 ): { mRaw: number; muscleLoads: Record<MuscleGroup, number>; estimatedSets: number } {
-  const mins = Math.max(12, Math.min(150, durationSeconds && durationSeconds > 0 ? durationSeconds / 60 : 45));
-  // ~1 working set per 4 minutes at provisional default effort (0.85 per set)
-  const estimatedSets = Math.max(3, Math.round(mins / 4));
-  const mRaw = Math.round(estimatedSets * 0.85 * 100) / 100;
-
-  const muscleLoads = Object.fromEntries(MUSCLE_GROUPS.map((m) => [m, 0])) as Record<MuscleGroup, number>;
-  const t = title.toLowerCase();
-
-  let targetMuscles: MuscleGroup[];
-  if (/\b(push|chest)\b/.test(t)) {
-    targetMuscles = ["Chest", "Shoulders", "Triceps"];
-  } else if (/\b(pull|back)\b/.test(t)) {
-    targetMuscles = ["Back", "Biceps", "Shoulders"];
-  } else if (/\b(legs?|lower|squat|glute)\b/.test(t)) {
-    targetMuscles = ["Quads", "Hamstrings", "Glutes", "Calves"];
-  } else if (/\b(upper|arm|shoulder)\b/.test(t)) {
-    targetMuscles = ["Chest", "Back", "Shoulders", "Biceps", "Triceps"];
-  } else {
-    targetMuscles = ["Chest", "Back", "Shoulders", "Quads", "Hamstrings", "Glutes", "Core"];
-  }
-
-  const perMuscle = Math.round((mRaw / targetMuscles.length) * 100) / 100;
-  for (const m of targetMuscles) {
-    muscleLoads[m] = perMuscle;
-  }
-
-  return { mRaw, muscleLoads, estimatedSets };
+  // Duration/title alone cannot establish working sets, load, effort, or
+  // affected muscles. Keep the session and its observed cardio data separately.
+  void title;
+  void durationSeconds;
+  return {
+    mRaw: 0,
+    muscleLoads: Object.fromEntries(MUSCLE_GROUPS.map((m) => [m, 0])) as Record<MuscleGroup, number>,
+    estimatedSets: 0,
+  };
 }
 
 export function strainData(db: AuthDatabase, userId: string) {
@@ -256,6 +239,16 @@ export function strainData(db: AuthDatabase, userId: string) {
           .orderBy(asc(hevySet.exerciseIndex), asc(hevySet.setIndex))
       : [];
 
+    // Personal references are same-exercise, prior-session, high-effort sets.
+    // They are used only when today's RPE is missing, never as global kg scaling.
+    const referenceRows = hevyRows.length ? await db.select({
+      exerciseTitle: hevySet.exerciseTitle, weightKg: hevySet.weightKg, reps: hevySet.reps,
+      rpe: hevySet.rpe, setType: hevySet.setType,
+    }).from(hevySet).innerJoin(hevyWorkout,
+      and(eq(hevySet.hevyId, hevyWorkout.hevyId), eq(hevyWorkout.userId, userId)))
+      .where(and(eq(hevySet.userId, userId), gte(hevyWorkout.day, addDays(day, -90)), lte(hevyWorkout.day, addDays(day, -1)))) : [];
+    const references = buildExerciseStrengthReferences(referenceRows);
+
     const setsByHevy = new Map<string, (typeof setRows)[number][]>();
     for (const s of setRows) {
       const list = setsByHevy.get(s.hevyId) ?? [];
@@ -293,36 +286,34 @@ export function strainData(db: AuthDatabase, userId: string) {
 
       const windowHr = hrSeriesAll.filter((s) => {
         const t = new Date(s.recordedAt).getTime();
-        return t >= startMs - 60_000 && t <= endMs + 60_000;
+        return t >= startMs && t <= endMs;
       });
 
       const trimp = computeEdwardsTrimp(windowHr, settings.maxHrBpm, {
         fallbackActiveZoneMinutes: matchedG?.activeZoneMinutes ?? null,
+        maxHrIsEstimated: settings.maxHrIsEstimated,
       });
-      const muscular = computeMuscularWorkload(sets);
-      // Intermittent resistance-training HR (rest intervals, sympathetic/Valsalva spikes) is not
-      // equivalent to continuous aerobic cardiac output; weight at 30% aerobic equivalent.
+      const muscular = computeMuscularWorkload(sets.map((set) => ({ ...set, reference1RmKg: references.get(set.exerciseTitle.trim().toLowerCase()) })));
+      // Resistance HR is not equivalent to continuous aerobic work. The 0.30
+      // conversion is an app-specific heuristic, not a validated aerobic equivalent.
       const effectiveCRaw = Math.round(trimp.cRaw * STRENGTH_CARDIO_FACTOR * 100) / 100;
 
       totalCRaw += effectiveCRaw;
       totalMRaw += muscular.mRaw;
       for (const g of MUSCLE_GROUPS) totalMuscleLoads[g] += muscular.muscleLoads[g];
 
-      const notes: string[] = [];
+      const notes: string[] = [trimp.note];
       if (trimp.cRaw > 0) {
         notes.push(
-          `Strength HR weighted at ${Math.round(STRENGTH_CARDIO_FACTOR * 100)}% aerobic equivalent (${trimp.cRaw} raw HR TRIMP → ${effectiveCRaw} Cardio TRIMP) so lifting HR does not inflate Cardio Strain.`,
+          `Strength HR weighted at ${Math.round(STRENGTH_CARDIO_FACTOR * 100)}% aerobic equivalent (${trimp.cRaw} raw HR TRIMP → ${effectiveCRaw} Cardio TRIMP) (app-specific heuristic; not validated aerobic equivalence).`,
         );
       }
+      notes.push(muscular.modelNote);
+      if (muscular.unmappedSetCount > 0) notes.push(`${muscular.unmappedSetCount} set(s) have unmapped muscle groups; no anatomical load attributed.`);
       if (muscular.assumedRpeSetCount > 0) {
-        notes.push(`${muscular.assumedRpeSetCount} set(s) used provisional default RPE assumption.`);
+        notes.push(`${muscular.assumedRpeSetCount} set(s) lack RPE; ${muscular.relativeIntensitySetCount} set(s) have a personal same-exercise intensity reference. Other missing efforts use a provisional default, so workload is uncertain.`);
       }
-      if (trimp.status === "unavailable") {
-        notes.push(trimp.note);
-        hasIncompleteWorkout = true;
-      } else if (trimp.status === "estimated_azm") {
-        notes.push(trimp.note);
-      }
+      if (trimp.status === "unavailable") hasIncompleteWorkout = true;
 
       const avgHr =
         windowHr.length > 0
@@ -370,13 +361,14 @@ export function strainData(db: AuthDatabase, userId: string) {
         gw.startTime != null
           ? hrSeriesAll.filter((s) => {
               const t = new Date(s.recordedAt).getTime();
-              return t >= startMs - 60_000 && t <= endMs + 60_000;
+              return t >= startMs && t <= endMs;
             })
           : [];
 
       const isStrength = isStrengthGoogleWorkout(gw.title, gw.exerciseType);
       const trimp = computeEdwardsTrimp(windowHr, settings.maxHrBpm, {
         fallbackActiveZoneMinutes: gw.activeZoneMinutes,
+        maxHrIsEstimated: settings.maxHrIsEstimated,
       });
       const effectiveCRaw = isStrength
         ? Math.round(trimp.cRaw * STRENGTH_CARDIO_FACTOR * 100) / 100
@@ -405,7 +397,7 @@ export function strainData(db: AuthDatabase, userId: string) {
       }
       if (strengthEst) {
         gwNotes.push(
-          `Provisional muscular load (${strengthEst.mRaw} pts, ~${strengthEst.estimatedSets} working sets) estimated from Google Health strength session duration. Sync Hevy for exact set-by-set muscular load.`,
+          "Muscular load unavailable: Google session duration does not establish sets, resistance or effort. Sync Hevy set details for an estimated set-based load.",
         );
       }
 

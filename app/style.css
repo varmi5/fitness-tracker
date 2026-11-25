@@ -1065,7 +1065,7 @@ summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight:
   left: 0;
   right: 0;
   bottom: calc(9.8rem + env(safe-area-inset-bottom));
-  z-index: 35;
+  z-index: 55; /* Feedback remains actionable above settings and logging overlays. */
   display: flex;
   justify-content: center;
   padding: 0 max(.9rem, env(safe-area-inset-right)) 0 max(.9rem, env(safe-area-inset-left));
@@ -2272,3 +2272,7 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 
 
 
+
+/* Provenance stays readable alongside the more prominent derived estimate. */
+.metric-provenance { margin: .2rem 0; font-size: .76rem; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.health-vital-dot.is-calibrating, .health-vital-dot.is-unavailable { background: var(--muted); opacity: .6; }

@@ -4,7 +4,7 @@ import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { importHevyWorkouts } from "../lib/hevy";
-import { classifyLoadStatus, computeEwmaSeries, estimateEpley1Rm, getTrainingLoadSummary, type EwmaSeriesPoint } from "../lib/training-load";
+import { classifyLoadStatus, computeEwmaSeries, estimateEpley1Rm, getTrainingLoadSummary, summarizeMuscleHistory, type EwmaSeriesPoint } from "../lib/training-load";
 import { computeCompositeStrain, computeTargetStrain, STRENGTH_CARDIO_FACTOR } from "../lib/strain-engine";
 import * as schema from "../lib/schema";
 
@@ -79,11 +79,11 @@ test("getTrainingLoadSummary tracks separate Cardio & Muscular loads, muscle wor
   assert.equal(summary.muscularStatus?.status, "calibrating");
   const chestFresh = summary.muscleFreshness.find((m) => m.muscle === "Chest");
   const quadsFresh = summary.muscleFreshness.find((m) => m.muscle === "Quads");
-  assert.ok(chestFresh && chestFresh.freshnessPct < 100, "Trained Chest should have <100% freshness");
-  assert.ok(quadsFresh && quadsFresh.freshnessPct === 100 && quadsFresh.status === "fresh", "Untrained Quads should be 100% fresh");
+  assert.ok(chestFresh && chestFresh.freshnessPct === null && chestFresh.status === "calibrating", "Two training days cannot establish muscle recovery");
+  assert.ok(quadsFresh && quadsFresh.freshnessPct === null && quadsFresh.status === "unknown", "Untrained is unknown, never automatically fresh");
 });
 
-function makeSeries(acute: number, chronic: number, prevChronic = chronic, count = 10): EwmaSeriesPoint[] {
+function makeSeries(acute: number, chronic: number, prevChronic = chronic, count = 30): EwmaSeriesPoint[] {
   return Array.from({ length: count }, (_, i) => ({
     day: `2026-11-${String(10 + i).padStart(2, "0")}`,
     rawLoad: i % 2 === 0 ? chronic : 0,
@@ -95,7 +95,7 @@ function makeSeries(acute: number, chronic: number, prevChronic = chronic, count
   }));
 }
 
-test("classifyLoadStatus identifies Calibrating, Detraining, Peaking, Maintaining, Productive, Fatigued, and Overtraining", () => {
+test("load ratios retain compatibility codes but present descriptive comparisons, not diagnoses", () => {
   assert.equal(classifyLoadStatus(makeSeries(10, 10, 10, 4), "muscular")?.status, "calibrating");
   assert.equal(classifyLoadStatus(makeSeries(6.5, 10), "muscular")?.status, "detraining");
   assert.equal(classifyLoadStatus(makeSeries(8.8, 10, 9.0), "muscular")?.status, "peaking");
@@ -119,3 +119,41 @@ test("strain-v2.1 keeps strength-only session Cardio Strain modest, muscular ~60
   assert.equal(computeTargetStrain(null).label, "Baseline target");
 });
 
+
+
+test("muscle history uses exact elapsed hours, per-muscle baseline, staleness and unknown states", () => {
+  const sessions = [
+    { day: "2026-11-20", endedAt: "2026-11-20T20:00:00Z", loads: { Chest: 2 } },
+    { day: "2026-11-22", endedAt: "2026-11-22T20:00:00Z", loads: { Chest: 4 } },
+    { day: "2026-11-24", endedAt: "2026-11-24T23:30:00Z", loads: { Chest: 6, Biceps: 1 } },
+  ];
+  const result = summarizeMuscleHistory(sessions, new Date("2026-11-25T00:30:00Z"));
+  const chest = result.find((entry) => entry.muscle === "Chest")!;
+  assert.equal(chest.hoursSinceTrained, 1);
+  assert.equal(chest.daysSinceTrained, 0, "Crossing midnight is not a recovery day");
+  assert.equal(chest.trainingDays, 3);
+  assert.equal(chest.referenceSessionLoad, 3);
+  assert.equal(chest.sessionLoadRatio, 2);
+  assert.equal(chest.status, "tracked");
+  assert.equal(chest.freshnessPct, null, "A workload ratio is not a recovery percent");
+  assert.equal(result.find((entry) => entry.muscle === "Biceps")?.status, "calibrating");
+  assert.equal(result.find((entry) => entry.muscle === "Quads")?.status, "unknown");
+  assert.equal(summarizeMuscleHistory(sessions, new Date("2027-02-01T00:00:00Z"))[0].status, "unknown");
+  assert.equal(summarizeMuscleHistory(sessions, new Date("2026-11-19T00:00:00Z"))[0].status, "unknown", "Future sessions excluded");
+});
+
+test("missing days do not masquerade as rest in workload trends; e1RM excludes high-rep extrapolation", () => {
+  const result = computeEwmaSeries([
+    { day: "2026-11-20", rawLoad: 20, confidence: "complete" },
+    { day: "2026-11-21", rawLoad: 0, confidence: "incomplete" },
+    { day: "2026-11-22", rawLoad: 0, confidence: "rest" },
+  ]);
+  assert.equal(result.length, 2);
+  assert.equal(result[1].acute7d, 15);
+  assert.equal(estimateEpley1Rm(100, 30), null);
+  assert.equal(estimateEpley1Rm(Infinity, 5), null);
+  assert.equal(estimateEpley1Rm(100, 0), null);
+  const assessment = classifyLoadStatus(makeSeries(16.5, 10), "muscular")!;
+  assert.equal(assessment.label, "Very elevated recent load");
+  assert.doesNotMatch(assessment.label, /overtraining|injury|optimal/i);
+});

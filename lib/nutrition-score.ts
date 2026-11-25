@@ -51,6 +51,7 @@ export interface ContributorDelta {
 
 export interface ItemQualityClassification {
   nova: NovaTier;
+  classificationSource: "metadata" | "heuristic";
   itemScore: number;
   tags: string[];
   signals: {
@@ -72,6 +73,10 @@ export interface ItemQualityClassification {
 }
 
 export interface MealQualityScore {
+  algorithmVersion: "nutrition-quality-v2-heuristic";
+  coverage: "empty" | "partial" | "complete";
+  unknownCalorieCount: number;
+  missingMetadataCount: number;
   score: number | null;
   grade: ScoreGrade | null;
   novaAvg: number | null;
@@ -82,10 +87,13 @@ export interface MealQualityScore {
 }
 
 export interface DailyNutritionScore {
+  algorithmVersion: "nutrition-quality-v2-heuristic";
+  unknownCalorieCount: number;
+  missingMetadataCount: number;
   score: number | null;
   grade: ScoreGrade | null;
   locked: boolean;
-  coverage: "empty" | "early" | "confident";
+  coverage: "empty" | "early" | "partial" | "complete";
   qualitySubscore: number | null;
   fibreSubscore: number | null;
   proteinSubscore: number | null;
@@ -116,17 +124,19 @@ function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-function approxMassGrams(item: ScoreableItem): number {
-  if (item.gramWeight != null && Number.isFinite(item.gramWeight) && item.gramWeight > 0) {
-    return item.gramWeight;
-  }
-  if (item.millilitreVolume != null && Number.isFinite(item.millilitreVolume) && item.millilitreVolume > 0) {
-    return item.millilitreVolume;
-  }
-  if (item.calories != null && item.calories > 0) {
-    return Math.min(800, Math.max(25, item.calories * 0.75));
-  }
-  return 100;
+function knownMassGrams(item: ScoreableItem): number {
+  // A volume is not a mass without a known density. Calories cannot determine food mass.
+  return item.gramWeight != null && Number.isFinite(item.gramWeight) && item.gramWeight > 0 ? item.gramWeight : 0;
+}
+function knownNonnegative(value: number | null | undefined): value is number {
+  return value != null && Number.isFinite(value) && value >= 0;
+}
+function completeNutrient(items: ScoreableItem[], key: "calories" | "proteinG" | "carbsG" | "fatG" | "fibreG"): number | null {
+  return items.length && items.every((i) => knownNonnegative(i[key])) ? round1(items.reduce((s, i) => s + i[key]!, 0)) : null;
+}
+function hasQualityMetadata(item: ScoreableItem): boolean {
+  const meta = item.foodSnapshot?.qualityMeta;
+  return Boolean(meta && (meta.novaGroup || meta.nutriScoreGrade || meta.nutriScoreScore != null || meta.cofidGroup));
 }
 
 function nutriScoreToUnitScore(grade?: "a" | "b" | "c" | "d" | "e" | null, rawScore?: number | null): number | null {
@@ -205,7 +215,9 @@ const RE_UPF_TOKENS = /\b(cola|pepsi|coke|fanta|sprite|soda|fizzy|energy drink|m
 const RE_UPF_INGREDIENTS = /\b(maltodextrin|high fructose|glucose syrup|inverted sugar|emulsifier|mono- and diglycerides|lecithin|carrageenan|xanthan|acesulfame|sucralose|aspartame|artificial flavour|flavoring|hydrogenated|palm oil)\b/i;
 
 /**
- * Deterministic Open-Source Feature / Log-Odds Classifier blending:
+ * Experimental deterministic food heuristic, not a validated dietary-health score.
+ * Name/category rules cannot verify ingredient quantities or an official NOVA classification.
+ * Inputs include:
  * 1) UK CoFID category priors + Open Food Facts Nutri-Score / NOVA / Additives metadata
  * 2) Macro & nutrient density heuristics (protein-to-kcal, fibre density, sugar/sat-fat/sodium)
  * 3) Weighted token signals (whole plant foods & omega-3 vs NOVA-4 & added sugars)
@@ -213,8 +225,8 @@ const RE_UPF_INGREDIENTS = /\b(maltodextrin|high fructose|glucose syrup|inverted
 export function classifyFoodQuality(item: ScoreableItem): ItemQualityClassification {
   const meta = item.foodSnapshot?.qualityMeta;
   const text = `${item.name} ${item.ingredients ?? ""} ${item.cookingMethod ?? ""} ${meta?.categoriesTags?.join(" ") ?? ""}`.toLowerCase();
-  const mass = approxMassGrams(item);
-  const kcal = item.calories ?? 0;
+  let mass = knownMassGrams(item);
+  const kcal = knownNonnegative(item.calories) ? item.calories : 0;
   const protein = item.proteinG ?? 0;
   const carbs = item.carbsG ?? 0;
   const fat = item.fatG ?? 0;
@@ -264,6 +276,10 @@ export function classifyFoodQuality(item: ScoreableItem): ItemQualityClassificat
   const isUpfToken = RE_UPF_TOKENS.test(text);
   const hasUpfIngredients = Boolean(meta?.ingredientsText && RE_UPF_INGREDIENTS.test(meta.ingredientsText));
 
+  // Mixed recipes cannot assign the full item mass to each mentioned ingredient.
+  const categoryMatches = [isVeg, isFruit, isLegumeNut, isWholeGrain, isFish, isLeanProtein, isHealthyOil, isProcessedMeat, isRedMeat].filter(Boolean).length;
+  if (categoryMatches !== 1 || item.ingredients || item.estimationMethod === "recipe") mass = 0;
+
   if (isVeg) { wholeScore += 2.6; signals.vegGrams += mass; tags.push("Vegetables"); }
   if (isFruit) { wholeScore += 2.2; signals.fruitGrams += mass; tags.push("Whole fruit"); }
   if (isLegumeNut) { wholeScore += 2.2; signals.legumeNutGrams += mass; tags.push("Legumes / Nuts"); }
@@ -306,7 +322,7 @@ export function classifyFoodQuality(item: ScoreableItem): ItemQualityClassificat
       signals.sugarRiskCalories += kcal;
       tags.push("High sugar");
     }
-  } else if ((isJuice || /\bsoda\b|\bcola\b|\bcandy\b|\bsweets\b|\bchocolate\b|\bice cream\b|\bcake\b|\bsyrup\b/i.test(text)) && carbs > 6 && (fibre ?? 0) < 1.5) {
+  } else if ((isJuice || /\bsoda\b|\bcola\b|\bcandy\b|\bsweets\b|\bchocolate\b|\bice cream\b|\bcake\b|\bsyrup\b/i.test(text)) && carbs > 6 && fibre != null && fibre < 1.5) {
     macroQuality -= 16;
     signals.sugarRiskCalories += kcal;
     tags.push("Added / free sugar");
@@ -354,6 +370,7 @@ export function classifyFoodQuality(item: ScoreableItem): ItemQualityClassificat
 
   return {
     nova,
+    classificationSource: meta?.novaGroup ? "metadata" : "heuristic",
     itemScore: clamp(Math.round(macroQuality), 5, 99),
     tags: [...new Set(tags)].slice(0, 4),
     signals,
@@ -363,14 +380,15 @@ export function classifyFoodQuality(item: ScoreableItem): ItemQualityClassificat
 export function scoreMealNutrition(meal: ScoreableMeal, macroTargets?: MacroPlan): MealQualityScore {
   const items = meal.items ?? [];
   if (!items.length) {
-    return { score: null, grade: null, novaAvg: null, fibreG: null, unknownFibreCount: 0, topTag: null, contributors: [] };
+    return { algorithmVersion: "nutrition-quality-v2-heuristic", coverage: "empty", unknownCalorieCount: 0, missingMetadataCount: 0, score: null, grade: null, novaAvg: null, fibreG: null, unknownFibreCount: 0, topTag: null, contributors: [] };
   }
 
   let weightSum = 0;
   let scoreWeighted = 0;
   let novaWeighted = 0;
   let knownFibreSum = 0;
-  let hasFibre = false;
+  let unknownCalorieCount = 0;
+  let missingMetadataCount = 0;
   let unknownFibreCount = 0;
   const tagFreq = new Map<string, number>();
 
@@ -381,31 +399,35 @@ export function scoreMealNutrition(meal: ScoreableMeal, macroTargets?: MacroPlan
       ingredients: raw.ingredients ?? meal.ingredients,
     };
     const cls = classifyFoodQuality(item);
-    const weight = Math.max(25, item.calories ?? approxMassGrams(item));
+    const weight = knownNonnegative(item.calories) ? item.calories : 0;
+    if (!knownNonnegative(item.calories)) unknownCalorieCount++;
+    if (!hasQualityMetadata(item)) missingMetadataCount++;
     weightSum += weight;
     scoreWeighted += cls.itemScore * weight;
     novaWeighted += cls.nova * weight;
     for (const tag of cls.tags) tagFreq.set(tag, (tagFreq.get(tag) ?? 0) + weight);
 
-    if (item.fibreG != null && Number.isFinite(item.fibreG)) {
+    if (knownNonnegative(item.fibreG)) {
       knownFibreSum += item.fibreG;
-      hasFibre = true;
     } else {
       unknownFibreCount += 1;
     }
   }
 
-  const baseScore = weightSum > 0 ? scoreWeighted / weightSum : 60;
-  const proteinG = meal.totals?.proteinG ?? items.reduce((s, i) => s + (i.proteinG ?? 0), 0);
-  const fibreG = hasFibre ? round1(knownFibreSum) : null;
-  const proteinBoost = proteinG >= 25 ? 4 : proteinG >= 15 ? 2 : 0;
+  const baseScore = weightSum > 0 ? scoreWeighted / weightSum : null;
+  const proteinG = completeNutrient(items, "proteinG");
+  const fibreG = unknownFibreCount === 0 ? round1(knownFibreSum) : null;
+  const proteinBoost = proteinG != null && proteinG >= 25 ? 4 : proteinG != null && proteinG >= 15 ? 2 : 0;
   const fibrePerMealTarget = (macroTargets?.fibreG ?? 30) / 3.5;
   const fibreBoost = fibreG != null && fibreG >= fibrePerMealTarget ? 5 : fibreG != null && fibreG >= 4 ? 2 : 0;
 
-  const finalScore = clamp(Math.round(baseScore + proteinBoost + fibreBoost), 1, 100);
+  const finalScore = baseScore == null ? null : clamp(Math.round(baseScore + proteinBoost + fibreBoost), 1, 100);
   const sortedTags = [...tagFreq.entries()].sort((a, b) => b[1] - a[1]);
 
   return {
+    algorithmVersion: "nutrition-quality-v2-heuristic",
+    coverage: unknownCalorieCount || missingMetadataCount || unknownFibreCount || proteinG == null ? "partial" : "complete",
+    unknownCalorieCount, missingMetadataCount,
     score: finalScore,
     grade: scoreToGrade(finalScore),
     novaAvg: weightSum > 0 ? round1(novaWeighted / weightSum) : null,
@@ -436,6 +458,8 @@ export function scoreDayNutrition(
       grade: null,
       locked: true,
       coverage: "empty",
+      algorithmVersion: "nutrition-quality-v2-heuristic",
+      unknownCalorieCount: 0, missingMetadataCount: 0,
       qualitySubscore: null,
       fibreSubscore: null,
       proteinSubscore: null,
@@ -467,10 +491,14 @@ export function scoreDayNutrition(
   let totalWeight = 0;
   let weightedItemScore = 0;
   let unknownFibreCount = 0;
+  let unknownCalorieCount = 0;
+  let missingMetadataCount = 0;
 
   for (const item of allItems) {
     const cls = classifyFoodQuality(item);
-    const w = Math.max(25, item.calories ?? approxMassGrams(item));
+    const w = knownNonnegative(item.calories) ? item.calories : 0;
+    if (!knownNonnegative(item.calories)) unknownCalorieCount++;
+    if (!hasQualityMetadata(item)) missingMetadataCount++;
     totalWeight += w;
     weightedItemScore += cls.itemScore * w;
     if (cls.nova <= 2) wholeNovaWeight += w;
@@ -489,7 +517,7 @@ export function scoreDayNutrition(
     alcoholKcal += cls.signals.alcoholCalories;
     satSodiumFlags += cls.signals.satFatRiskPoints + cls.signals.sodiumRiskPoints;
 
-    if (item.fibreG == null) unknownFibreCount += 1;
+    if (!knownNonnegative(item.fibreG)) unknownFibreCount += 1;
   }
 
   const contributors: ContributorDelta[] = [];
@@ -505,7 +533,7 @@ export function scoreDayNutrition(
     contributors.push({ key, label, impact, points, maxPoints, detail });
   };
 
-  // Positive Bevel / AHEI contributors
+  // Descriptive heuristic contributors; these are not a validated Bevel or AHEI implementation.
   const vegPts = Math.round(clamp(vegG / 200, 0, 1) * 12);
   addContrib("veg", "Vegetables & Greens", "positive", vegPts, 12, `~${Math.round(vegG)}g logged`);
 
@@ -522,20 +550,23 @@ export function scoreDayNutrition(
   addContrib("fish_lean", "Omega-3, Lean Protein & Oils", "positive", protRichPts, 10, "Whole protein & healthy fats");
 
   // Explicit Fibre Scoring (never penalizes null fibre as 0!)
-  const kcal = totals.calories ?? 0;
-  const fibreG = totals.fibreG;
+  const kcal = totalWeight; // All classification shares use the same known-kcal denominator.
+  const fibreG = completeNutrient(allItems, "fibreG");
+  const proteinG = completeNutrient(allItems, "proteinG");
+  const carbsG = completeNutrient(allItems, "carbsG");
+  const fatG = completeNutrient(allItems, "fatG");
+  const completeCalories = completeNutrient(allItems, "calories");
   const fibreTargetG = macroTargets.fibreG;
   let fibreSubscore: number | null = null;
-  if (fibreG != null) {
+  if (fibreG != null && fibreTargetG > 0 && completeCalories != null && completeCalories > 0) {
     // Scale expected fibre softly if early in the day, or against full daily target once >= 55% target kcal logged
     const progressFactor = targetCalories > 0 ? clamp(Math.max(0.45, kcal / targetCalories), 0.45, 1) : 1;
     const expectedFibre = Math.max(6, fibreTargetG * progressFactor);
     const targetPct = clamp(fibreG / expectedFibre, 0, 1.15);
 
-    const carbsG = totals.carbsG;
     const carbToFibreRatio = carbsG != null && fibreG > 0 ? round1(carbsG / fibreG) : null;
     const ratioScore = carbToFibreRatio == null
-      ? 72
+      ? null
       : carbToFibreRatio <= 5
         ? 100
         : carbToFibreRatio <= 8
@@ -544,7 +575,7 @@ export function scoreDayNutrition(
             ? 65
             : 40;
 
-    fibreSubscore = clamp(Math.round(targetPct * 72 + (ratioScore / 100) * 28), 10, 100);
+    fibreSubscore = clamp(Math.round(ratioScore == null ? targetPct * 100 : targetPct * 72 + (ratioScore / 100) * 28), 0, 100);
     const fibreContribPts = Math.round((fibreSubscore / 100) * 15);
     addContrib(
       "fibre",
@@ -558,12 +589,12 @@ export function scoreDayNutrition(
 
   // Protein alignment score
   let proteinSubscore: number | null = null;
-  if (totals.proteinG != null && macroTargets.proteinG > 0) {
+  if (proteinG != null && macroTargets.proteinG > 0 && completeCalories != null && completeCalories > 0) {
     const pFactor = targetCalories > 0 ? clamp(Math.max(0.45, kcal / targetCalories), 0.45, 1) : 1;
     const expectedProt = Math.max(20, macroTargets.proteinG * pFactor);
-    proteinSubscore = clamp(Math.round((totals.proteinG / expectedProt) * 90 + (protRichPts > 0 ? 10 : 0)), 15, 100);
+    proteinSubscore = clamp(Math.round((proteinG / expectedProt) * 90 + (protRichPts > 0 ? 10 : 0)), 15, 100);
     const protPts = Math.round((proteinSubscore / 100) * 10);
-    addContrib("protein", "Protein Balance", "positive", protPts, 10, `${round1(totals.proteinG)} / ${macroTargets.proteinG}g`);
+    addContrib("protein", "Protein Balance", "positive", protPts, 10, `${round1(proteinG)} / ${macroTargets.proteinG}g`);
   }
 
   // Negative contributors
@@ -586,22 +617,24 @@ export function scoreDayNutrition(
   const satSodiumPenalty = Math.min(8, satSodiumFlags * 3);
   addContrib("sat_sodium", "Sat. Fat / Sodium", "negative", -satSodiumPenalty, 8, `${satSodiumFlags} dense item(s)`);
 
-  // Blend into Bevel-style 0-100 Score
-  const avgItemQuality = totalWeight > 0 ? weightedItemScore / totalWeight : 62;
+  // Blend known components of an explicitly unvalidated 0–100 heuristic.
+  const avgItemQuality = totalWeight > 0 ? weightedItemScore / totalWeight : null;
   const aheiPoints = vegPts + fruitPts + grainPts + legPts + protRichPts - upfPenalty - sugarPenalty - meatPenalty - alcoholPenalty - satSodiumPenalty;
-  const qualitySubscore = clamp(Math.round(avgItemQuality * 0.55 + (52 + aheiPoints) * 0.45), 5, 100);
+  const qualitySubscore = avgItemQuality == null ? null : clamp(Math.round(avgItemQuality * 0.55 + (52 + aheiPoints) * 0.45), 5, 100);
 
-  let balanceSubscore = 78;
-  if (kcal > 0 && targetCalories > 0) {
+  let balanceSubscore: number | null = completeCalories != null && completeCalories > 0 && fatG != null ? 78 : null;
+  if (balanceSubscore != null && kcal > 0 && targetCalories > 0) {
     const calRatio = kcal / targetCalories;
     if (calRatio > 1.25) balanceSubscore -= Math.min(35, Math.round((calRatio - 1.25) * 80));
-    if (totals.fatG != null && totals.fatG * 9 / Math.max(1, kcal) > 0.55) balanceSubscore -= 12;
+    if (fatG != null && fatG * 9 / Math.max(1, kcal) > 0.55) balanceSubscore -= 12;
   }
-  balanceSubscore = clamp(balanceSubscore - Math.round(satSodiumPenalty * 1.5), 15, 100);
+  if (balanceSubscore != null) balanceSubscore = clamp(balanceSubscore - Math.round(satSodiumPenalty * 1.5), 15, 100);
 
   // Weighted composite: Food Quality 45%, Fibre 25% (or redistributed if fibre unknown), Protein 20%, Balance 10%
-  let wSum = 0.45 + 0.10;
-  let weighted = qualitySubscore * 0.45 + balanceSubscore * 0.10;
+  let wSum = 0;
+  let weighted = 0;
+  if (qualitySubscore != null) { wSum += .45; weighted += qualitySubscore * .45; }
+  if (balanceSubscore != null) { wSum += .1; weighted += balanceSubscore * .1; }
   if (fibreSubscore != null) {
     wSum += 0.25;
     weighted += fibreSubscore * 0.25;
@@ -611,12 +644,12 @@ export function scoreDayNutrition(
     weighted += proteinSubscore * 0.20;
   }
 
-  const finalScore = clamp(Math.round(weighted / wSum), 1, 100);
+  const finalScore = wSum > 0 ? clamp(Math.round(weighted / wSum), 1, 100) : null;
   const wholeFoodPct = totalWeight > 0 ? Math.round((wholeNovaWeight / totalWeight) * 100) : null;
   const ultraProcessedPct = kcal > 0 ? Math.round((upfKcal / kcal) * 100) : null;
   const unlockThreshold = Math.min(250, Math.round(targetCalories * 0.25));
   const locked = kcal < unlockThreshold;
-  const carbToFibreRatio = totals.carbsG != null && fibreG != null && fibreG > 0 ? round1(totals.carbsG / fibreG) : null;
+  const carbToFibreRatio = carbsG != null && fibreG != null && fibreG > 0 ? round1(carbsG / fibreG) : null;
 
   contributors.sort((a, b) => Math.abs(b.points) - Math.abs(a.points));
 
@@ -624,7 +657,9 @@ export function scoreDayNutrition(
     score: finalScore,
     grade: scoreToGrade(finalScore),
     locked,
-    coverage: locked ? "early" : "confident",
+    algorithmVersion: "nutrition-quality-v2-heuristic",
+    unknownCalorieCount, missingMetadataCount,
+    coverage: unknownCalorieCount || unknownFibreCount || missingMetadataCount || proteinG == null || fatG == null || carbsG == null ? "partial" : locked ? "early" : "complete",
     qualitySubscore,
     fibreSubscore,
     proteinSubscore,

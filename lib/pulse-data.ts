@@ -11,6 +11,8 @@ import {
   computePulseRecovery,
   computeRecoveryForecast,
   computeSleepInsights,
+  selectNonOverlappingSleepSessions,
+  type SleepNightRecord,
   type BehaviorDayObservation,
   type BehaviorImpactItem,
   type BiologicalAgeResult,
@@ -80,7 +82,7 @@ export async function getPulseInsightsForUser(
     nutritionPrefRows,
     targetRows,
     mealRows,
-    loadSummary,
+    loadSummary, sessionRows, goalRows, dayStatusRows,
   ] = await Promise.all([
     db
       .select()
@@ -134,14 +136,28 @@ export async function getPulseInsightsForUser(
       .from(schema.meal)
       .leftJoin(schema.mealItem, eq(schema.mealItem.mealId, schema.meal.id))
       .where(and(eq(schema.meal.userId, userId), gte(schema.meal.localDay, from45), lte(schema.meal.localDay, day))),
-    getTrainingLoadSummary(db, userId, addDays(day, -27), day).catch(() => null),
+    getTrainingLoadSummary(db, userId, addDays(day, -83), day).catch(() => null),
+    db.select().from(schema.sleepSession).where(and(eq(schema.sleepSession.userId, userId), gte(schema.sleepSession.day, from180), lte(schema.sleepSession.day, day))).orderBy(asc(schema.sleepSession.day)),
+    db.select().from(schema.sleepGoal).where(and(eq(schema.sleepGoal.userId, userId), lte(schema.sleepGoal.effectiveFrom, day))).orderBy(desc(schema.sleepGoal.effectiveFrom)),
+    db.select().from(schema.nutritionDayStatus).where(and(eq(schema.nutritionDayStatus.userId, userId), gte(schema.nutritionDayStatus.day, from45), lte(schema.nutritionDayStatus.day, day))),
   ]);
 
+  const timezone = nutritionPrefRows[0]?.timezone ?? "Europe/London";
+  const goalForDay = (d: string) => (goalRows.find((g) => g.effectiveFrom <= d)?.goalMinutes ?? 480) / 60;
   const recByDay = new Map<string, (typeof recoveryRows)[number]>();
-  for (const r of recoveryRows) recByDay.set(r.day, r);
-
-  const sleepByDay = new Map<string, (typeof sleepRows)[number]>();
-  for (const s of sleepRows) sleepByDay.set(s.day, s);
+  // Prefer the most recently synced record; ties are stable by source.
+  for (const r of [...recoveryRows].sort((a, b) => a.syncedAt.getTime() - b.syncedAt.getTime() || a.source.localeCompare(b.source))) recByDay.set(r.day, r);
+  const sessionDays = new Set(sessionRows.map((r) => r.day));
+  const sleepRecords: SleepNightRecord[] = selectNonOverlappingSleepSessions([
+    ...sessionRows.filter((r) => r.processed !== false).map((r) => ({ ...r, coverageComplete: false })),
+    ...sleepRows.filter((r) => !sessionDays.has(r.day)).map((r) => ({ ...r, isMainSleep: true, coverageComplete: false })),
+  ]);
+  const sleepByDay = new Map<string, SleepNightRecord>();
+  for (const s of sleepRecords) {
+    if (s.isMainSleep === false) continue;
+    const previous = sleepByDay.get(s.day);
+    if (!previous || s.minutesAsleep > previous.minutesAsleep) sleepByDay.set(s.day, s);
+  }
 
   const energyByDay = new Map<string, (typeof energyRows)[number]>();
   for (const e of energyRows) {
@@ -152,52 +168,22 @@ export async function getPulseInsightsForUser(
   const strainByDay = new Map<string, (typeof strainRows)[number]>();
   for (const st of strainRows) strainByDay.set(st.day, st);
 
-  // Build sorted prior recovery day inputs (last 28 days before day)
-  const priorDays = Array.from({ length: 28 }, (_, idx) => addDays(day, -28 + idx)).map((d) => {
-    const r = recByDay.get(d);
-    const s = sleepByDay.get(d);
-    return {
-      hrvRmssdMs: r?.hrvRmssdMs ?? null,
-      restingHrBpm: r?.restingHrBpm ?? null,
-      respiratoryRate: r?.respiratoryRate ?? null,
-      skinTempDeltaC: r?.skinTempDeltaC ?? null,
-      sleepHours: s && s.minutesAsleep > 0 ? s.minutesAsleep / 60 : null,
-    };
-  });
-
+  const recoveryInputForDay = (d: string) => {
+    const r = recByDay.get(d), s = sleepByDay.get(d);
+    return { source: r?.source, hrvRmssdMs: r?.hrvRmssdMs ?? null, restingHrBpm: r?.restingHrBpm ?? null,
+      respiratoryRate: r?.respiratoryRate ?? null, skinTempDeltaC: r?.skinTempDeltaC ?? null,
+      sleepHours: s ? s.minutesAsleep / 60 : null };
+  };
+  const baselineBefore = (d: string) => Array.from({ length: 28 }, (_, i) => recoveryInputForDay(addDays(d, -28 + i)));
+  const priorDays = baselineBefore(day);
   const yesterdayStrain = strainByDay.get(addDays(day, -1))?.overallStrain ?? null;
-
-  const sleepRecords = sleepRows
-    .filter((s) => s.minutesAsleep > 0)
-    .map((s) => ({
-      day: s.day,
-      sleepStart: s.sleepStart,
-      sleepEnd: s.sleepEnd,
-      minutesAsleep: s.minutesAsleep,
-      minutesAwake: s.minutesAwake ?? null,
-      deepMinutes: s.deepMinutes ?? null,
-      remMinutes: s.remMinutes ?? null,
-    }));
-
-  const todaySleepRow = sleepByDay.get(day);
-  const todaySleep =
-    todaySleepRow && todaySleepRow.minutesAsleep > 0
-      ? {
-          day: todaySleepRow.day,
-          sleepStart: todaySleepRow.sleepStart,
-          sleepEnd: todaySleepRow.sleepEnd,
-          minutesAsleep: todaySleepRow.minutesAsleep,
-          minutesAwake: todaySleepRow.minutesAwake ?? null,
-          deepMinutes: todaySleepRow.deepMinutes ?? null,
-          remMinutes: todaySleepRow.remMinutes ?? null,
-        }
-      : null;
-
-  const sleep = computeSleepInsights(todaySleep, sleepRecords, day, yesterdayStrain);
+  const todaySleep = sleepByDay.get(day) ?? null;
+  const sleep = computeSleepInsights(todaySleep, sleepRecords, day, yesterdayStrain, { timezone, goalForDay });
 
   const todayRec = recByDay.get(day);
   const recovery = computePulseRecovery(
     {
+      source: todayRec?.source,
       hrvRmssdMs: todayRec?.hrvRmssdMs ?? null,
       restingHrBpm: todayRec?.restingHrBpm ?? null,
       respiratoryRate: todayRec?.respiratoryRate ?? null,
@@ -216,7 +202,7 @@ export async function getPulseInsightsForUser(
       spo2Pct: todayRec?.spo2Pct ?? null,
       skinTempDeltaC: todayRec?.skinTempDeltaC ?? null,
     },
-    priorDays,
+    priorDays.map(d => todayRec?.source && d.source !== todayRec.source ? { ...d, hrvRmssdMs: null, restingHrBpm: null, respiratoryRate: null, skinTempDeltaC: null } : d),
   );
 
   // Recent recovery scores for 14d forecast
@@ -226,14 +212,15 @@ export async function getPulseInsightsForUser(
     const s = sleepByDay.get(d);
     return computePulseRecovery(
       {
+        source: r?.source,
         hrvRmssdMs: r?.hrvRmssdMs ?? null,
         restingHrBpm: r?.restingHrBpm ?? null,
         respiratoryRate: r?.respiratoryRate ?? null,
         skinTempDeltaC: r?.skinTempDeltaC ?? null,
         sleepHours: s && s.minutesAsleep > 0 ? s.minutesAsleep / 60 : null,
       },
-      priorDays.slice(0, Math.max(1, idx)),
-      8.0,
+      baselineBefore(d),
+      goalForDay(d),
     ).score;
   });
 
@@ -241,7 +228,7 @@ export async function getPulseInsightsForUser(
   const forecast = computeRecoveryForecast(
     recentRecoveryScores,
     todayStrainRow?.overallStrain ?? null,
-    todaySleep ? todaySleep.minutesAsleep / 60 : null,
+    null, // Achieved sleep is not a future sleep plan.
     sleep.sleepNeedHours,
   );
 
@@ -276,6 +263,7 @@ export async function getPulseInsightsForUser(
     recovery.score,
     sleep.score,
     todayWorkouts.map((w) => ({ startMs: w.startMs, endMs: w.endMs })),
+    sleepRecords.filter((s) => s.sleepStart && s.sleepEnd).map((s) => ({ startMs: s.sleepStart!.getTime(), endMs: s.sleepEnd!.getTime() })),
   );
 
   const workoutHrrById: Record<string, HrRecoveryResult> = {};
@@ -306,8 +294,7 @@ export async function getPulseInsightsForUser(
     if (/strength|weight|crossfit|calisthenics/i.test(w.exerciseType || w.title)) {
       cur.strengthMin += mins;
     } else if (w.activeZoneMinutes != null && w.activeZoneMinutes > 0) {
-      cur.vigorousMin += Math.round(w.activeZoneMinutes * 0.45);
-      cur.cardioMin += Math.round(w.activeZoneMinutes * 0.55);
+      cur.cardioMin += mins; // AZM does not identify elapsed time in individual HR zones.
     } else {
       cur.cardioMin += mins;
     }
@@ -332,7 +319,7 @@ export async function getPulseInsightsForUser(
       return {
         day: d,
         sleepHours: s && s.minutesAsleep > 0 ? s.minutesAsleep / 60 : null,
-        sri: sleep.sri,
+        sri: null,
         zone13Min: w?.cardioMin ?? (e?.activeZoneMinutes != null ? e.activeZoneMinutes : null),
         zone45Min: w?.vigorousMin ?? null,
         strengthMin: hasAnyWorkoutHistory ? (w?.strengthMin ?? 0) : null,
@@ -355,9 +342,12 @@ export async function getPulseInsightsForUser(
   );
 
   // Auto Behavior Impact over trailing 45 days
-  const nutritionByDay = new Map<string, { calories: number; proteinG: number }>();
+  const nutritionByDay = new Map<string, { calories: number; proteinG: number; knownCalories: boolean; knownProtein: boolean }>();
+  const completeNutritionDays = new Set(dayStatusRows.filter((d) => d.complete).map((d) => d.day));
   for (const m of mealRows) {
-    const cur = nutritionByDay.get(m.day) ?? { calories: 0, proteinG: 0 };
+    const cur = nutritionByDay.get(m.day) ?? { calories: 0, proteinG: 0, knownCalories: true, knownProtein: true };
+    cur.knownCalories &&= m.calories != null;
+    cur.knownProtein &&= m.proteinG != null;
     cur.calories += m.calories ?? 0;
     cur.proteinG += m.proteinG ?? 0;
     nutritionByDay.set(m.day, cur);
@@ -370,14 +360,15 @@ export async function getPulseInsightsForUser(
     const nextSleep = sleepByDay.get(nextD);
     const nextRecoveryScore = computePulseRecovery(
       {
+        source: nextRec?.source,
         hrvRmssdMs: nextRec?.hrvRmssdMs ?? null,
         restingHrBpm: nextRec?.restingHrBpm ?? null,
         respiratoryRate: nextRec?.respiratoryRate ?? null,
         skinTempDeltaC: nextRec?.skinTempDeltaC ?? null,
         sleepHours: nextSleep && nextSleep.minutesAsleep > 0 ? nextSleep.minutesAsleep / 60 : null,
       },
-      priorDays,
-      8.0,
+      baselineBefore(nextD),
+      goalForDay(nextD),
     ).score;
 
     const nut = nutritionByDay.get(d);
@@ -391,12 +382,12 @@ export async function getPulseInsightsForUser(
     return {
       day: d,
       nextDayRecovery: nextRecoveryScore,
-      proteinGoalHit: nut && nut.calories > 0 ? nut.proteinG >= protTgt * 0.9 : null,
-      calorieTargetMet: nut && nut.calories > 0 ? isCalorieGoalMet(nut.calories, kcalTgt, bulkMode) === true : null,
-      strengthWorkout: Boolean(w && w.strengthMin > 0),
-      cardioWorkout: Boolean(w && (w.cardioMin > 0 || w.vigorousMin > 0)),
+      proteinGoalHit: nut && nut.knownProtein && completeNutritionDays.has(d) ? nut.proteinG >= protTgt * 0.9 : null,
+      calorieTargetMet: nut && nut.knownCalories && completeNutritionDays.has(d) ? isCalorieGoalMet(nut.calories, kcalTgt, bulkMode) === true : null,
+      strengthWorkout: w ? w.strengthMin > 0 : null,
+      cardioWorkout: w ? w.cardioMin > 0 || w.vigorousMin > 0 : null,
       tenKSteps: e?.steps != null ? e.steps >= 10000 : null,
-      goodSleep: s && s.minutesAsleep > 0 ? s.minutesAsleep >= 450 : null,
+      goodSleep: s && s.minutesAsleep > 0 ? s.minutesAsleep >= goalForDay(d) * 60 : null,
     };
   });
 

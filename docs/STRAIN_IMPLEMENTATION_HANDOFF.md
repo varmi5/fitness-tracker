@@ -1,5 +1,7 @@
 # FitnessTrackr — Bevel-Style Strain, Load, Hevy & Mobile UX Implementation Handoff
 
+> Historical specification. The current `strain-v3.0-evidence` and sleep/readiness changes are documented in [metrics-methodology.md](metrics-methodology.md). Superseded percentages, statuses and fallback assumptions below are not the current implementation.
+
 ## 1. Current State & Stage Status
 
 - **Current Stage:** **Stage 8 — Full Verification & Production Readiness (Complete)**

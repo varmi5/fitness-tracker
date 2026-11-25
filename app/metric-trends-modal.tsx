@@ -9,8 +9,6 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
-  ReferenceArea,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -18,7 +16,6 @@ import {
 } from "recharts";
 import { readingsFor, metrics as bodyMetrics } from "../lib/metrics";
 import { addDays } from "../lib/nutrition-model";
-import { computeTargetStrain } from "../lib/strain-engine";
 import type { DailyStrainView, NutritionHistory, NutritionSettings, RecoveryInsightView, TrackerSnapshot } from "./types";
 
 export type TrendMetricKind = "strain" | "energy" | "weight";
@@ -50,7 +47,6 @@ export function MetricTrendsModal({
   history30,
   tracker,
   settings,
-  recoveryInsights,
   onClose,
 }: MetricTrendsModalProps) {
   const [metric, setMetric] = useState<TrendMetricKind>(initialMetric);
@@ -58,6 +54,9 @@ export function MetricTrendsModal({
   const [strainDays, setStrainDays] = useState<Record<number, DailyStrainView[]>>({});
   const [nutrition90, setNutrition90] = useState<NutritionHistory | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => { setStrainDays({}); setNutrition90(null); }, [today]);
 
   useEffect(() => {
     if (open) setMetric(initialMetric);
@@ -65,30 +64,34 @@ export function MetricTrendsModal({
 
   useEffect(() => {
     if (!open) return;
+    setError(null);
+    setLoading(false);
     let active = true;
     const from = addDays(today, -(days - 1));
 
     if (metric === "strain" && !strainDays[days]) {
       setLoading(true);
+      setError(null);
       fetch(`/api/strain?from=${from}&to=${today}`, { cache: "no-store" })
-        .then(async (res) => (res.ok ? ((await res.json()) as { days?: DailyStrainView[] }) : null))
+        .then(async (res) => { if (!res.ok) throw new Error(`History request failed (HTTP ${res.status})`); return await res.json() as { days?: DailyStrainView[] }; })
         .then((payload) => {
           if (active && payload?.days) {
             setStrainDays((prev) => ({ ...prev, [days]: payload.days! }));
           }
         })
-        .catch(() => undefined)
+        .catch((cause: unknown) => { if (active) setError(cause instanceof Error ? cause.message : "Could not load history"); })
         .finally(() => {
           if (active) setLoading(false);
         });
-    } else if (metric === "energy" && days === 90 && !nutrition90) {
+    } else if ((metric === "energy" || metric === "weight") && days === 90 && !nutrition90) {
       setLoading(true);
+      setError(null);
       fetch(`/api/nutrition?from=${addDays(today, -89)}&to=${today}`, { cache: "no-store" })
-        .then(async (res) => (res.ok ? ((await res.json()) as NutritionHistory) : null))
+        .then(async (res) => { if (!res.ok) throw new Error(`History request failed (HTTP ${res.status})`); return await res.json() as NutritionHistory; })
         .then((payload) => {
           if (active && payload?.days) setNutrition90(payload);
         })
-        .catch(() => undefined)
+        .catch((cause: unknown) => { if (active) setError(cause instanceof Error ? cause.message : "Could not load history"); })
         .finally(() => {
           if (active) setLoading(false);
         });
@@ -99,18 +102,16 @@ export function MetricTrendsModal({
     };
   }, [open, metric, days, today, strainDays, nutrition90]);
 
-  const targetBand = useMemo(() => computeTargetStrain(recoveryInsights?.score), [recoveryInsights?.score]);
-
   const strainChartData = useMemo(() => {
-    const list = strainDays[days] ?? [];
+    const list = (strainDays[days] ?? []).filter((day) => day.day >= addDays(today, -(days - 1)) && day.day <= today);
     return list.map((d) => ({
       day: d.day,
       label: shortDay(d.day),
       overall: d.overallStrain != null ? Number(d.overallStrain.toFixed(1)) : null,
-      muscular: d.muscularStrain != null ? Number(d.muscularStrain.toFixed(1)) : 0,
-      cardio: d.cardioStrain != null ? Number(d.cardioStrain.toFixed(1)) : 0,
+      muscular: d.muscularStrain != null ? Number(d.muscularStrain.toFixed(1)) : null,
+      cardio: d.cardioStrain != null ? Number(d.cardioStrain.toFixed(1)) : null,
     }));
-  }, [strainDays, days]);
+  }, [strainDays, days, today]);
 
   const energyChartData = useMemo(() => {
     const source = days === 90 && nutrition90 ? nutrition90 : history30;
@@ -123,7 +124,9 @@ export function MetricTrendsModal({
         intake: d.totals.calories != null ? Math.round(d.totals.calories) : null,
         burn: d.energy?.totalKcal != null ? Math.round(d.energy.totalKcal) : null,
         target: d.target,
-        deficit: d.deficit != null ? Math.round(d.deficit) : null,
+        deficit: !d.provisional && d.deficit != null ? Math.round(d.deficit) : null,
+        complete: d.diaryComplete,
+        provisional: d.provisional,
       }));
   }, [days, nutrition90, history30, today]);
 
@@ -156,24 +159,25 @@ export function MetricTrendsModal({
     const valid = strainChartData.filter((d) => d.overall != null);
     if (!valid.length) return null;
     const avgOverall = valid.reduce((s, d) => s + (d.overall ?? 0), 0) / valid.length;
-    const avgMuscular = valid.reduce((s, d) => s + d.muscular, 0) / valid.length;
-    const avgCardio = valid.reduce((s, d) => s + d.cardio, 0) / valid.length;
+    const averageComponent = (values: (number | null)[]) => { const known = values.filter((value): value is number => value != null); return known.length ? (known.reduce((sum, value) => sum + value, 0) / known.length).toFixed(1) : "—"; };
+    const avgMuscular = averageComponent(valid.map((d) => d.muscular));
+    const avgCardio = averageComponent(valid.map((d) => d.cardio));
     return {
       avgOverall: avgOverall.toFixed(1),
-      avgMuscular: avgMuscular.toFixed(1),
-      avgCardio: avgCardio.toFixed(1),
+      avgMuscular,
+      avgCardio,
     };
   }, [strainChartData]);
 
   const energyStats = useMemo(() => {
-    const validIntake = energyChartData.filter((d) => d.intake != null);
+    const validIntake = energyChartData.filter((d) => d.intake != null && d.complete);
     const validBurn = energyChartData.filter((d) => d.burn != null);
     const validDeficit = energyChartData.filter((d) => d.deficit != null);
     const avg = (arr: number[]) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null);
     const avgIn = avg(validIntake.map((d) => d.intake!));
     const avgBurn = avg(validBurn.map((d) => d.burn!));
     const avgDef = avg(validDeficit.map((d) => d.deficit!));
-    return { avgIn, avgBurn, avgDef };
+    return { avgIn, avgBurn, avgDef, intakeDays: validIntake.length, balanceDays: validDeficit.length };
   }, [energyChartData]);
 
   const weightStats = useMemo(() => {
@@ -236,10 +240,12 @@ export function MetricTrendsModal({
         </div>
 
         <div className="modal-body">
+          {error && <p role="alert" className="empty">{error}. Close and reopen trends to try again.</p>}
           {loading && <p className="empty">Loading {days}D history…</p>}
 
-          {!loading && metric === "strain" && (
+          {!loading && !error && metric === "strain" && (
             <>
+              {!strainStats && <p className="empty">No assessed strain in this period. Missing records are not rest days.</p>}
               {strainStats && (
                 <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
                   <div className="energy-cell">
@@ -259,7 +265,7 @@ export function MetricTrendsModal({
 
               <section className="card" style={{ display: "grid", gap: ".5rem" }}>
                 <div className="split-row">
-                  <span className="eyebrow">Daily Strain &amp; Target Zone ({targetBand.min}–{targetBand.max})</span>
+                  <span className="eyebrow">Daily estimated strain</span>
                 </div>
                 <div style={{ width: "100%", height: 220 }}>
                   <ResponsiveContainer width="100%" height="100%">
@@ -274,8 +280,7 @@ export function MetricTrendsModal({
                       <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#585a68" }} minTickGap={22} />
                       <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#585a68" }} />
                       <Tooltip />
-                      <ReferenceArea y1={targetBand.min} y2={targetBand.max} fill="#10b981" fillOpacity={0.12} />
-                      <Area type="monotone" dataKey="overall" name="Overall Strain" stroke="#f97316" strokeWidth={2.5} fill="url(#silkStrainGrad)" connectNulls />
+                      <Area type="monotone" dataKey="overall" name="Overall Strain" stroke="#f97316" strokeWidth={2.5} fill="url(#silkStrainGrad)" connectNulls={false} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
@@ -299,11 +304,11 @@ export function MetricTrendsModal({
             </>
           )}
 
-          {!loading && metric === "energy" && (
+          {!loading && !error && metric === "energy" && (
             <>
               <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
                 <div className="energy-cell">
-                  <span>Avg Intake</span>
+                  <span>Avg complete-day intake</span>
                   <strong className="num">{energyStats.avgIn != null ? `${energyStats.avgIn} kcal` : "—"}</strong>
                 </div>
                 <div className="energy-cell">
@@ -311,13 +316,14 @@ export function MetricTrendsModal({
                   <strong className="num">{energyStats.avgBurn != null ? `${energyStats.avgBurn} kcal` : "—"}</strong>
                 </div>
                 <div className="energy-cell">
-                  <span>{settings.bulkMode ? "Avg Balance" : "Avg Deficit"}</span>
+                  <span>Avg estimated deficit</span>
                   <strong className="num" style={{ color: "var(--accent)" }}>
-                    {energyStats.avgDef != null ? `${energyStats.avgDef > 0 ? "-" : "+"}${Math.abs(energyStats.avgDef)}` : "—"}
+                    {energyStats.avgDef != null ? `${energyStats.avgDef > 0 ? "+" : ""}${energyStats.avgDef} kcal` : "—"}
                   </strong>
                 </div>
               </div>
 
+              <p className="metric-provenance">Intake average: {energyStats.intakeDays} complete days. Balance: {energyStats.balanceDays} comparable days. Missing or incomplete food days are excluded; positive deficit means expenditure exceeded intake. Wearable burn is estimated.</p>
               <section className="card" style={{ display: "grid", gap: ".5rem" }}>
                 <span className="eyebrow">Intake vs Expenditure ({days}D)</span>
                 <div style={{ width: "100%", height: 240 }}>
@@ -333,9 +339,9 @@ export function MetricTrendsModal({
                       <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#585a68" }} minTickGap={22} />
                       <YAxis tick={{ fontSize: 11, fill: "#585a68" }} />
                       <Tooltip />
-                      <Area type="monotone" dataKey="intake" name="Intake (kcal)" stroke="#6366f1" strokeWidth={2.2} fill="url(#silkIntakeGrad)" connectNulls />
-                      <Line type="monotone" dataKey="burn" name="Total Burn (kcal)" stroke="#10b981" strokeWidth={2.2} dot={false} connectNulls />
-                      <ReferenceLine y={settings.targetToday} stroke="#8b5cf6" strokeDasharray="4 4" />
+                      <Area type="monotone" dataKey="intake" name="Intake (kcal)" stroke="#6366f1" strokeWidth={2.2} fill="url(#silkIntakeGrad)" connectNulls={false} />
+                      <Line type="monotone" dataKey="burn" name="Total Burn (kcal)" stroke="#10b981" strokeWidth={2.2} dot={false} connectNulls={false} />
+                      <Line type="stepAfter" dataKey="target" name="Historical target (kcal)" stroke="#8b5cf6" strokeDasharray="4 4" dot={false} />
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
@@ -343,7 +349,7 @@ export function MetricTrendsModal({
             </>
           )}
 
-          {!loading && metric === "weight" && (
+          {!loading && !error && metric === "weight" && (
             <>
               {weightStats ? (
                 <>
@@ -383,7 +389,7 @@ export function MetricTrendsModal({
                           <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#585a68" }} minTickGap={22} />
                           <YAxis domain={["dataMin - 1", "dataMax + 1"]} tick={{ fontSize: 11, fill: "#585a68" }} />
                           <Tooltip />
-                          <Area type="monotone" dataKey="weightKg" name="Weight (kg)" stroke="#06b6d4" strokeWidth={2.5} fill="url(#silkWeightGrad)" connectNulls />
+                          <Area type="monotone" dataKey="weightKg" name="Weight (kg)" stroke="#06b6d4" strokeWidth={2.5} fill="url(#silkWeightGrad)" connectNulls={false} />
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>

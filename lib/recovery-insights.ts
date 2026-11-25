@@ -2,6 +2,8 @@ import { and, desc, eq, gte, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { addDays } from "./nutrition-model";
 import * as schema from "./schema";
+import { computePulseRecovery, type PulseRecoveryDayInput } from "./pulse-engine";
+import { getPulseInsightsForUser } from "./pulse-data";
 
 export interface RecoverySleepInput {
   minutesAsleep: number;
@@ -33,6 +35,8 @@ export interface RecoveryInsightInput {
   baseline?: RecoveryBaselineInput;
   yesterdayStrain?: number | null;
   sevenDayAvgStrain?: number | null;
+  priorDays?: PulseRecoveryDayInput[];
+  sleepGoalHours?: number;
 }
 
 export type RecoveryBand = "optimal" | "moderate" | "strained" | "unavailable";
@@ -114,15 +118,11 @@ export function computeRecoveryInsights(input: RecoveryInsightInput): RecoveryIn
   const completeness: RecoveryCompleteness =
     coreCount === 3 ? "complete" : coreCount > 0 ? "partial" : "unavailable";
 
-  const hasBaseline = (input.baseline?.sampleDays ?? 0) >= 3;
-  const confidence: RecoveryConfidence =
-    completeness === "unavailable"
-      ? "unavailable"
-      : completeness === "complete" && hasBaseline
-        ? "high"
-        : completeness === "complete" || (coreCount === 2 && hasBaseline)
-          ? "medium"
-          : "low";
+  const pulse = computePulseRecovery({ hrvRmssdMs, restingHrBpm, respiratoryRate,
+    skinTempDeltaC: input.recovery?.skinTempDeltaC ?? null, sleepHours: sleepMinutes == null ? null : sleepMinutes / 60 },
+    input.priorDays ?? [], input.sleepGoalHours ?? 8);
+  // Confidence describes input/baseline coverage, never clinical model validation.
+  const confidence: RecoveryConfidence = pulse.score == null ? completeness === "unavailable" ? "unavailable" : "low" : "medium";
 
   const restingHrDeltaBpm =
     restingHrBpm != null && input.baseline?.avgRestingHrBpm != null
@@ -163,53 +163,8 @@ export function computeRecoveryInsights(input: RecoveryInsightInput): RecoveryIn
     };
   }
 
-  // Weighted component scores (0–100 each) only for signals actually present.
-  const weightedParts: Array<{ score: number; weight: number }> = [];
-
-  if (sleepMinutes != null) {
-    // 8h (480m) target; 5h (300m) -> ~45, 7h (420m) -> ~85, 8h -> 98
-    const baseSleep = clamp((sleepMinutes / 480) * 95, 20, 100);
-    const stageBonus =
-      input.sleep?.deepMinutes != null && input.sleep?.remMinutes != null
-        ? clamp(((input.sleep.deepMinutes + input.sleep.remMinutes) / Math.max(1, sleepMinutes) - 0.32) * 35, -6, 6)
-        : 0;
-    weightedParts.push({ score: clamp(baseSleep + stageBonus, 15, 100), weight: 0.4 });
-  }
-
-  if (hrvRmssdMs != null) {
-    let hrvScore: number;
-    if (input.baseline?.avgHrvRmssdMs != null && input.baseline.avgHrvRmssdMs > 0) {
-      const ratio = hrvRmssdMs / input.baseline.avgHrvRmssdMs;
-      hrvScore = clamp(72 + (ratio - 1) * 75, 20, 100);
-    } else {
-      // Provisional population range when personal baseline is not yet established
-      hrvScore = clamp(45 + (hrvRmssdMs - 25) * 0.85, 25, 95);
-    }
-    weightedParts.push({ score: hrvScore, weight: 0.35 });
-  }
-
-  if (restingHrBpm != null) {
-    let rhrScore: number;
-    if (input.baseline?.avgRestingHrBpm != null && input.baseline.avgRestingHrBpm > 0) {
-      const delta = restingHrBpm - input.baseline.avgRestingHrBpm;
-      // Lower or at baseline is favourable; +5 bpm elevated reduces score
-      rhrScore = clamp(78 - delta * 5.5, 20, 100);
-    } else {
-      rhrScore = clamp(95 - (restingHrBpm - 48) * 1.1, 30, 95);
-    }
-    weightedParts.push({ score: rhrScore, weight: 0.25 });
-  }
-
-  const totalWeight = weightedParts.reduce((s, p) => s + p.weight, 0);
-  let rawScore = weightedParts.reduce((s, p) => s + p.score * p.weight, 0) / Math.max(0.01, totalWeight);
-
-  // Modest adjustment for very high yesterday strain (> 75) if readiness signals are borderline
-  if (input.yesterdayStrain != null && input.yesterdayStrain >= 75) {
-    rawScore -= clamp((input.yesterdayStrain - 75) * 0.2, 0, 5);
-  }
-
-  const score = Math.round(clamp(rawScore, 1, 100));
-  const band: RecoveryBand = score >= 75 ? "optimal" : score >= 50 ? "moderate" : "strained";
+  const score = pulse.score;
+  const band: RecoveryBand = pulse.band;
 
   const summaryParts: string[] = [];
   if (sleepMinutes != null) {
@@ -257,7 +212,7 @@ export function computeRecoveryInsights(input: RecoveryInsightInput): RecoveryIn
     },
     yesterdayStrain: input.yesterdayStrain ?? null,
     sevenDayAvgStrain: input.sevenDayAvgStrain ?? null,
-    summary: summaryParts.join(" · "),
+    summary: `${pulse.summary} · ${summaryParts.join(" · ")}`,
     disclaimer:
       "Recovery insights are a wellness estimate based on available wearable sleep and vitals, not a medical assessment.",
   };
@@ -329,9 +284,10 @@ export async function getRecoveryInsightsForUser(
   const sevenDayAvgStrain =
     strainRows.length > 0 ? round1(strainRows.reduce((s, r) => s + r.overallStrain, 0) / strainRows.length) : null;
 
-  return computeRecoveryInsights({
+  const pulse = await getPulseInsightsForUser(db, userId, day);
+  const view = computeRecoveryInsights({
     day,
-    sleep: todaySleep
+    sleep: pulse.recovery.availability !== "waiting_for_sleep" && todaySleep
       ? {
           minutesAsleep: todaySleep.minutesAsleep,
           deepMinutes: todaySleep.deepMinutes ?? null,
@@ -353,4 +309,8 @@ export async function getRecoveryInsightsForUser(
     yesterdayStrain: yesterdayStrainRow ? round1(yesterdayStrainRow.overallStrain) : null,
     sevenDayAvgStrain,
   });
+  return { ...view, score: pulse.recovery.score, band: pulse.recovery.band,
+    confidence: pulse.recovery.score == null ? view.confidence : "medium",
+    summary: pulse.recovery.summary,
+  };
 }

@@ -307,7 +307,7 @@ test("Nutrition quality score classifies whole foods vs NOVA-4 UPFs and keeps mi
   );
   assert.ok(mealScore.score != null && mealScore.score >= 70);
   assert.equal(mealScore.unknownFibreCount, 1);
-  assert.equal(mealScore.fibreG, 2.6);
+  assert.equal(mealScore.fibreG, null); // One item has unknown fibre; a partial sum is not the meal total.
 
   const emptyDay = scoreDayNutrition(
     [],

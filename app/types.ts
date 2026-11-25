@@ -20,6 +20,8 @@ export type TrackerSnapshot = Awaited<ReturnType<ReturnType<typeof trackerData>[
 export type NutritionSettings = Awaited<ReturnType<ReturnType<typeof nutritionData>["settings"]>> & {
   trackingMode: TrackingMode;
   bulkMode?: boolean;
+  sleepGoalMinutes?: number;
+  sleepGoals?: { effectiveFrom: string; goalMinutes: number }[];
 };
 export type NutritionHistory = Awaited<ReturnType<ReturnType<typeof nutritionData>["history"]>>;
 export type HistoryDay = NutritionHistory["days"][number];
@@ -118,4 +120,22 @@ export function mealMethodSummary(meal: MealRecord): EstimationMethod {
   if (meal.items.some((i) => i.estimationMethod === "recipe")) return "recipe";
   if (meal.items.some((i) => i.estimationMethod === "pack_label")) return "pack_label";
   return "measured";
+}
+
+/** Readiness states describe data availability, never a measured repair state. */
+export function recoveryAvailabilityLabel(state: string | null | undefined): string {
+  if (state === "waiting_for_sleep") return "Waiting for completed sleep";
+  if (state === "calibrating") return "Calibrating personal baseline";
+  if (state === "stale") return "Baseline needs fresh data";
+  if (state === "partial") return "Missing required inputs";
+  if (state === "available") return "Readiness estimate";
+  return "Awaiting sleep and vitals";
+}
+
+export function sleepAttribution(sleep: SleepRecord | null | undefined, timezone: string, displayedDay: string): string {
+  if (!sleep) return "No completed sleep recorded for this date";
+  const date = new Date(`${sleep.day}T12:00:00Z`).toLocaleDateString("en-GB", { timeZone: "UTC", day: "numeric", month: "short" });
+  const end = sleep.sleepEnd ? new Date(sleep.sleepEnd) : null;
+  const time = end && Number.isFinite(end.getTime()) ? end.toLocaleTimeString("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit" }) : null;
+  return `${sleep.day < displayedDay ? "Previous completed sleep" : "Completed sleep"} · ${date}${time ? `, ended ${time}` : ""} · ${sleep.source}`;
 }

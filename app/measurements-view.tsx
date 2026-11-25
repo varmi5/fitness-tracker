@@ -62,7 +62,6 @@ export function MeasurementsView({
   onMessage,
 }: MeasurementsViewProps) {
   const [page, setPage] = useState<MeasurePage>(initialSubPage ?? null);
-  const [bioExpanded, setBioExpanded] = useState(false);
   const [date, setDate] = useState(today);
   const [localMsg, setLocalMsg] = useState("");
   const { readings, settings } = snapshot;
@@ -82,7 +81,9 @@ export function MeasurementsView({
       .reverse()
       .map((d) => d.recovery)
       .filter((r): r is NonNullable<typeof r> => r != null),
-  ];
+  ].filter((record) => record.day <= today).sort((a, b) => b.day.localeCompare(a.day));
+  const dayPulse = pulseInsights?.day === today ? pulseInsights : null;
+  const vo2Record = recoveryRecords.find((record) => record.vo2Max != null) ?? null;
   const latestBodyFat = isFitbitMode
     ? (recoveryRecords.find((r) => r.bodyFatPct != null)?.bodyFatPct ?? null)
     : null;
@@ -336,107 +337,17 @@ export function MeasurementsView({
         </div>
       </button>
 
-      {/* Biological Age & Healthspan Card (Fitbit mode) */}
-      {isFitbitMode && pulseInsights && (
-        <section className="card" style={{ display: "grid", gap: ".55rem" }} aria-label="Biological Age and Healthspan">
-          <div className="split-row">
-            <span className="eyebrow">Biological Age &amp; Healthspan</span>
-            {pulseInsights.biologicalAge.deltaYears != null && (
-              <span
-                className={`pill num ${pulseInsights.biologicalAge.deltaYears <= 0 ? "teal-soft" : "amber-soft"}`}
-              >
-                {pulseInsights.biologicalAge.deltaYears <= 0
-                  ? `${Math.abs(pulseInsights.biologicalAge.deltaYears).toFixed(1)} yrs younger`
-                  : `+${pulseInsights.biologicalAge.deltaYears.toFixed(1)} yrs`}
-              </span>
-            )}
+      {isFitbitMode && (
+        <section className="card" style={{ display: "grid", gap: ".55rem" }} aria-label="Fitness estimates and limitations">
+          <div className="split-row"><span className="eyebrow">Cardio fitness reference</span><span className="pill">Estimate</span></div>
+          <div className="energy-strip" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))", marginTop: 0 }}>
+            <div className="energy-cell"><span>VO₂ max (ml/kg/min)</span><strong className="num">{latestVo2Max != null ? Number(latestVo2Max.toFixed(1)) : "—"}</strong></div>
+            <div className="energy-cell"><span>Reference percentile</span><strong className="num">{dayPulse?.fitnessLevel.percentile != null ? `${dayPulse.fitnessLevel.percentile} / 100` : "—"}</strong></div>
           </div>
-
-          {pulseInsights.biologicalAge.status === "needs_profile" ? (
-            <div className="bevel-awaiting-strip">
-              <span>Add your Birth Date &amp; Biological Sex to unlock Biological Age &amp; VO2 percentile.</span>
-              {onOpenSettings && (
-                <button
-                  type="button"
-                  className="secondary compact"
-                  style={{ minHeight: "30px", fontSize: ".74rem" }}
-                  onClick={onOpenSettings}
-                >
-                  Open Settings
-                </button>
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
-                <div className="energy-cell">
-                  <span>Biological Age</span>
-                  <strong className="num" style={{ color: "var(--recovery-color)" }}>
-                    {pulseInsights.biologicalAge.biologicalAge != null
-                      ? `${pulseInsights.biologicalAge.biologicalAge.toFixed(1)}y`
-                      : "—"}
-                  </strong>
-                </div>
-                <div className="energy-cell">
-                  <span>Pace of Aging</span>
-                  <strong className="num">
-                    {pulseInsights.biologicalAge.paceOfAging != null
-                      ? `${pulseInsights.biologicalAge.paceOfAging.toFixed(2)}x`
-                      : "—"}
-                  </strong>
-                </div>
-                <div className="energy-cell">
-                  <span>VO2 Percentile</span>
-                  <strong className="num" style={{ color: "var(--accent)" }}>
-                    {pulseInsights.fitnessLevel.percentile != null
-                      ? `${pulseInsights.fitnessLevel.percentile}th`
-                      : "—"}
-                  </strong>
-                </div>
-              </div>
-
-              {pulseInsights.fitnessLevel.category && (
-                <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
-                  Cardio Fitness: <strong style={{ color: "var(--text)", textTransform: "capitalize" }}>{pulseInsights.fitnessLevel.category}</strong>
-                  {pulseInsights.fitnessLevel.vo2max != null ? ` (${pulseInsights.fitnessLevel.vo2max} ml/kg/min)` : ""}
-                </div>
-              )}
-
-              {pulseInsights.biologicalAge.status === "provisional" && (
-                <div style={{ fontSize: ".74rem", color: "var(--muted)" }}>
-                  Early estimate ({pulseInsights.biologicalAge.activeDays}d synced) — stabilizes after 20+ days.
-                </div>
-              )}
-
-              {pulseInsights.biologicalAge.contributors.length > 0 && (
-                <>
-                  <button
-                    type="button"
-                    className="secondary compact"
-                    style={{ minHeight: "32px", fontSize: ".74rem" }}
-                    onClick={() => setBioExpanded((v) => !v)}
-                  >
-                    {bioExpanded ? "Hide factor breakdown" : `View ${pulseInsights.biologicalAge.contributors.length} healthspan factors`}
-                  </button>
-                  {bioExpanded && (
-                    <div style={{ display: "grid", gap: ".3rem" }}>
-                      {pulseInsights.biologicalAge.contributors.map((c) => (
-                        <div key={c.key} className="split-row" style={{ fontSize: ".78rem" }}>
-                          <span>
-                            <strong>{c.label}</strong>{" "}
-                            <span style={{ color: "var(--muted)" }}>({c.valueText})</span>
-                          </span>
-                          <span className={`pill num ${c.deltaYears <= 0 ? "teal-soft" : "amber-soft"}`}>
-                            {c.deltaYears > 0 ? `+${c.deltaYears}` : c.deltaYears} y
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-            </>
-          )}
+          <p className="metric-provenance">{vo2Record ? `${vo2Record.source} · recorded ${vo2Record.day}. Provider estimate; testing method can affect comparability.` : "No VO₂ max observation available."} Percentile requires a supported adult age/sex reference group; it is a population comparison, not a diagnosis.</p>
+          {dayPulse?.fitnessLevel.category && <p className="metric-provenance">Reference category: {dayPulse.fitnessLevel.category}.</p>}
+          <p className="metric-provenance">Biological age and pace of ageing are unavailable: these predictions have not been validated for FitnessTrackr. Recorded fitness and body measurements remain available.</p>
+          {onOpenSettings && dayPulse?.fitnessLevel.percentile == null && <button type="button" className="secondary compact" onClick={onOpenSettings}>Review profile and reference eligibility</button>}
         </section>
       )}
 
@@ -509,7 +420,7 @@ export function MeasurementsView({
               <strong className="num">{latestBodyFat != null ? `${Number(latestBodyFat.toFixed(1))}%` : "—"}</strong>
             </div>
             <div className="energy-cell">
-              <span>VO2 Max</span>
+              <span>Estimated VO₂ max (ml/kg/min)</span>
               <strong className="num">{latestVo2Max != null ? `${Number(latestVo2Max.toFixed(1))}` : "—"}</strong>
             </div>
           </div>
