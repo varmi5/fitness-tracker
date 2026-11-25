@@ -539,8 +539,8 @@ export function SettingsView({
       {/* Apple Watch, Android Health Connect & Wearables */}
       <SettingsDropdown
         id="open-wearables-settings"
-        title="Apple Watch, Garmin & Health Connect"
-        subtitle="Sync Apple Health, Android Health Connect, Garmin, Oura & Whoop"
+        title="Wearables"
+        subtitle="Apple Health, Android and other wearables"
         badge={
           openWearables?.connected
             ? `Connected · ${openWearables.providers.length ? openWearables.providers.map(formatSourceLabel).join(", ") : "Active"}`
@@ -548,15 +548,14 @@ export function SettingsView({
               ? "Waiting for app link"
               : openWearables?.available
                 ? "Ready to link"
-                : "Env vars not set"
+                : "Unavailable"
         }
         badgeClass={openWearables?.connected ? "teal-soft" : openWearables?.owUserId ? "amber-soft" : ""}
       >
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".65rem", minWidth: 0 }}>
           {!openWearables?.available && (
             <p style={{ fontSize: ".82rem" }}>
-              Set <code>OPEN_WEARABLES_API_URL</code> and <code>OPEN_WEARABLES_API_KEY</code> in Coolify to link Apple Health,
-              Health Connect, Garmin, Whoop, or Oura via your NAS Open Wearables server.
+              Wearable sync is unavailable right now.
             </p>
           )}
 

@@ -504,9 +504,9 @@ export function OnboardingWizard({
                   openWearables={openWearables}
                   invite={owInvite}
                   busy={saving || busy}
-                  compact
+
                   initialPlatform={sourceChoice === "apple" ? "apple" : "cloud"}
-                  hideTabs={sourceChoice === "apple"}
+                  hideSourcePicker={sourceChoice === "apple"}
                   onGenerateInvite={
                     onCreateOpenWearablesInvite
                       ? async () => {

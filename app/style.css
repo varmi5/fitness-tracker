@@ -2599,8 +2599,6 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   min-width: 0;
   max-width: 100%;
 }
-.ow-guide-intro,
-.ow-download-callout,
 .ow-invite-card {
   padding: .72rem .82rem;
   border-radius: 14px;
@@ -2609,37 +2607,91 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   min-width: 0;
   max-width: 100%;
 }
-.ow-guide-tabs {
+.ow-guide-heading {
   display: flex;
-  flex-wrap: wrap;
-  gap: .4rem;
-  min-width: 0;
+  align-items: center;
+  gap: .5rem;
 }
-.ow-tab-btn {
+.ow-source-picker {
+  display: grid;
+  gap: .3rem;
+  min-width: 0;
+  font-size: .84rem;
+  font-weight: 600;
+}
+.ow-source-picker select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  font-size: 1rem;
+}
+.ow-detail {
+  margin: 0;
+  font-size: .84rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.ow-install-link {
   display: inline-flex;
   align-items: center;
+  justify-self: start;
   gap: .35rem;
-  padding: .42rem .72rem;
-  min-height: 36px;
-  border-radius: 999px;
-  font-size: .77rem;
-  font-weight: 600;
-  background: var(--bg);
-  color: var(--muted);
-  border: 1px solid transparent;
-  box-shadow: var(--silk-raised-sm);
-  white-space: nowrap;
+  min-height: 44px;
+  text-decoration: underline;
+  text-underline-offset: .18em;
 }
-.ow-tab-btn.is-active {
-  background: var(--surface-raised);
-  color: var(--accent);
-  border-color: var(--accent);
+.ow-progress {
+  --ow-progress-green: #16825e;
+  display: flex;
+  align-items: center;
+  list-style: none;
+  margin: .3rem 0 0;
+  padding: 0;
+  min-width: 0;
+}
+.ow-progress li {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+.ow-progress li:last-child {
+  flex: 0;
+}
+.ow-progress li:not(:last-child)::after {
+  content: "";
+  flex: 1;
+  height: 2px;
+  background: var(--border-strong);
+}
+.ow-progress li.is-complete::after {
+  background: var(--ow-progress-green);
+}
+.ow-progress-dot {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: .75rem;
+  font-weight: 700;
+}
+.ow-progress li[aria-current="step"] .ow-progress-dot {
+  border: 2px solid var(--ow-progress-green);
+}
+.ow-progress li.is-complete .ow-progress-dot {
+  border-color: var(--ow-progress-green);
+  background: var(--ow-progress-green);
+  color: white;
 }
 .ow-step-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: .55rem;
   min-width: 0;
+}
+.ow-regenerate {
+  justify-self: start;
 }
 .ow-steps-list {
   font-size: .78rem;
@@ -2686,12 +2738,6 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   max-width: 100%;
   min-width: 0;
 }
-.ow-dual-tip {
-  font-size: .74rem;
-  color: var(--muted);
-  margin: 0;
-  line-height: 1.45;
-}
 .device-logo-tile {
   width: 36px;
   height: 36px;
@@ -2718,46 +2764,4 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   font-weight: 700;
   font-size: .88rem;
   min-width: 0;
-}
-.ow-step-list {
-  display: grid;
-  gap: .45rem;
-  min-width: 0;
-}
-.ow-step-row {
-  display: flex;
-  align-items: flex-start;
-  gap: .6rem;
-  padding: .62rem .72rem;
-  border-radius: 13px;
-  background: var(--bg);
-  box-shadow: var(--silk-inset);
-  min-width: 0;
-}
-.ow-step-num {
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: .72rem;
-  font-weight: 700;
-  background: var(--surface-raised);
-  color: var(--accent);
-  box-shadow: var(--silk-raised-sm);
-  flex-shrink: 0;
-  margin-top: .08rem;
-}
-.ow-step-copy {
-  display: grid;
-  gap: .1rem;
-  font-size: .76rem;
-  line-height: 1.38;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.ow-step-copy strong {
-  font-size: .8rem;
-  color: var(--text);
 }
