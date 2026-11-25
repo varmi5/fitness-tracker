@@ -382,6 +382,7 @@ export const preferencesInput = z.object({
   sleepGoalMinutes: z.number().int().min(240).max(720).optional(),
   sleepGoalEffectiveFrom: z.iso.date().optional(),
   bulkMode: z.boolean().optional(),
+  onboardingCompleted: z.boolean().optional(),
 });
 
 export function isCalorieGoalMet(

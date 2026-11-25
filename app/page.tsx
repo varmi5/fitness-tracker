@@ -55,6 +55,7 @@ export default async function Home() {
   return (
     <Dashboard
       initial={{
+        userName: session.user.name || session.user.email || null,
         tracker,
         settings: home.settings,
         today: home.calendarToday,

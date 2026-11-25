@@ -279,6 +279,9 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const preferredEnergySource: EnergySource = pref
       ? (trackingMode === "fitbit" ? "google" : (pref.preferredEnergySource === "apple" ? "apple" : "manual"))
       : "manual";
+    const onboardingCompletedAt = pref?.onboardingCompletedAt ? pref.onboardingCompletedAt.toISOString() : null;
+    const hasGoogleConnected = integrations.some((i) => i.provider === "google");
+    const needsOnboarding = !onboardingCompletedAt && !hasGoogleConnected && targets.length === 0;
     return {
       timezone: pref?.timezone ?? DEFAULT_TIMEZONE,
       trackingMode,
@@ -286,10 +289,12 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       googleTwoWaySync: pref?.googleTwoWaySync ?? false,
       sleepRolloverEnabled: pref?.sleepRolloverEnabled ?? true,
       bulkMode: pref?.bulkMode ?? false,
+      onboardingCompletedAt,
+      needsOnboarding,
       sleepGoals: sleepGoals.map(g => ({ effectiveFrom: g.effectiveFrom, goalMinutes: g.goalMinutes })),
       sleepGoalMinutes: sleepGoals.find(g => g.effectiveFrom <= localDay(new Date(), pref?.timezone ?? DEFAULT_TIMEZONE))?.goalMinutes ?? 480,
       targets: targets.map((t) => ({ id: t.id, effectiveFrom: t.effectiveFrom, calories: t.calories, proteinG: t.proteinG, carbsG: t.carbsG, fatG: t.fatG, fibreG: t.fibreG })),
-      hasGoogleConnected: integrations.some((i) => i.provider === "google"),
+      hasGoogleConnected,
     };
   }
 
@@ -962,6 +967,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       sleepGoalMinutes: prefs.sleepGoalMinutes,
       sleepGoals: prefs.sleepGoals,
       bulkMode: prefs.bulkMode,
+      onboardingCompletedAt: prefs.onboardingCompletedAt,
+      needsOnboarding: prefs.needsOnboarding,
       targetToday: resolveTargetForDay(prefs.targets, today),
       macroTargets: resolveMacroTargets(prefs.targets, today),
       targets: prefs.targets,
@@ -992,6 +999,14 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const bulkMode = input.bulkMode ?? existing.bulkMode;
     const timezone = input.timezone ?? existing.timezone;
     const googleTwoWaySync = input.googleTwoWaySync ?? existing.googleTwoWaySync;
+    const onboardingCompletedAt =
+      input.onboardingCompleted === true
+        ? new Date()
+        : input.onboardingCompleted === false
+          ? null
+          : existing.onboardingCompletedAt
+            ? new Date(existing.onboardingCompletedAt)
+            : null;
     await db.transaction(async tx => {
     await tx.insert(nutritionPreference).values({
       userId,
@@ -1001,6 +1016,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       googleTwoWaySync,
       sleepRolloverEnabled,
       bulkMode,
+      onboardingCompletedAt,
     }).onConflictDoUpdate({
       target: nutritionPreference.userId,
       set: {
@@ -1010,6 +1026,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         googleTwoWaySync,
         sleepRolloverEnabled,
         bulkMode,
+        onboardingCompletedAt,
       },
     });
     if (input.sleepGoalMinutes !== undefined) {
@@ -1659,6 +1676,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       sleepGoalMinutes: prefs.sleepGoalMinutes,
       sleepGoals: prefs.sleepGoals,
       bulkMode: prefs.bulkMode,
+      onboardingCompletedAt: prefs.onboardingCompletedAt,
+      needsOnboarding: prefs.needsOnboarding,
       targetToday: resolveTargetForDay(prefs.targets, calendarToday),
       macroTargets: resolveMacroTargets(prefs.targets, calendarToday),
       targets: prefs.targets,

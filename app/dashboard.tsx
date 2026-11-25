@@ -50,6 +50,10 @@ const ConsistencyCalendarModal = dynamic(
   () => import("./consistency-calendar-modal").then((m) => m.ConsistencyCalendarModal),
   { ssr: false },
 );
+const OnboardingWizard = dynamic(
+  () => import("./onboarding-wizard").then((m) => m.OnboardingWizard),
+  { ssr: false },
+);
 
 const tabs: { title: AppTab; icon: typeof HomeRingIcon | typeof Scale }[] = [
   { title: "Today", icon: HomeRingIcon },
@@ -145,6 +149,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [trendsMetric, setTrendsMetric] = useState<TrendMetricKind | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(Boolean(initial.settings.needsOnboarding));
   const [bodySubPage, setBodySubPage] = useState<"physique" | null>(null);
 
   useEffect(() => {
@@ -1236,6 +1241,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             </div>
             <SettingsView
               today={today}
+              userName={initial.userName}
               tracker={tracker}
               settings={settings}
               google={google}
@@ -1254,11 +1260,32 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
               onSyncGoogle={syncGoogle}
               onPushGoogle={pushGoogle}
               onDisconnectGoogle={disconnectGoogle}
+              onOpenOnboarding={() => {
+                setSettingsOpen(false);
+                setOnboardingOpen(true);
+              }}
               onMessage={(msg) => showToast(msg)}
             />
           </div>
         </div>
       )}
+
+      <OnboardingWizard
+        open={onboardingOpen}
+        userName={initial.userName}
+        today={today}
+        tracker={tracker}
+        settings={settings}
+        google={google}
+        hevy={hevy}
+        mcpEnabled={initial.mcpEnabled}
+        busy={busy}
+        onClose={() => setOnboardingOpen(false)}
+        onSaveTracker={saveTracker}
+        onNutritionAction={(action, msg) => runNutritionAction(action as { action: string }, msg)}
+        onImportHevy={importHevy}
+        onMessage={(msg) => showToast(msg)}
+      />
 
       {toast && (
         <div className="toast-region" aria-live={toast.kind === "error" ? "assertive" : "polite"} aria-atomic="true">

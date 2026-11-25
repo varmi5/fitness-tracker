@@ -642,10 +642,12 @@ button.card:active,
 
 .list-item {
   width: 100%;
+  min-width: 0;
   justify-content: space-between;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: .8rem;
+  gap: .45rem .8rem;
   background: transparent;
   color: var(--text);
   padding: .5rem 0;
@@ -654,7 +656,7 @@ button.card:active,
   text-align: left;
   white-space: normal;
 }
-.list-item > :first-child { min-width: 0; overflow-wrap: anywhere; }
+.list-item > * { min-width: 0; overflow-wrap: anywhere; }
 .list-item > button { flex-shrink: 0; }
 .row-note { display: block; color: var(--muted); overflow-wrap: anywhere; font-size: .77rem; }
 
@@ -1003,7 +1005,35 @@ button.card:active,
 .macro-cal-field,
 .macro-range-field { grid-column: 1 / -1; }
 .form-error { color: var(--danger-fg); overflow-wrap: anywhere; font-weight: 560; }
-.connector-steps { padding-inline-start: 1.3rem; display: grid; gap: .6rem; font-size: .9rem; line-height: 1.5; margin-block: .75rem; }
+.connector-steps {
+  padding-inline-start: 1.25rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: .6rem;
+  font-size: .88rem;
+  line-height: 1.5;
+  margin-block: .75rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.connector-steps li,
+.connector-steps a {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.connector-steps code {
+  display: inline-block;
+  max-width: 100%;
+  padding: .08rem .35rem;
+  border-radius: 6px;
+  background: var(--surface-soft);
+  font-size: .78rem;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
 @media (min-width: 680px) {
   .sheet-grabber { display: none; }
   .modal-sheet { border-radius: 24px; height: auto; max-height: min(88dvh, 780px); }
@@ -1163,7 +1193,12 @@ summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight:
   padding: .62rem .8rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .78rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-wrap: anywhere;
+  word-break: break-all;
+  user-select: all;
   color: var(--text);
 }
 
@@ -1351,6 +1386,8 @@ summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight:
 details.settings-accordion {
   padding: 0;
   overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
 }
 details.settings-accordion > summary.settings-accordion-summary {
   list-style: none;
@@ -1371,6 +1408,7 @@ details.settings-accordion > summary.settings-accordion-summary::-webkit-details
   display: grid;
   gap: .18rem;
   min-width: 0;
+  flex: 1;
 }
 .settings-accordion-title h2 {
   font-size: 1rem;
@@ -1400,7 +1438,40 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   border-top: 1px solid var(--border);
   padding-top: .85rem;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: .75rem;
+  min-width: 0;
+  max-width: 100%;
+}
+.settings-accordion-body > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.settings-accordion-body details,
+.settings-accordion-body summary,
+.settings-accordion-body ol,
+.settings-accordion-body li,
+.settings-accordion-body p,
+.settings-accordion-body a,
+.settings-accordion-body code {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.settings-accordion-body summary {
+  white-space: normal;
+  line-height: 1.4;
+}
+.settings-accordion-body button,
+.segments button,
+.danger-zone-box button,
+.onboarding-sheet button,
+.onboarding-sheet a.unlock-btn,
+.success-btn {
+  white-space: normal;
+  text-align: center;
+  max-width: 100%;
 }
 
 /* Bevel-inspired Triple-Ring Hero */
@@ -2004,12 +2075,16 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   z-index: 38;
   background: var(--bg);
   overflow-y: auto;
+  overflow-x: hidden;
   padding: max(.85rem, env(safe-area-inset-top)) max(.85rem, env(safe-area-inset-right)) calc(3rem + env(safe-area-inset-bottom)) max(.85rem, env(safe-area-inset-left));
 }
 .silk-overlay-inner {
+  width: 100%;
   max-width: 680px;
+  min-width: 0;
   margin: 0 auto;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: .85rem;
 }
 .silk-chip-btn {
@@ -2440,3 +2515,79 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 /* Provenance stays readable alongside the more prominent derived estimate. */
 .metric-provenance { margin: .2rem 0; font-size: .76rem; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
 .health-vital-dot.is-calibrating, .health-vital-dot.is-unavailable { background: var(--muted); opacity: .6; }
+
+/* Onboarding Walkthrough */
+.onboarding-sheet {
+  padding-bottom: 1.5rem;
+}
+.onboarding-sheet .card {
+  min-width: 0;
+  max-width: 100%;
+}
+.onboarding-progress-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  box-shadow: var(--silk-inset);
+  overflow: hidden;
+}
+.onboarding-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--teal));
+  transition: width 220ms ease;
+}
+.onboarding-choice-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: .65rem;
+}
+@media (min-width: 560px) {
+  .onboarding-choice-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.onboarding-choice {
+  display: grid;
+  gap: .35rem;
+  justify-items: start;
+  text-align: left;
+  padding: .9rem;
+  border-radius: 18px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1.5px solid transparent;
+  box-shadow: var(--silk-raised-sm);
+  white-space: normal;
+}
+.onboarding-choice p {
+  font-size: .78rem;
+  line-height: 1.4;
+  text-align: left;
+  margin: 0;
+}
+.onboarding-choice.is-active {
+  background: var(--surface-raised);
+  border-color: var(--accent);
+  box-shadow: var(--silk-raised), 0 0 0 2px var(--accent-dim);
+}
+.prompt-preview-box {
+  margin: 0;
+  padding: .72rem .82rem;
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--silk-inset);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .74rem;
+  line-height: 1.48;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+.onboarding-checklist {
+  display: grid;
+  gap: .15rem;
+}
