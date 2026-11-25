@@ -485,8 +485,8 @@ export function computeTargetStrain(
       min,
       max,
       optimal,
-      label: "Manage load (High ACWR)",
-      guidance: `ACWR ${acwr.toFixed(2)} — dialing back ceiling to keep progression sustainable.`,
+      label: "Manage load",
+      guidance: "Recent training load is running high — dialing back your target ceiling to keep recovery sustainable.",
     };
   }
   if (recoveryScore >= 75) {

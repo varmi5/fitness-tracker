@@ -139,9 +139,10 @@ export function TrainingView({
 
   const overall = strain.overallStrain;
   const activeAcwr = loads?.cardioStatus?.acwr ?? loads?.muscularStatus?.acwr ?? null;
-  const effectiveRecovery = pulseInsights?.recovery.score ?? recoveryInsights?.score;
+  const dayPulse = pulseInsights?.day === selectedDay ? pulseInsights : null;
+  const effectiveRecovery = dayPulse ? dayPulse.recovery.score : recoveryInsights?.score;
   const target =
-    pulseInsights?.strainTarget ??
+    dayPulse?.strainTarget ??
     computeTargetStrain(effectiveRecovery, { acwr: activeAcwr });
   const inZone = overall != null && overall >= target.min && overall <= target.max;
   const overZone = overall != null && overall > target.max;
@@ -344,11 +345,7 @@ export function TrainingView({
         <>
           {backHeader("Muscle Recovery")}
           <section className="card" style={{ display: "grid", gap: ".75rem" }}>
-            {loads?.muscleFreshness?.length ? (
-              <MuscleFreshnessMap entries={loads.muscleFreshness} />
-            ) : (
-              <p className="empty">Sync Hevy workouts to map your muscle recovery &amp; strain heatmap.</p>
-            )}
+            <MuscleFreshnessMap entries={loads?.muscleFreshness ?? []} />
           </section>
         </>
       );
@@ -357,7 +354,7 @@ export function TrainingView({
     if (page.kind === "recovery") {
       const rec = recoveryInsights;
       const recScore = effectiveRecovery ?? null;
-      const recBand = pulseInsights?.recovery.band ?? rec?.band ?? "unavailable";
+      const recBand = dayPulse?.recovery.band ?? rec?.band ?? "unavailable";
       return (
         <>
           {backHeader("Recovery")}
@@ -410,11 +407,11 @@ export function TrainingView({
             </div>
           </section>
 
-          {pulseInsights && pulseInsights.recovery.drivers.length > 0 && (
+          {dayPulse && dayPulse.recovery.drivers.length > 0 && (
             <section className="card" style={{ display: "grid", gap: ".55rem" }}>
-              <span className="eyebrow">Recovery Drivers ({pulseInsights.recovery.baselineStatus})</span>
+              <span className="eyebrow">Recovery Drivers ({dayPulse.recovery.baselineStatus})</span>
               <div style={{ display: "grid", gap: ".35rem" }}>
-                {pulseInsights.recovery.drivers.map((d) => (
+                {dayPulse.recovery.drivers.map((d) => (
                   <div key={d.key} className="split-row" style={{ fontSize: ".82rem" }}>
                     <span>
                       <strong>{d.label}</strong>{" "}
@@ -432,17 +429,17 @@ export function TrainingView({
             </section>
           )}
 
-          {pulseInsights && pulseInsights.healthMonitor.availableCount > 0 && (
+          {dayPulse && dayPulse.healthMonitor.availableCount > 0 && (
             <section className="card" style={{ display: "grid", gap: ".55rem" }}>
               <div className="split-row">
                 <span className="eyebrow">5-Vital Health Monitor</span>
-                <span className={`pill ${pulseInsights.healthMonitor.status === "elevated" ? "danger-soft" : pulseInsights.healthMonitor.status === "watch" ? "amber-soft" : "teal-soft"}`}>
-                  {pulseInsights.healthMonitor.status}
+                <span className={`pill ${dayPulse.healthMonitor.status === "elevated" ? "danger-soft" : dayPulse.healthMonitor.status === "watch" ? "amber-soft" : "teal-soft"}`}>
+                  {dayPulse.healthMonitor.status}
                 </span>
               </div>
-              <p style={{ fontSize: ".78rem", margin: 0 }}>{pulseInsights.healthMonitor.note}</p>
+              <p style={{ fontSize: ".78rem", margin: 0 }}>{dayPulse.healthMonitor.note}</p>
               <div style={{ display: "grid", gap: ".3rem" }}>
-                {pulseInsights.healthMonitor.vitals.map((v) => (
+                {dayPulse.healthMonitor.vitals.map((v) => (
                   <div key={v.key} className="split-row" style={{ fontSize: ".8rem" }}>
                     <span>{v.label}</span>
                     <span className="num">
@@ -455,15 +452,15 @@ export function TrainingView({
             </section>
           )}
 
-          {pulseInsights?.forecast.predictedScore != null && (
+          {dayPulse?.forecast.predictedScore != null && (
             <section className="card" style={{ display: "grid", gap: ".3rem" }}>
               <div className="split-row">
                 <span className="eyebrow">Next-Day Readiness Forecast</span>
                 <strong className="num" style={{ color: "var(--accent)" }}>
-                  {pulseInsights.forecast.predictedScore}% ({pulseInsights.forecast.low}–{pulseInsights.forecast.high}%)
+                  {dayPulse.forecast.predictedScore}% ({dayPulse.forecast.low}–{dayPulse.forecast.high}%)
                 </strong>
               </div>
-              <p style={{ fontSize: ".78rem", margin: 0 }}>{pulseInsights.forecast.summary}</p>
+              <p style={{ fontSize: ".78rem", margin: 0 }}>{dayPulse.forecast.summary}</p>
             </section>
           )}
         </>
@@ -526,8 +523,8 @@ export function TrainingView({
                 </div>
               )}
 
-              {pulseInsights?.workoutHrrById[act.id] && (() => {
-                const hrr = pulseInsights.workoutHrrById[act.id];
+              {dayPulse?.workoutHrrById[act.id] && (() => {
+                const hrr = dayPulse.workoutHrrById[act.id];
                 return (
                   <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
                     <div className="energy-cell">
@@ -585,7 +582,7 @@ export function TrainingView({
   // ===========================================================================
   // MAIN TRAINING OVERVIEW (Sleek, Tappable Bevel Cards → Full-Page Drill-Downs)
   // ===========================================================================
-  const recoveryPending = recoveryInsights?.score == null && recoveryInsights?.completeness === "unavailable";
+  const recoveryPending = effectiveRecovery == null;
 
   return (
     <>
@@ -678,7 +675,7 @@ export function TrainingView({
               <span className="eyebrow">Recovery</span>
               <div style={{ display: "flex", alignItems: "baseline", gap: ".45rem", marginTop: ".1rem" }}>
                 <strong className="num" style={{ fontSize: "1.2rem" }}>
-                  {effectiveRecovery != null ? `${Math.round(effectiveRecovery)}%` : "Pending"}
+                  {effectiveRecovery != null ? `${Math.round(effectiveRecovery)}%` : "—"}
                 </strong>
                 <span style={{ fontSize: ".78rem", color: "var(--muted)" }}>
                   {recoveryPending
@@ -847,18 +844,17 @@ export function TrainingView({
         );
       })()}
 
-      {/* Muscle Recovery & Heat Map Card (Tap → Full-Page Anatomical Heatmap) */}
+      {/* Inline Anatomical Muscle Recovery Map */}
       <div className="unlock-gate">
-        <button
-          type="button"
-          className={`card card-interactive unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
-          onClick={() => setPage({ kind: "muscles" })}
-          style={{ width: "100%", textAlign: "left" }}
+        <section
+          className={`card unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
+          style={{ display: "grid", gap: ".65rem" }}
+          aria-label="Muscle Recovery Map"
         >
           <div className="split-row">
             <div>
-              <span className="eyebrow">Muscle Recovery &amp; Heat Map</span>
-              <div style={{ fontSize: ".84rem", color: "var(--muted)", marginTop: ".2rem" }}>
+              <span className="eyebrow">Muscle Recovery Map</span>
+              <div style={{ fontSize: ".78rem", color: "var(--muted)", marginTop: ".15rem" }}>
                 {loadsBusy && !loads
                   ? "Loading Hevy muscle map…"
                   : fatiguedCount > 0
@@ -868,14 +864,21 @@ export function TrainingView({
                       : "All muscle groups fresh & ready"}
               </div>
             </div>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
-              <span className={`pill ${fatiguedCount > 0 ? "danger-soft" : recoveringCount > 0 ? "amber-soft" : "teal-soft"}`}>
-                {fatiguedCount > 0 ? "Fatigued" : recoveringCount > 0 ? "Recovering" : "Fresh"}
-              </span>
-              <ChevronRight size={16} style={{ color: "var(--muted)" }} />
-            </div>
+            <span className={`pill ${fatiguedCount > 0 ? "danger-soft" : recoveringCount > 0 ? "amber-soft" : "teal-soft"}`}>
+              {fatiguedCount > 0 ? "Fatigued" : recoveringCount > 0 ? "Recovering" : "Fresh"}
+            </span>
           </div>
-        </button>
+
+          {loadsBusy && !loads ? (
+            <p className="empty" style={{ padding: "1.25rem 0" }}>Loading muscle recovery readiness…</p>
+          ) : (
+            <MuscleFreshnessMap
+              entries={loads?.muscleFreshness ?? []}
+              compact
+              onExpandAll={() => setPage({ kind: "muscles" })}
+            />
+          )}
+        </section>
         {!hevy.connected && (
           <div className="unlock-overlay">
             <h3>Unlock Muscle Recovery</h3>
@@ -925,9 +928,9 @@ export function TrainingView({
                 <div className="meal-meta" style={{ marginTop: ".2rem" }}>
                   {act.durationSeconds != null && <span>{fmtDur(act.durationSeconds)}</span>}
                   {act.avgHrBpm != null && <span className="num">Avg {act.avgHrBpm} bpm</span>}
-                  {pulseInsights?.workoutHrrById[act.id]?.after1Minute != null && (
+                  {dayPulse?.workoutHrrById[act.id]?.after1Minute != null && (
                     <span className="pill teal-soft num" style={{ fontSize: ".68rem", minHeight: "20px", padding: ".05rem .45rem" }}>
-                      HRR 1m −{pulseInsights.workoutHrrById[act.id].after1Minute} bpm
+                      HRR 1m −{dayPulse.workoutHrrById[act.id].after1Minute} bpm
                     </span>
                   )}
                   {act.mRaw > 0 && <span className="num">Muscular {act.mRaw}</span>}
@@ -946,14 +949,14 @@ export function TrainingView({
       </section>
 
       {/* Auto Habit Impact on Next-Day Recovery */}
-      {pulseInsights && pulseInsights.behaviorImpacts.length > 0 && (
+      {dayPulse && dayPulse.behaviorImpacts.length > 0 && (
         <section className="card" style={{ display: "grid", gap: ".45rem" }} aria-label="Habit Impact on Recovery">
           <div className="split-row">
             <span className="eyebrow">Auto Habit Impact on Recovery</span>
             <span className="pill">45d trend</span>
           </div>
           <div style={{ display: "grid", gap: ".35rem" }}>
-            {pulseInsights.behaviorImpacts.map((b) => (
+            {dayPulse.behaviorImpacts.map((b) => (
               <div key={b.key} className="split-row" style={{ fontSize: ".8rem" }}>
                 <span>
                   <strong>{b.label}</strong>{" "}

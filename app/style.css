@@ -548,6 +548,15 @@ button.card:active,
 .danger { background: var(--danger-bg); color: var(--danger-fg); border: 1px solid var(--danger-border); }
 
 .button-row { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: .45rem; }
+.button-row a.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .38rem;
+  text-decoration: none;
+  font-weight: 600;
+  cursor: pointer;
+}
 .split-row { display: flex; align-items: center; justify-content: space-between; gap: .6rem; flex-wrap: wrap; min-width: 0; }
 
 .list-item {
@@ -1481,41 +1490,88 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 /* Anatomical Muscle Freshness Map */
 .muscle-map-wrap {
   display: grid;
-  gap: .85rem;
-}
-.muscle-map-figures {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: .75rem;
-  align-items: center;
-  justify-items: center;
-  padding: .25rem 0;
 }
-.muscle-figure {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
+.muscle-view-toggle {
+  display: inline-flex;
   align-items: center;
   gap: .25rem;
+  padding: .24rem;
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: var(--silk-inset);
 }
-.muscle-figure figcaption {
-  font-size: .7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .06em;
+.muscle-toggle-btn {
+  min-height: 30px;
+  padding: .25rem .72rem;
+  border-radius: 10px;
+  font-size: .74rem;
+  font-weight: 650;
   color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  transition: all 140ms ease;
+}
+.muscle-toggle-btn.is-active {
+  color: var(--accent);
+  background: var(--surface);
+  box-shadow: var(--silk-raised-sm);
+}
+.muscle-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, .9fr);
+  gap: .65rem;
+  align-items: center;
+  padding: .75rem .75rem;
+  border-radius: 18px;
+  background: var(--bg);
+  box-shadow: var(--silk-inset);
+}
+.muscle-stage-figure {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 188px;
 }
 .muscle-svg {
-  width: 118px;
+  width: 146px;
   height: auto;
   max-width: 100%;
+  filter: drop-shadow(0 2px 4px rgba(46, 48, 64, 0.08));
+}
+.muscle-legend {
+  display: grid;
+  gap: .65rem;
+}
+.muscle-legend-item {
+  display: flex;
+  align-items: flex-start;
+  gap: .48rem;
+}
+.muscle-legend-item .muscle-chip-dot {
+  margin-top: .25rem;
+}
+.muscle-legend-item strong {
+  display: block;
+  font-size: .75rem;
+  line-height: 1.15;
+  color: var(--text);
+}
+.muscle-legend-item span {
+  display: block;
+  font-size: .66rem;
+  line-height: 1.25;
+  color: var(--muted);
+  margin-top: .1rem;
 }
 .muscle-zone {
   cursor: pointer;
   transition: opacity 150ms ease, filter 150ms ease;
 }
-.muscle-zone:hover {
-  opacity: .84;
+.muscle-zone:hover,
+.muscle-zone.is-selected {
+  opacity: 1;
+  filter: drop-shadow(0 0 3px rgba(46, 48, 64, 0.2));
 }
 .muscle-detail-bar {
   display: grid;
@@ -1523,6 +1579,60 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   padding: .7rem .85rem;
   border-radius: 14px;
   background: var(--surface-soft);
+}
+.muscle-pacing-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: .65rem;
+  padding: .72rem .82rem;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--silk-raised-sm);
+}
+.muscle-pacing-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: var(--silk-inset);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.muscle-pacing-banner strong {
+  display: block;
+  font-size: .76rem;
+  color: var(--text);
+}
+.muscle-pacing-banner p {
+  font-size: .73rem;
+  line-height: 1.42;
+  color: var(--muted);
+  margin: .15rem 0 0;
+}
+.calc-guide-list {
+  display: grid;
+  gap: .55rem;
+}
+.calc-guide-item {
+  padding: .68rem .8rem;
+  border-radius: 14px;
+  background: var(--surface-soft);
+  box-shadow: var(--silk-inset);
+}
+.calc-guide-item strong {
+  display: block;
+  font-size: .82rem;
+  color: var(--text);
+  margin-bottom: .18rem;
+}
+.calc-guide-item p {
+  margin: 0;
+  font-size: .76rem;
+  line-height: 1.45;
+  color: var(--muted);
 }
 .muscle-bar-track {
   height: 7px;

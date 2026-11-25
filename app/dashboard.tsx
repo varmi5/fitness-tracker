@@ -98,6 +98,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [homeRecovery, setHomeRecovery] = useState<RecoveryInsightView | undefined>(initial.recoveryInsights);
   const [trainingRecovery, setTrainingRecovery] = useState<RecoveryInsightView | undefined>(initial.recoveryInsights);
   const [pulseInsights, setPulseInsights] = useState<PulseInsightsView | null>(null);
+  const [trainingPulse, setTrainingPulse] = useState<PulseInsightsView | null>(null);
 
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
@@ -906,6 +907,32 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     tracker.settings.heightCm,
   ]);
 
+  useEffect(() => {
+    if (!isFitbitMode || trainingDay === homeDay) {
+      setTrainingPulse(null);
+      return;
+    }
+    let active = true;
+    setTrainingPulse((prev) => (prev?.day === trainingDay ? prev : null));
+    fetch(`/api/pulse?day=${trainingDay}`, { cache: "no-store" })
+      .then(async (res) => (res.ok ? ((await res.json()) as PulseInsightsView) : null))
+      .then((data) => {
+        if (active && data) setTrainingPulse(data);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [
+    isFitbitMode,
+    trainingDay,
+    homeDay,
+    trainingStrain?.computedAt,
+    tracker.settings.birthDate,
+    tracker.settings.biologicalSex,
+    tracker.settings.heightCm,
+  ]);
+
   return (
     <main className="shell">
       <header className="silk-topbar">
@@ -978,7 +1005,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             selectedDay={trainingDay}
             strain={trainingStrain}
             recoveryInsights={trainingRecovery}
-            pulseInsights={pulseInsights}
+            pulseInsights={trainingDay === homeDay ? pulseInsights : trainingPulse}
             strainSettings={strainSettings}
             hevy={hevy}
             google={google}
