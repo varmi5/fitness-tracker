@@ -246,6 +246,8 @@ export function SettingsView({
   function submitProfile(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fields = new FormData(e.currentTarget);
+    const rawBirthDate = String(fields.get("birthDate") ?? "").trim();
+    const rawSex = String(fields.get("biologicalSex") ?? "").trim();
     void onSaveTracker(
       {
         action: "settings",
@@ -253,6 +255,8 @@ export function SettingsView({
           heightCm: fields.get("height") ? Number(fields.get("height")) : null,
           units: fields.get("units"),
           goals: fields.get("goals"),
+          birthDate: rawBirthDate || null,
+          biologicalSex: rawSex === "male" || rawSex === "female" ? rawSex : null,
         },
       },
       "Body profile saved.",
@@ -841,6 +845,18 @@ export function SettingsView({
               <select name="units" defaultValue={tracker.settings.units}>
                 <option value="metric">Metric (cm, kg)</option>
                 <option value="imperial">Imperial (in, lb)</option>
+              </select>
+            </label>
+            <label>
+              Birth date (for Biological Age)
+              <input name="birthDate" type="date" max={today} defaultValue={tracker.settings.birthDate ?? ""} />
+            </label>
+            <label>
+              Biological sex (for VO2 &amp; Healthspan)
+              <select name="biologicalSex" defaultValue={tracker.settings.biologicalSex ?? ""}>
+                <option value="">Not set</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
               </select>
             </label>
           </div>

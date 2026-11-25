@@ -19,6 +19,7 @@ import type {
   DailyStrainView,
   HevyIntegrationStatus,
   InitialAppData,
+  PulseInsightsView,
   RecoveryInsightView,
   StrainSettings,
 } from "./types";
@@ -96,6 +97,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [hevy, setHevy] = useState<HevyIntegrationStatus | undefined>(initial.hevy);
   const [homeRecovery, setHomeRecovery] = useState<RecoveryInsightView | undefined>(initial.recoveryInsights);
   const [trainingRecovery, setTrainingRecovery] = useState<RecoveryInsightView | undefined>(initial.recoveryInsights);
+  const [pulseInsights, setPulseInsights] = useState<PulseInsightsView | null>(null);
 
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
@@ -880,6 +882,30 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const activeFocusDay = tab === "Today" ? homeDay : tab === "Nutrition" ? selectedDay : today;
   const isFitbitMode = (settings.trackingMode ?? (settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit";
 
+  useEffect(() => {
+    if (!isFitbitMode) {
+      setPulseInsights(null);
+      return;
+    }
+    let active = true;
+    fetch(`/api/pulse?day=${homeDay}`, { cache: "no-store" })
+      .then(async (res) => (res.ok ? ((await res.json()) as PulseInsightsView) : null))
+      .then((data) => {
+        if (active && data) setPulseInsights(data);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [
+    isFitbitMode,
+    homeDay,
+    homeStrain?.computedAt,
+    tracker.settings.birthDate,
+    tracker.settings.biologicalSex,
+    tracker.settings.heightCm,
+  ]);
+
   return (
     <main className="shell">
       <header className="silk-topbar">
@@ -935,6 +961,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             settings={settings}
             strain={homeStrain}
             recoveryInsights={homeRecovery}
+            pulseInsights={pulseInsights}
             busy={busy}
             onSelectHomeDay={(d) => void selectHomeDay(d)}
             onOpenTraining={openTrainingForDay}
@@ -951,6 +978,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             selectedDay={trainingDay}
             strain={trainingStrain}
             recoveryInsights={trainingRecovery}
+            pulseInsights={pulseInsights}
             strainSettings={strainSettings}
             hevy={hevy}
             google={google}
@@ -996,11 +1024,13 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             nutritionSettings={settings}
             history30={history30}
             daily={homeDaily}
+            pulseInsights={pulseInsights}
             today={today}
             busy={busy}
             initialSubPage={bodySubPage}
             onClearInitialSubPage={() => setBodySubPage(null)}
             onOpenTrends={(m) => setTrendsMetric(m)}
+            onOpenSettings={() => setSettingsOpen(true)}
             onSaveTracker={saveTracker}
             onMessage={(msg) => showToast(msg)}
           />

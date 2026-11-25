@@ -17,7 +17,7 @@ import type { DailyNutritionView } from "../lib/nutrition-data";
 import { addDays } from "../lib/nutrition-model";
 import type { TrendMetricKind } from "./metric-trends-modal";
 import { PhysiqueCheckinView } from "./physique-checkin-view";
-import type { NutritionHistory, NutritionSettings, TrackerSnapshot } from "./types";
+import type { NutritionHistory, NutritionSettings, PulseInsightsView, TrackerSnapshot } from "./types";
 
 const TrendChart = dynamic(() => import("./trends").then((m) => m.TrendChart), {
   ssr: false,
@@ -33,11 +33,13 @@ interface MeasurementsViewProps {
   nutritionSettings?: NutritionSettings;
   history30?: NutritionHistory;
   daily?: DailyNutritionView;
+  pulseInsights?: PulseInsightsView | null;
   today: string;
   busy: boolean;
   initialSubPage?: "physique" | null;
   onClearInitialSubPage?: () => void;
   onOpenTrends: (metric: TrendMetricKind) => void;
+  onOpenSettings?: () => void;
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
   onMessage: (msg: string) => void;
 }
@@ -49,15 +51,18 @@ export function MeasurementsView({
   nutritionSettings,
   history30,
   daily,
+  pulseInsights,
   today,
   busy,
   initialSubPage,
   onClearInitialSubPage,
   onOpenTrends,
+  onOpenSettings,
   onSaveTracker,
   onMessage,
 }: MeasurementsViewProps) {
   const [page, setPage] = useState<MeasurePage>(initialSubPage ?? null);
+  const [bioExpanded, setBioExpanded] = useState(false);
   const [date, setDate] = useState(today);
   const [localMsg, setLocalMsg] = useState("");
   const { readings, settings } = snapshot;
@@ -330,6 +335,104 @@ export function MeasurementsView({
           )}
         </div>
       </button>
+
+      {/* Biological Age & Healthspan Card (Fitbit mode) */}
+      {isFitbitMode && pulseInsights && (
+        <section className="card" style={{ display: "grid", gap: ".55rem" }} aria-label="Biological Age and Healthspan">
+          <div className="split-row">
+            <span className="eyebrow">Biological Age &amp; Healthspan</span>
+            {pulseInsights.biologicalAge.deltaYears != null && (
+              <span
+                className={`pill num ${pulseInsights.biologicalAge.deltaYears <= 0 ? "teal-soft" : "amber-soft"}`}
+              >
+                {pulseInsights.biologicalAge.deltaYears <= 0
+                  ? `${Math.abs(pulseInsights.biologicalAge.deltaYears).toFixed(1)} yrs younger`
+                  : `+${pulseInsights.biologicalAge.deltaYears.toFixed(1)} yrs`}
+              </span>
+            )}
+          </div>
+
+          {pulseInsights.biologicalAge.status === "needs_profile" ? (
+            <div className="bevel-awaiting-strip">
+              <span>Add your Birth Date &amp; Biological Sex to unlock Biological Age &amp; VO2 percentile.</span>
+              {onOpenSettings && (
+                <button
+                  type="button"
+                  className="secondary compact"
+                  style={{ minHeight: "30px", fontSize: ".74rem" }}
+                  onClick={onOpenSettings}
+                >
+                  Open Settings
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
+                <div className="energy-cell">
+                  <span>Biological Age</span>
+                  <strong className="num" style={{ color: "var(--recovery-color)" }}>
+                    {pulseInsights.biologicalAge.biologicalAge != null
+                      ? `${pulseInsights.biologicalAge.biologicalAge.toFixed(1)}y`
+                      : "—"}
+                  </strong>
+                </div>
+                <div className="energy-cell">
+                  <span>Pace of Aging</span>
+                  <strong className="num">
+                    {pulseInsights.biologicalAge.paceOfAging != null
+                      ? `${pulseInsights.biologicalAge.paceOfAging.toFixed(2)}x`
+                      : "—"}
+                  </strong>
+                </div>
+                <div className="energy-cell">
+                  <span>VO2 Percentile</span>
+                  <strong className="num" style={{ color: "var(--accent)" }}>
+                    {pulseInsights.fitnessLevel.percentile != null
+                      ? `${pulseInsights.fitnessLevel.percentile}th`
+                      : "—"}
+                  </strong>
+                </div>
+              </div>
+
+              {pulseInsights.fitnessLevel.category && (
+                <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
+                  Cardio Fitness: <strong style={{ color: "var(--text)", textTransform: "capitalize" }}>{pulseInsights.fitnessLevel.category}</strong>
+                  {pulseInsights.fitnessLevel.vo2max != null ? ` (${pulseInsights.fitnessLevel.vo2max} ml/kg/min)` : ""}
+                </div>
+              )}
+
+              {pulseInsights.biologicalAge.contributors.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    className="secondary compact"
+                    style={{ minHeight: "32px", fontSize: ".74rem" }}
+                    onClick={() => setBioExpanded((v) => !v)}
+                  >
+                    {bioExpanded ? "Hide factor breakdown" : `View ${pulseInsights.biologicalAge.contributors.length} healthspan factors`}
+                  </button>
+                  {bioExpanded && (
+                    <div style={{ display: "grid", gap: ".3rem" }}>
+                      {pulseInsights.biologicalAge.contributors.map((c) => (
+                        <div key={c.key} className="split-row" style={{ fontSize: ".78rem" }}>
+                          <span>
+                            <strong>{c.label}</strong>{" "}
+                            <span style={{ color: "var(--muted)" }}>({c.valueText})</span>
+                          </span>
+                          <span className={`pill num ${c.deltaYears <= 0 ? "teal-soft" : "amber-soft"}`}>
+                            {c.deltaYears > 0 ? `+${c.deltaYears}` : c.deltaYears} y
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </section>
+      )}
 
       {/* Physique Check-in & Timelapse Launcher */}
       <button

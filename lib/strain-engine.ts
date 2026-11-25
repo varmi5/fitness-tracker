@@ -430,38 +430,87 @@ export function computeCompositeStrain(
 export interface TargetStrainRecommendation {
   min: number;
   max: number;
+  optimal?: number;
   label: string;
   guidance: string;
 }
 
-export function computeTargetStrain(recoveryScore: number | null | undefined): TargetStrainRecommendation {
+export function computeTargetStrain(
+  recoveryScore: number | null | undefined,
+  options?: { acwr?: number | null; priorEffort?: (number | null)[] },
+): TargetStrainRecommendation {
   if (recoveryScore == null || !Number.isFinite(recoveryScore)) {
     return {
       min: 40,
       max: 60,
+      optimal: 50,
       label: "Baseline target",
       guidance: "Sync sleep and Resting HR to personalize your daily target strain.",
     };
   }
+
+  const acwr = options?.acwr ?? null;
+  const validPrior = (options?.priorEffort ?? []).filter((v): v is number => v != null && Number.isFinite(v));
+  const baselineEffort = validPrior.length >= 4 ? validPrior.reduce((a, b) => a + b, 0) / validPrior.length : null;
+
+  // Base target coupled to recovery (preserving compatibility with existing thresholds)
+  let min = recoveryScore >= 75 ? 55 : recoveryScore >= 50 ? 35 : 15;
+  let max = recoveryScore >= 75 ? 75 : recoveryScore >= 50 ? 55 : 35;
+
+  if (baselineEffort != null) {
+    const recFactor = 0.72 + (Math.max(0, Math.min(100, recoveryScore)) / 100) * 0.56;
+    const center = Math.max(15, Math.min(82, baselineEffort * recFactor));
+    min = Math.round(Math.max(10, center - 10));
+    max = Math.round(Math.min(92, center + 10));
+  }
+
+  // ACWR load-management damper when acute load exceeds chronic baseline
+  if (acwr != null && Number.isFinite(acwr)) {
+    if (acwr > 1.5) {
+      min = Math.max(10, min - 15);
+      max = Math.max(25, max - 20);
+    } else if (acwr > 1.3) {
+      min = Math.max(12, min - 8);
+      max = Math.max(30, max - 12);
+    } else if (acwr < 0.8 && recoveryScore >= 67) {
+      min = Math.min(70, min + 5);
+      max = Math.min(90, max + 5);
+    }
+  }
+
+  const optimal = Math.round((min + max) / 2);
+
+  if (acwr != null && acwr > 1.35) {
+    return {
+      min,
+      max,
+      optimal,
+      label: "Manage load (High ACWR)",
+      guidance: `ACWR ${acwr.toFixed(2)} — dialing back ceiling to keep progression sustainable.`,
+    };
+  }
   if (recoveryScore >= 75) {
     return {
-      min: 55,
-      max: 75,
+      min,
+      max,
+      optimal,
       label: "Ready to push",
       guidance: "High recovery — good day for a hard strength or cardio session.",
     };
   }
   if (recoveryScore >= 50) {
     return {
-      min: 35,
-      max: 55,
+      min,
+      max,
+      optimal,
       label: "Steady training",
       guidance: "Moderate recovery — stick to planned volume without pushing to failure.",
     };
   }
   return {
-    min: 15,
-    max: 35,
+    min,
+    max,
+    optimal,
     label: "Active recovery",
     guidance: "Low recovery — prioritize sleep, light walking, or a deload session.",
   };

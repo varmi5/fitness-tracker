@@ -17,6 +17,7 @@ before(async () => {
     "001-auth.sql",
     "002-tracker.sql",
     "004-nutrition-health.sql",
+    "011-sleep-and-active-day.sql",
     "012-tracking-mode-and-fitbit-metrics.sql",
     "019-physique-checkins.sql",
   ]) {

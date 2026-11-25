@@ -18,6 +18,8 @@ export const profileInput = z.object({
   heightCm: z.number().positive().max(300).nullable(),
   units: z.enum(["metric", "imperial"]),
   goals: z.string().max(2000),
+  birthDate: z.iso.date().nullable().optional(),
+  biologicalSex: z.enum(["male", "female"]).nullable().optional(),
 });
 
 export function trackerData(db: AuthDatabase, userId: string) {
@@ -29,14 +31,26 @@ export function trackerData(db: AuthDatabase, userId: string) {
           id: measurement.id, metric: measurement.metric, side: measurement.side,
           date: measurement.date, value: measurement.value, note: measurement.note,
         }).from(measurement).where(eq(measurement.userId, userId)).orderBy(desc(measurement.date)),
-        db.select({ heightCm: profile.heightCm, units: profile.units, goals: profile.goals })
-          .from(profile).where(eq(profile.userId, userId)),
+        db.select({
+          heightCm: profile.heightCm,
+          units: profile.units,
+          goals: profile.goals,
+          birthDate: profile.birthDate,
+          biologicalSex: profile.biologicalSex,
+        }).from(profile).where(eq(profile.userId, userId)),
       ]);
       const settingsRow = settings[0];
       return {
         readings: rows,
-        settings: { heightCm: settingsRow?.heightCm ?? null, goals: settingsRow?.goals ?? "",
-          units: (settingsRow?.units ?? "metric") as Units },
+        settings: {
+          heightCm: settingsRow?.heightCm ?? null,
+          goals: settingsRow?.goals ?? "",
+          units: (settingsRow?.units ?? "metric") as Units,
+          birthDate: settingsRow?.birthDate ?? null,
+          biologicalSex: (settingsRow?.biologicalSex === "male" || settingsRow?.biologicalSex === "female"
+            ? settingsRow.biologicalSex
+            : null) as "male" | "female" | null,
+        },
       };
     },
     async saveLog(input: z.infer<typeof logInput>) {
@@ -59,8 +73,15 @@ export function trackerData(db: AuthDatabase, userId: string) {
       return rows.length > 0;
     },
     async saveSettings(input: z.infer<typeof profileInput>) {
-      await db.insert(profile).values({ userId, ...input }).onConflictDoUpdate({
-        target: profile.userId, set: input,
+      const patch = {
+        heightCm: input.heightCm,
+        units: input.units,
+        goals: input.goals,
+        ...(input.birthDate !== undefined ? { birthDate: input.birthDate } : {}),
+        ...(input.biologicalSex !== undefined ? { biologicalSex: input.biologicalSex } : {}),
+      };
+      await db.insert(profile).values({ userId, ...patch }).onConflictDoUpdate({
+        target: profile.userId, set: patch,
       });
     },
     async deleteAccount() {
