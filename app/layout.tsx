@@ -8,7 +8,13 @@ export const metadata: Metadata = {
   title: "FitnessTrackr",
   description: "Personal nutrition, energy balance, and measurement tracker",
   manifest: "/manifest.webmanifest",
-  icons: { icon: "/icon-192.png", apple: "/icon-192.png" },
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: "/icon-192.png",
+  },
 };
 export const viewport: Viewport = {
   width: "device-width",

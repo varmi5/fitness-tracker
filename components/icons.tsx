@@ -16,12 +16,12 @@ const base = (size = 20, props: IconProps = {}) => ({
   ...props,
 });
 
-export function McpBrandMark({ size = 22, ...props }: IconProps) {
+export function McpBrandMark({ size = 24, ...props }: IconProps) {
   return (
-    <svg {...base(size, props)}>
-      <rect x="3" y="3" width="18" height="18" rx="5.5" strokeWidth="1.9" />
-      <path d="M7.5 14.5 10 9.5l2.5 3 2.5-4.5 1.5 6.5" />
-      <circle cx="16.5" cy="7.5" r="1.1" fill="currentColor" stroke="none" />
+    <svg width={size} height={size} viewBox="0 0 100 100" fill="none" aria-hidden="true" {...props}>
+      <rect x="22" y="20" width="38" height="38" rx="12" fill="#F97316" fillOpacity="0.85" transform="rotate(15 22 20)" />
+      <rect x="36" y="32" width="40" height="40" rx="14" fill="#6366F1" fillOpacity="0.9" />
+      <path d="M44 47h16M44 57h10" stroke="#FFFFFF" strokeWidth="4.5" strokeLinecap="round" />
     </svg>
   );
 }
