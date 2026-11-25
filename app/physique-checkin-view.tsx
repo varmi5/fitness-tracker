@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import { ArrowLeft, Pause, Play, Plus, Trash2 } from "lucide-react";
+import { extractPhotoDate, orderPhysiqueFrames } from "../lib/photo-date";
 import { PHYSIQUE_POSES, type PhysiqueCadence, type PhysiqueCheckinRecord, type PhysiquePose } from "../lib/physique-data";
 
 interface PhysiqueCheckinViewProps {
@@ -78,6 +79,12 @@ async function compressPhoto(file: File): Promise<string> {
   }
 }
 
+const SPEED_INTERVAL_MS: Record<0.5 | 1 | 2, number> = {
+  0.5: 1600,
+  1: 800,
+  2: 350,
+};
+
 export function PhysiqueCheckinView({
   today,
   latestWeight,
@@ -88,11 +95,12 @@ export function PhysiqueCheckinView({
   const [checkins, setCheckins] = useState<PhysiqueCheckinRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [poseFilter, setPoseFilter] = useState<PhysiquePose>("front");
-  const [cadence, setCadence] = useState<PhysiqueCadence>("weekly");
+  const [viewCadence, setViewCadence] = useState<PhysiqueCadence>("weekly");
   const [showUpload, setShowUpload] = useState(false);
 
   // Upload form state
   const [day, setDay] = useState(today);
+  const [dateSource, setDateSource] = useState<"exif" | "file" | null>(null);
   const [uploadPose, setUploadPose] = useState<PhysiquePose>("front");
   const [photoData, setPhotoData] = useState<string>("");
   const [weightKg, setWeightKg] = useState(latestWeight != null ? latestWeight.toFixed(1) : "");
@@ -124,24 +132,50 @@ export function PhysiqueCheckinView({
   }, []);
 
   const filteredNewest = useMemo(
-    () => checkins.filter((c) => c.pose === poseFilter),
+    () =>
+      checkins
+        .filter((c) => c.pose === poseFilter)
+        .sort((a, b) => b.day.localeCompare(a.day) || b.createdAt.localeCompare(a.createdAt)),
     [checkins, poseFilter],
   );
-  const timelapseFrames = useMemo(() => [...filteredNewest].reverse(), [filteredNewest]);
+  const timelapseFrames = useMemo(
+    () => orderPhysiqueFrames(checkins, poseFilter, viewCadence),
+    [checkins, poseFilter, viewCadence],
+  );
 
   useEffect(() => {
     setFrameIndex(0);
     setPlaying(false);
-  }, [poseFilter, timelapseFrames.length]);
+  }, [poseFilter]);
+
+  useEffect(() => {
+    setFrameIndex((i) => (timelapseFrames.length > 0 ? Math.min(i, timelapseFrames.length - 1) : 0));
+    if (timelapseFrames.length < 2) {
+      setPlaying(false);
+    }
+  }, [timelapseFrames.length]);
 
   useEffect(() => {
     if (!playing || timelapseFrames.length < 2) return;
-    const ms = Math.round(900 / speed);
+    const ms = SPEED_INTERVAL_MS[speed];
     const id = window.setInterval(() => {
       setFrameIndex((i) => (i + 1) % timelapseFrames.length);
     }, ms);
     return () => window.clearInterval(id);
   }, [playing, speed, timelapseFrames.length]);
+
+  function handleToggleAdd() {
+    if (!showUpload) {
+      setUploadPose(poseFilter);
+      if (!photoData) {
+        setDay(today);
+        setDateSource(null);
+      }
+      setShowUpload(true);
+    } else {
+      setShowUpload(false);
+    }
+  }
 
   async function handleFileSelect(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -149,8 +183,17 @@ export function PhysiqueCheckinView({
     if (!file) return;
     setProcessingPhoto(true);
     try {
-      const compressed = await compressPhoto(file);
+      const [compressed, extracted] = await Promise.all([
+        compressPhoto(file),
+        extractPhotoDate(file, today),
+      ]);
       setPhotoData(compressed);
+      if (extracted?.day) {
+        setDay(extracted.day);
+        setDateSource(extracted.source);
+      } else {
+        setDateSource(null);
+      }
     } catch (err) {
       onMessage(err instanceof Error ? err.message : "Could not process image file.");
     } finally {
@@ -174,7 +217,7 @@ export function PhysiqueCheckinView({
           data: {
             day,
             pose: uploadPose,
-            cadence,
+            cadence: viewCadence,
             photoData,
             weightKg: weightKg ? Number(weightKg) : null,
             bodyFatPct: bodyFatPct ? Number(bodyFatPct) : null,
@@ -187,6 +230,8 @@ export function PhysiqueCheckinView({
       setCheckins((prev) => [payload.checkin, ...prev]);
       setPoseFilter(uploadPose);
       setPhotoData("");
+      setDateSource(null);
+      setDay(today);
       setNote("");
       setShowUpload(false);
       onMessage("Physique check-in saved.");
@@ -210,7 +255,25 @@ export function PhysiqueCheckinView({
     }
   }
 
-  const activeFrame = timelapseFrames[frameIndex];
+  function handleSelectThumbnail(id: string) {
+    const idx = timelapseFrames.findIndex((f) => f.id === id);
+    if (idx >= 0) {
+      setPlaying(false);
+      setFrameIndex(idx);
+    } else {
+      const dailyFrames = orderPhysiqueFrames(checkins, poseFilter, "daily");
+      const dailyIdx = dailyFrames.findIndex((f) => f.id === id);
+      if (dailyIdx >= 0) {
+        setViewCadence("daily");
+        setPlaying(false);
+        setFrameIndex(dailyIdx);
+      }
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  const safeFrameIndex = timelapseFrames.length > 0 ? Math.min(frameIndex, timelapseFrames.length - 1) : 0;
+  const activeFrame = timelapseFrames[safeFrameIndex];
 
   return (
     <>
@@ -218,64 +281,67 @@ export function PhysiqueCheckinView({
         <button type="button" className="secondary compact" onClick={onBack} style={{ minHeight: "36px" }}>
           <ArrowLeft size={16} /> Back
         </button>
-        <h1 style={{ fontSize: "1.2rem", margin: 0, flex: 1, textAlign: "center" }}>Physique Check-in</h1>
-        <button type="button" className="compact" onClick={() => setShowUpload((v) => !v)} style={{ minHeight: "36px" }}>
-          <Plus size={15} /> Add
-        </button>
-      </div>
-
-      <div style={{ display: "grid", gap: ".45rem" }}>
-        <div className="segmented" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }} role="tablist" aria-label="Pose filter">
-          {PHYSIQUE_POSES.map((pose) => (
-            <button
-              key={pose}
-              type="button"
-              role="tab"
-              aria-selected={poseFilter === pose}
-              className={poseFilter === pose ? "active" : ""}
-              onClick={() => setPoseFilter(pose)}
-              style={{ textTransform: "capitalize" }}
-            >
-              {pose}
-            </button>
-          ))}
-        </div>
-        <div className="segmented" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }} role="group" aria-label="Check-in cadence">
-          {(["weekly", "daily"] as PhysiqueCadence[]).map((c) => (
-            <button
-              key={c}
-              type="button"
-              className={cadence === c ? "active" : ""}
-              onClick={() => setCadence(c)}
-              style={{ textTransform: "capitalize", paddingInline: ".55rem" }}
-            >
-              {c}
-            </button>
-          ))}
+        <h1 style={{ fontSize: "1.12rem", margin: 0, flex: 1, textAlign: "center" }}>Physique</h1>
+        <div className="physique-header-actions">
+          <select
+            className="physique-pose-select"
+            aria-label="Filter pose"
+            value={poseFilter}
+            onChange={(e) => setPoseFilter(e.target.value as PhysiquePose)}
+          >
+            {PHYSIQUE_POSES.map((pose) => (
+              <option key={pose} value={pose}>
+                {pose.charAt(0).toUpperCase() + pose.slice(1)}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="compact" onClick={handleToggleAdd} style={{ minHeight: "36px" }}>
+            <Plus size={15} /> Add
+          </button>
         </div>
       </div>
 
       {showUpload && (
         <form className="card" onSubmit={(e) => void handleSubmit(e)}>
           <div className="split-row">
-            <h2>New {cadence} check-in</h2>
+            <h2>New check-in</h2>
             <button type="button" className="secondary compact" onClick={() => setShowUpload(false)}>Cancel</button>
           </div>
           <label>
-            Photo (Front / Side / Back)
+            Photo
             <input type="file" accept="image/*" onChange={(e) => void handleFileSelect(e)} />
           </label>
           {photoData && (
             <img
               src={photoData}
               alt="Check-in preview"
-              style={{ width: "100%", maxHeight: 240, objectFit: "cover", borderRadius: 16 }}
+              style={{
+                width: "100%",
+                maxHeight: 280,
+                objectFit: "contain",
+                borderRadius: 16,
+                background: "#14161f",
+              }}
             />
           )}
           <div className="input-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
             <label>
               Date
-              <input type="date" value={day} max={today} onChange={(e) => setDay(e.target.value)} required />
+              <input
+                type="date"
+                value={day}
+                max={today}
+                onChange={(e) => {
+                  setDay(e.target.value);
+                  setDateSource(null);
+                }}
+                required
+              />
+              {dateSource && (
+                <small style={{ color: "var(--muted)", fontSize: ".7rem" }}>
+                  {dateSource === "exif" ? "Date auto-filled from photo EXIF" : "Date auto-filled from file"}
+                </small>
+              )}
             </label>
             <label>
               Pose
@@ -304,18 +370,31 @@ export function PhysiqueCheckinView({
         </form>
       )}
 
-      {/* Timelapse Player */}
-      {timelapseFrames.length >= 2 && activeFrame && (
+      {/* Photo & Timelapse Viewer */}
+      {timelapseFrames.length >= 1 && activeFrame && (
         <section className="card physique-player" aria-label="Physique timelapse">
-          <div className="split-row">
-            <span className="eyebrow">Timelapse · {poseFilter} ({timelapseFrames.length} frames)</span>
-            <div style={{ display: "flex", gap: ".3rem" }}>
+          <div className="physique-viewer-bar">
+            <div className="physique-pill-toggle" role="group" aria-label="Timelapse cadence">
+              {(["weekly", "daily"] as PhysiqueCadence[]).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  aria-pressed={viewCadence === c}
+                  className={viewCadence === c ? "is-active" : ""}
+                  onClick={() => setViewCadence(c)}
+                  style={{ textTransform: "capitalize" }}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+            <div className="physique-pill-toggle" role="group" aria-label="Playback speed">
               {([0.5, 1, 2] as const).map((s) => (
                 <button
                   key={s}
                   type="button"
-                  className={speed === s ? "compact" : "secondary compact"}
-                  style={{ minHeight: "28px", padding: ".1rem .45rem", fontSize: ".7rem" }}
+                  aria-pressed={speed === s}
+                  className={speed === s ? "is-active" : ""}
                   onClick={() => setSpeed(s)}
                 >
                   {s}x
@@ -331,22 +410,30 @@ export function PhysiqueCheckinView({
               {activeFrame.bodyFatPct != null && <span>· {activeFrame.bodyFatPct.toFixed(1)}%</span>}
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: ".6rem" }}>
-            <button type="button" className="secondary icon-btn" aria-label={playing ? "Pause timelapse" : "Play timelapse"} onClick={() => setPlaying((p) => !p)}>
-              {playing ? <Pause size={16} /> : <Play size={16} />}
-            </button>
-            <input
-              type="range"
-              min={0}
-              max={timelapseFrames.length - 1}
-              value={frameIndex}
-              onChange={(e) => {
-                setPlaying(false);
-                setFrameIndex(Number(e.target.value));
-              }}
-              style={{ flex: 1, boxShadow: "none" }}
-            />
-          </div>
+          {timelapseFrames.length >= 2 && (
+            <div style={{ display: "flex", alignItems: "center", gap: ".6rem" }}>
+              <button
+                type="button"
+                className="secondary icon-btn"
+                aria-label={playing ? "Pause timelapse" : "Play timelapse"}
+                onClick={() => setPlaying((p) => !p)}
+              >
+                {playing ? <Pause size={16} /> : <Play size={16} />}
+              </button>
+              <input
+                type="range"
+                aria-label="Timelapse frame"
+                min={0}
+                max={timelapseFrames.length - 1}
+                value={safeFrameIndex}
+                onChange={(e) => {
+                  setPlaying(false);
+                  setFrameIndex(Number(e.target.value));
+                }}
+                style={{ flex: 1, boxShadow: "none" }}
+              />
+            </div>
+          )}
         </section>
       )}
 
@@ -362,7 +449,14 @@ export function PhysiqueCheckinView({
         <div className="physique-grid">
           {filteredNewest.map((item) => (
             <article key={item.id} className="card physique-card">
-              <img src={item.photoData} alt={`${item.pose} check-in ${item.day}`} />
+              <button
+                type="button"
+                className="physique-card-thumb"
+                aria-label={`View ${item.pose} check-in from ${item.day}`}
+                onClick={() => handleSelectThumbnail(item.id)}
+              >
+                <img src={item.photoData} alt={`${item.pose} check-in ${item.day}`} />
+              </button>
               <div className="split-row" style={{ marginTop: ".4rem" }}>
                 <div>
                   <strong className="num" style={{ fontSize: ".82rem" }}>{item.day}</strong>
