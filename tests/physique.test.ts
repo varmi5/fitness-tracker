@@ -37,7 +37,7 @@ before(async () => {
 
 after(async () => pg.close());
 
-test("physique check-ins auto-fill weight/body-fat, filter by pose, and enforce user isolation", async () => {
+test("physique check-ins allow multiple per pose, keep weight optional & omit BF%, and support user-isolated edits", async () => {
   const a = physiqueData(db, "A");
   const b = physiqueData(db, "B");
 
@@ -57,35 +57,54 @@ test("physique check-ins auto-fill weight/body-fat, filter by pose, and enforce 
     bodyFatPct: 22.6,
   });
 
-  const front = await a.create({
+  // Multiple check-ins can be created for the same pose; weight and BF% stay null unless explicitly supplied
+  const front1 = await a.create({
     day: "2026-11-24",
     pose: "front",
     cadence: "weekly",
     photoData: SAMPLE_DATA_URL,
     note: "Morning fasted",
   });
-  assert.equal(front.weightKg, 71.9);
-  assert.equal(front.bodyFatPct, 22.6);
-  assert.equal(front.pose, "front");
+  assert.equal(front1.weightKg, null);
+  assert.equal(front1.bodyFatPct, null);
+  assert.equal(front1.pose, "front");
 
-  const side = await a.create({
-    day: "2026-11-24",
-    pose: "side",
-    cadence: "daily",
+  const front2 = await a.create({
+    day: "2026-11-20",
+    pose: "front",
+    cadence: "weekly",
     photoData: SAMPLE_DATA_URL,
     weightKg: 72.1,
     bodyFatPct: 22.4,
-    note: "",
+    note: "Evening",
   });
-  assert.equal(side.weightKg, 72.1);
+  assert.equal(front2.weightKg, 72.1);
+  assert.equal(front2.bodyFatPct, null);
 
-  assert.equal((await a.list()).length, 2);
-  assert.equal((await a.list("front")).length, 1);
+  assert.equal((await a.list("front")).length, 2);
   assert.equal((await b.list()).length, 0);
 
+  // Editing updates day, pose, weight (set and clear to null), and note; isolated per user
+  const updated = await a.update(front1.id, {
+    day: "2026-11-22",
+    pose: "side",
+    weightKg: 71.5,
+    note: "Updated pose & date",
+  });
+  assert.ok(updated);
+  assert.equal(updated.day, "2026-11-22");
+  assert.equal(updated.pose, "side");
+  assert.equal(updated.weightKg, 71.5);
+  assert.equal(updated.note, "Updated pose & date");
+
+  const clearedWeight = await a.update(front1.id, { weightKg: null });
+  assert.equal(clearedWeight?.weightKg, null);
+
+  assert.equal(await b.update(front1.id, { day: "2026-11-01" }), null);
+
   // User B cannot delete User A's check-in
-  assert.deepEqual(await b.remove(front.id), { deleted: false });
-  assert.deepEqual(await a.remove(front.id), { deleted: true });
+  assert.deepEqual(await b.remove(front1.id), { deleted: false });
+  assert.deepEqual(await a.remove(front1.id), { deleted: true });
   assert.equal((await a.list()).length, 1);
 });
 

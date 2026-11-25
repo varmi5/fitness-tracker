@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createPhysiqueInput, PHYSIQUE_POSES, physiqueData } from "../../../lib/physique-data";
+import { createPhysiqueInput, PHYSIQUE_POSES, physiqueData, updatePhysiqueInput } from "../../../lib/physique-data";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
@@ -57,12 +57,18 @@ export async function POST(request: Request) {
     const action = z
       .discriminatedUnion("action", [
         z.object({ action: z.literal("create"), data: createPhysiqueInput }),
+        z.object({ action: z.literal("update"), id: z.string().min(1), data: updatePhysiqueInput }),
         z.object({ action: z.literal("delete"), id: z.string().min(1) }),
       ])
       .parse(parsedJson);
 
     if (action.action === "create") {
       const checkin = await data.create(action.data);
+      return json({ checkin });
+    }
+    if (action.action === "update") {
+      const checkin = await data.update(action.id, action.data);
+      if (!checkin) return json({ message: "Check-in not found." }, 404);
       return json({ checkin });
     }
     return json(await data.remove(action.id));
