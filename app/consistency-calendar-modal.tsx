@@ -139,7 +139,7 @@ export function ConsistencyCalendarModal({
             </button>
           </div>
 
-          <div className="segments" role="group" aria-label="Adherence filter">
+          <div className="cal-filter-row" role="group" aria-label="Adherence filter">
             {(
               [
                 ["all", "All"],

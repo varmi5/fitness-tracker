@@ -1,6 +1,6 @@
 import { and, desc, eq, isNotNull, lte } from "drizzle-orm";
 import { z } from "zod";
-import type { Database } from "./runtime";
+import type { AuthDatabase } from "./auth";
 import { dailyEnergy, dailyRecovery, measurement, physiqueCheckin } from "./schema";
 
 export const PHYSIQUE_POSES = ["front", "side", "back"] as const;
@@ -51,7 +51,7 @@ function toRecord(row: typeof physiqueCheckin.$inferSelect): PhysiqueCheckinReco
   };
 }
 
-export function physiqueData(db: Database, userId: string) {
+export function physiqueData(db: AuthDatabase, userId: string) {
   return {
     async list(pose?: PhysiquePose): Promise<PhysiqueCheckinRecord[]> {
       const condition = pose
