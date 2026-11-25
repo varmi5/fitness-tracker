@@ -395,6 +395,13 @@ const recoveryTypes = {
     min: 0.1,
     max: 150,
   },
+  "run-vo2-max": {
+    field: "vo2Max" as const,
+    sections: ["runVo2Max", "vo2Max"],
+    keys: ["vo2Max", "mlPerKgPerMin", "vo2MaxAvg", "value"],
+    min: 0.1,
+    max: 150,
+  },
   "body-fat": {
     field: "bodyFatPct" as const,
     sections: ["bodyFat"],
@@ -513,11 +520,15 @@ async function fetchRecoveryMetric(
   const primaryFilter =
     type === "body-fat"
       ? `body_fat.sample_time.physical_time >= "${from}T00:00:00Z" AND body_fat.sample_time.physical_time < "${endExclusive}T00:00:00Z"`
-      : `${snakeType}.date >= "${from}" AND ${snakeType}.date < "${endExclusive}"`;
+      : type === "run-vo2-max"
+        ? `run_vo2_max.sample_time.physical_time >= "${from}T00:00:00Z" AND run_vo2_max.sample_time.physical_time < "${endExclusive}T00:00:00Z"`
+        : `${snakeType}.date >= "${from}" AND ${snakeType}.date < "${endExclusive}"`;
   const fallbackFilter =
     type === "body-fat"
       ? `body_fat.sample_time >= "${from}T00:00:00Z" AND body_fat.sample_time < "${endExclusive}T00:00:00Z"`
-      : `date >= "${from}" AND date < "${endExclusive}"`;
+      : type === "run-vo2-max"
+        ? `sample_time.physical_time >= "${from}T00:00:00Z" AND sample_time.physical_time < "${endExclusive}T00:00:00Z"`
+        : `date >= "${from}" AND date < "${endExclusive}"`;
 
   let activeFilter = primaryFilter;
   let pageToken: string | undefined;
@@ -1430,23 +1441,23 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
         canSleep
           ? fetchSleepSessions(grant, from, endExclusive, tz)
           : Promise.resolve(new Map<string, ParsedSleepSession>()),
-        canMeasurements
-          ? Promise.all(
-              recoveryMetricNames.map(async (type) => {
-                try {
-                  const res = await fetchRecoveryMetric(type, grant, from, endExclusive, tz);
-                  recordDiag(`recovery:${type}`, {
-                    status: res.rows.size > 0 ? "ok" : "empty",
-                    count: res.rows.size,
-                  });
-                  return res;
-                } catch (err) {
-                  recordDiag(`recovery:${type}`, { status: "error", count: 0, error: safeMsg(err) });
-                  return null;
-                }
-              }),
-            )
-          : Promise.resolve([]),
+        Promise.all(
+          recoveryMetricNames.map(async (type) => {
+            const allowed = type === "run-vo2-max" ? canActivity : canMeasurements;
+            if (!allowed) return null;
+            try {
+              const res = await fetchRecoveryMetric(type, grant, from, endExclusive, tz);
+              recordDiag(`recovery:${type}`, {
+                status: res.rows.size > 0 ? "ok" : "empty",
+                count: res.rows.size,
+              });
+              return res;
+            } catch (err) {
+              recordDiag(`recovery:${type}`, { status: "error", count: 0, error: safeMsg(err) });
+              return null;
+            }
+          }),
+        ),
         canActivity
           ? fetchExerciseSessions(grant, from, endExclusive, tz)
               .then((rows) => {

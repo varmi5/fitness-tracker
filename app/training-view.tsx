@@ -15,6 +15,7 @@ import {
   type DailyStrainView,
   type GoogleIntegrationStatus,
   type HevyIntegrationStatus,
+  type PulseInsightsView,
   type RecoveryInsightView,
   type StrainSettings,
   type ThemeMode,
@@ -25,6 +26,7 @@ interface TrainingViewProps {
   selectedDay: string;
   strain: DailyStrainView;
   recoveryInsights?: RecoveryInsightView;
+  pulseInsights?: PulseInsightsView | null;
   strainSettings: StrainSettings;
   hevy: HevyIntegrationStatus;
   google?: GoogleIntegrationStatus;
@@ -93,6 +95,7 @@ export function TrainingView({
   selectedDay,
   strain,
   recoveryInsights,
+  pulseInsights,
   hevy,
   google,
   busy,
@@ -135,7 +138,11 @@ export function TrainingView({
   }
 
   const overall = strain.overallStrain;
-  const target = computeTargetStrain(recoveryInsights?.score);
+  const activeAcwr = loads?.cardioStatus?.acwr ?? loads?.muscularStatus?.acwr ?? null;
+  const effectiveRecovery = pulseInsights?.recovery.score ?? recoveryInsights?.score;
+  const target =
+    pulseInsights?.strainTarget ??
+    computeTargetStrain(effectiveRecovery, { acwr: activeAcwr });
   const inZone = overall != null && overall >= target.min && overall <= target.max;
   const overZone = overall != null && overall > target.max;
 
@@ -400,6 +407,63 @@ export function TrainingView({
               </span>
             </div>
           </section>
+
+          {pulseInsights && pulseInsights.recovery.drivers.length > 0 && (
+            <section className="card" style={{ display: "grid", gap: ".55rem" }}>
+              <span className="eyebrow">Recovery Drivers ({pulseInsights.recovery.baselineStatus})</span>
+              <div style={{ display: "grid", gap: ".35rem" }}>
+                {pulseInsights.recovery.drivers.map((d) => (
+                  <div key={d.key} className="split-row" style={{ fontSize: ".82rem" }}>
+                    <span>
+                      <strong>{d.label}</strong>{" "}
+                      <span style={{ color: "var(--muted)" }}>
+                        {d.valueText}
+                        {d.baselineText ? ` (base ${d.baselineText})` : ""}
+                      </span>
+                    </span>
+                    <span className={`pill ${d.tone === "good" ? "teal-soft" : d.tone === "bad" ? "danger-soft" : d.tone === "warn" ? "amber-soft" : ""}`}>
+                      {d.impactPts >= 0 ? `+${d.impactPts}` : d.impactPts} pts
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {pulseInsights && pulseInsights.healthMonitor.availableCount > 0 && (
+            <section className="card" style={{ display: "grid", gap: ".55rem" }}>
+              <div className="split-row">
+                <span className="eyebrow">5-Vital Health Monitor</span>
+                <span className={`pill ${pulseInsights.healthMonitor.status === "elevated" ? "danger-soft" : pulseInsights.healthMonitor.status === "watch" ? "amber-soft" : "teal-soft"}`}>
+                  {pulseInsights.healthMonitor.status}
+                </span>
+              </div>
+              <p style={{ fontSize: ".78rem", margin: 0 }}>{pulseInsights.healthMonitor.note}</p>
+              <div style={{ display: "grid", gap: ".3rem" }}>
+                {pulseInsights.healthMonitor.vitals.map((v) => (
+                  <div key={v.key} className="split-row" style={{ fontSize: ".8rem" }}>
+                    <span>{v.label}</span>
+                    <span className="num">
+                      <strong>{v.valueText}</strong>
+                      {v.rangeText ? <span style={{ color: "var(--muted)" }}> · {v.rangeText}</span> : null}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {pulseInsights?.forecast.predictedScore != null && (
+            <section className="card" style={{ display: "grid", gap: ".3rem" }}>
+              <div className="split-row">
+                <span className="eyebrow">Next-Day Readiness Forecast</span>
+                <strong className="num" style={{ color: "var(--accent)" }}>
+                  {pulseInsights.forecast.predictedScore}% ({pulseInsights.forecast.low}–{pulseInsights.forecast.high}%)
+                </strong>
+              </div>
+              <p style={{ fontSize: ".78rem", margin: 0 }}>{pulseInsights.forecast.summary}</p>
+            </section>
+          )}
         </>
       );
     }
@@ -588,7 +652,7 @@ export function TrainingView({
               <span className="eyebrow">Recovery</span>
               <div style={{ display: "flex", alignItems: "baseline", gap: ".45rem", marginTop: ".1rem" }}>
                 <strong className="num" style={{ fontSize: "1.2rem" }}>
-                  {recoveryInsights?.score != null ? `${recoveryInsights.score}%` : "Pending"}
+                  {effectiveRecovery != null ? `${Math.round(effectiveRecovery)}%` : "Pending"}
                 </strong>
                 <span style={{ fontSize: ".78rem", color: "var(--muted)" }}>
                   {recoveryPending
@@ -613,7 +677,7 @@ export function TrainingView({
                 Connect Google Health
               </a>
             ) : (
-              <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
+              <button type="button" className="unlock-btn" onClick={() => onOpenSettings()}>
                 Configure in Settings
               </button>
             )}
@@ -795,7 +859,7 @@ export function TrainingView({
                 Connect Hevy to Unlock
               </a>
             ) : (
-              <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
+              <button type="button" className="unlock-btn" onClick={() => onOpenSettings()}>
                 Configure Hevy in Settings
               </button>
             )}
@@ -835,6 +899,11 @@ export function TrainingView({
                 <div className="meal-meta" style={{ marginTop: ".2rem" }}>
                   {act.durationSeconds != null && <span>{fmtDur(act.durationSeconds)}</span>}
                   {act.avgHrBpm != null && <span className="num">Avg {act.avgHrBpm} bpm</span>}
+                  {pulseInsights?.workoutHrrById[act.id]?.after1Minute != null && (
+                    <span className="pill teal-soft num" style={{ fontSize: ".68rem", minHeight: "20px", padding: ".05rem .45rem" }}>
+                      HRR 1m −{pulseInsights.workoutHrrById[act.id].after1Minute} bpm
+                    </span>
+                  )}
                   {act.mRaw > 0 && <span className="num">Muscular {act.mRaw}</span>}
                   {act.walkingDetail?.eligibleSteps != null && (
                     <span className="num">{act.walkingDetail.eligibleSteps.toLocaleString("en-GB")} steps</span>
@@ -849,6 +918,29 @@ export function TrainingView({
           ))
         )}
       </section>
+
+      {/* Auto Habit Impact on Next-Day Recovery */}
+      {pulseInsights && pulseInsights.behaviorImpacts.length > 0 && (
+        <section className="card" style={{ display: "grid", gap: ".45rem" }} aria-label="Habit Impact on Recovery">
+          <div className="split-row">
+            <span className="eyebrow">Auto Habit Impact on Recovery</span>
+            <span className="pill">45d trend</span>
+          </div>
+          <div style={{ display: "grid", gap: ".35rem" }}>
+            {pulseInsights.behaviorImpacts.map((b) => (
+              <div key={b.key} className="split-row" style={{ fontSize: ".8rem" }}>
+                <span>
+                  <strong>{b.label}</strong>{" "}
+                  <span style={{ color: "var(--muted)" }}>({b.withCount}d vs {b.withoutCount}d)</span>
+                </span>
+                <span className={`pill num ${b.deltaRecovery >= 0 ? "teal-soft" : "danger-soft"}`}>
+                  {b.deltaRecovery >= 0 ? `+${b.deltaRecovery}` : b.deltaRecovery}%
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Quiet Hevy Sync Footer */}
       {hevy.connected && (

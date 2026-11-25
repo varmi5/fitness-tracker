@@ -18,6 +18,7 @@ import {
   type GoogleIntegrationStatus,
   type NutritionHistory,
   type NutritionSettings,
+  type PulseInsightsView,
   type RecoveryInsightView,
   type TrackerSnapshot,
 } from "./types";
@@ -34,6 +35,7 @@ interface HomeViewProps {
   settings: NutritionSettings;
   strain?: DailyStrainView;
   recoveryInsights?: RecoveryInsightView;
+  pulseInsights?: PulseInsightsView | null;
   busy: boolean;
   onSelectHomeDay: (day: string) => void;
   onOpenTraining?: (day: string) => void;
@@ -79,6 +81,7 @@ export function HomeView({
   settings,
   strain,
   recoveryInsights,
+  pulseInsights,
   busy,
   onSelectHomeDay,
   onOpenTraining,
@@ -191,11 +194,14 @@ export function HomeView({
         ? "Yesterday"
         : viewDateDisplay;
 
-  const strainTarget = computeTargetStrain(recoveryInsights?.score);
+  const effectiveRecoveryScore = pulseInsights?.recovery.score ?? recoveryInsights?.score ?? null;
+  const effectiveRecoveryBand = pulseInsights?.recovery.band ?? recoveryInsights?.band ?? "unavailable";
+  const strainTarget = pulseInsights?.strainTarget ?? computeTargetStrain(effectiveRecoveryScore);
   const overallStrain = strain?.overallStrain ?? null;
-  const recoveryScore = recoveryInsights?.score ?? null;
+  const recoveryScore = effectiveRecoveryScore;
   const sleepMinutes = daily.sleep?.minutesAsleep ?? recoveryInsights?.metrics.sleepMinutes ?? null;
-  const sleepPct = sleepMinutes != null ? Math.min(100, Math.round((sleepMinutes / 480) * 100)) : 0;
+  const sleepScore = pulseInsights?.sleep.score ?? null;
+  const sleepPct = sleepScore ?? (sleepMinutes != null ? Math.min(100, Math.round((sleepMinutes / 480) * 100)) : 0);
   const vitalsPending = isFitbitMode && recoveryScore == null && sleepMinutes == null;
 
   const sameDayWorkouts = (strain?.activities ?? [])
@@ -277,11 +283,11 @@ export function HomeView({
               pct={recoveryScore ?? 0}
               color="var(--recovery-color)"
               sublabel={
-                recoveryInsights?.band === "optimal"
+                effectiveRecoveryBand === "optimal"
                   ? "Optimal"
-                  : recoveryInsights?.band === "moderate"
+                  : effectiveRecoveryBand === "moderate"
                     ? "Moderate"
-                    : recoveryInsights?.band === "strained"
+                    : effectiveRecoveryBand === "strained"
                       ? "Strained"
                       : "Pending"
               }
@@ -289,11 +295,21 @@ export function HomeView({
             />
             <BevelScoreRing
               label="Sleep"
-              value={sleepMinutes}
-              displayText={sleepMinutes == null ? "—" : formatDurationMinutes(sleepMinutes)}
+              value={sleepScore ?? sleepMinutes}
+              displayText={
+                sleepScore != null
+                  ? `${sleepScore}%`
+                  : sleepMinutes == null
+                    ? "—"
+                    : formatDurationMinutes(sleepMinutes)
+              }
               pct={sleepPct}
               color="var(--sleep-color)"
-              sublabel={sleepMinutes == null ? "Pending" : `${sleepPct}% of 8h`}
+              sublabel={
+                sleepMinutes == null
+                  ? "Pending"
+                  : `${formatDurationMinutes(sleepMinutes)}${pulseInsights?.sleep.sri != null ? ` · SRI ${pulseInsights.sleep.sri}` : ""}`
+              }
               onClick={() => setSleepDetailOpen((v) => !v)}
             />
           </div>
@@ -359,7 +375,7 @@ export function HomeView({
         {isFitbitMode && sleepDetailOpen && daily.sleep && (
           <div className="muscle-detail-bar" style={{ marginTop: ".1rem" }}>
             <div className="split-row" style={{ fontSize: ".8rem" }}>
-              <strong>Sleep Breakdown</strong>
+              <strong>Sleep Score {sleepScore != null ? `${sleepScore}%` : ""}</strong>
               <span className="num">{formatDurationMinutes(daily.sleep.minutesAsleep)}</span>
             </div>
             <div className="split-row" style={{ fontSize: ".75rem", color: "var(--muted)" }}>
@@ -367,9 +383,76 @@ export function HomeView({
               <span>REM {daily.sleep.remMinutes != null ? formatDurationMinutes(daily.sleep.remMinutes) : "—"}</span>
               <span>Light {daily.sleep.lightMinutes != null ? formatDurationMinutes(daily.sleep.lightMinutes) : "—"}</span>
             </div>
+            {pulseInsights?.sleep && (
+              <div className="split-row" style={{ fontSize: ".73rem", color: "var(--muted)" }}>
+                <span>Eff {pulseInsights.sleep.efficiencyPct ?? "—"}% · Debt {pulseInsights.sleep.sleepDebtHours}h</span>
+                <span>
+                  {pulseInsights.sleep.recommendedBedtime
+                    ? `Bedtime ~${pulseInsights.sleep.recommendedBedtime}`
+                    : `Need ${pulseInsights.sleep.sleepNeedHours}h`}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </section>
+
+      {/* Silk Pulse Telemetry Card (Energy Bank · Stress · Health Monitor · Forecast) */}
+      {isFitbitMode && pulseInsights && (
+        <button
+          type="button"
+          className="card card-interactive"
+          onClick={openTrainingView}
+          style={{ gap: ".45rem" }}
+          aria-label="Pulse Telemetry summary"
+        >
+          <div className="split-row">
+            <span className="eyebrow">Pulse Telemetry</span>
+            <span
+              className={`pill ${
+                pulseInsights.healthMonitor.status === "elevated"
+                  ? "danger-soft"
+                  : pulseInsights.healthMonitor.status === "watch"
+                    ? "amber-soft"
+                    : "teal-soft"
+              }`}
+              style={{ fontSize: ".68rem" }}
+            >
+              {pulseInsights.healthMonitor.status === "unavailable"
+                ? "Syncing"
+                : `${pulseInsights.healthMonitor.inRangeCount}/${pulseInsights.healthMonitor.availableCount} Vitals`}
+            </span>
+          </div>
+          <div className="energy-strip" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))", marginTop: 0 }}>
+            <div className="energy-cell">
+              <span>Energy Bank</span>
+              <strong className="num" style={{ color: "var(--recovery-color)" }}>
+                {pulseInsights.energyBank.currentPct != null ? `${pulseInsights.energyBank.currentPct}%` : "—"}
+              </strong>
+            </div>
+            <div className="energy-cell">
+              <span>Stress</span>
+              <strong className="num">
+                {pulseInsights.stress.avgStress != null ? `${pulseInsights.stress.avgStress.toFixed(1)}` : "—"}
+              </strong>
+            </div>
+            <div className="energy-cell">
+              <span>Tomorrow</span>
+              <strong className="num" style={{ color: "var(--accent)" }}>
+                {pulseInsights.forecast.predictedScore != null ? `${pulseInsights.forecast.predictedScore}%` : "—"}
+              </strong>
+            </div>
+            <div className="energy-cell">
+              <span>Bio Age</span>
+              <strong className="num">
+                {pulseInsights.biologicalAge.biologicalAge != null
+                  ? `${pulseInsights.biologicalAge.biologicalAge.toFixed(1)}y`
+                  : "—"}
+              </strong>
+            </div>
+          </div>
+        </button>
+      )}
 
       {/* Calorie Intake Linear Slider */}
       <CalorieSlider

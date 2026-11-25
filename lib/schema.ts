@@ -68,6 +68,8 @@ export const profile = pgTable("profile", {
   heightCm: doublePrecision("height_cm"),
   units: text().notNull().default("metric"),
   goals: text().notNull().default(""),
+  birthDate: date("birth_date"),
+  biologicalSex: text("biological_sex"),
 });
 
 export const measurement = pgTable("measurement", {

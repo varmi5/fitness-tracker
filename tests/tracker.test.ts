@@ -14,7 +14,7 @@ const pg = new PGlite();
 const db = drizzle(pg, { schema });
 
 before(async () => {
-  for (const migration of ["001-auth.sql", "002-tracker.sql"]) {
+  for (const migration of ["001-auth.sql", "002-tracker.sql", "020-profile-biometrics.sql"]) {
     await pg.exec(await readFile(`migrations/${migration}`, "utf8"));
   }
   await db.insert(schema.user).values(["A", "B"].map((id) => ({
