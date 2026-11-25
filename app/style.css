@@ -1292,6 +1292,7 @@ summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight:
   border-radius: 22px;
 }
 .unlock-gate-content.is-locked {
+  min-height: 168px;
   filter: blur(4px);
   opacity: 0.42;
   pointer-events: none;
@@ -1307,20 +1308,24 @@ summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight:
   align-items: center;
   justify-content: center;
   text-align: center;
-  gap: .65rem;
-  padding: 1.25rem;
-  background: color-mix(in srgb, var(--surface) 74%, transparent);
+  gap: .45rem;
+  padding: 1rem 1.15rem;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
   backdrop-filter: blur(6px);
   border-radius: 22px;
 }
 .unlock-overlay h3 {
-  font-size: 1rem;
+  font-size: .95rem;
   font-weight: 680;
+  line-height: 1.2;
+  margin: 0;
   color: var(--text);
 }
 .unlock-overlay p {
-  font-size: .8rem;
-  max-width: 24rem;
+  font-size: .78rem;
+  line-height: 1.35;
+  margin: 0;
+  max-width: 22rem;
   color: var(--muted);
 }
 .unlock-btn {
@@ -1328,13 +1333,16 @@ summary { cursor: pointer; display: list-item; padding-top: .32rem; font-weight:
   align-items: center;
   justify-content: center;
   gap: .42rem;
-  min-height: 44px;
-  padding: .58rem 1.1rem;
+  min-height: 40px;
+  max-width: 100%;
+  padding: .48rem 1rem;
   border-radius: 14px;
   background: var(--accent);
   color: var(--accent-ink);
   font-weight: 650;
-  font-size: .88rem;
+  font-size: .82rem;
+  white-space: normal;
+  text-align: center;
   text-decoration: none;
   box-shadow: var(--shadow-sm);
 }
@@ -1776,6 +1784,8 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 /* Compact Bevel click-to-expand row */
 .compact-row-btn {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1784,6 +1794,8 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   background: transparent;
   color: var(--text);
   text-align: left;
+  white-space: normal;
+  overflow: hidden;
   border-top: 1px solid var(--border);
 }
 .compact-row-btn:first-child {
@@ -1792,6 +1804,87 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 }
 .compact-row-btn:last-child {
   padding-bottom: 0;
+}
+
+/* Fuel Today meal rows */
+.fuel-meal-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: .4rem;
+  min-width: 0;
+}
+.fuel-meal-row {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem;
+  padding: .55rem .72rem;
+  background: var(--surface-soft);
+  color: var(--text);
+  border-radius: 14px;
+  border: 0;
+  text-align: left;
+  white-space: normal;
+  overflow: hidden;
+}
+.fuel-meal-main {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.fuel-meal-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+.fuel-meal-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.fuel-meal-title {
+  font-size: .84rem;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fuel-meal-meta {
+  font-size: .72rem;
+  color: var(--muted);
+  line-height: 1.25;
+  margin-top: .08rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fuel-meal-right {
+  display: inline-flex;
+  align-items: center;
+  gap: .38rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.fuel-workouts-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: .2rem;
+  margin-top: .35rem;
+  padding-top: .55rem;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.fuel-workouts-header {
+  margin-bottom: .15rem;
 }
 .pill.danger-soft {
   background: var(--danger-bg);
@@ -1910,28 +2003,58 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   padding-bottom: .2rem;
 }
 .cal-cell {
-  min-height: 46px;
+  min-height: 50px;
   padding: .25rem .15rem;
   border-radius: 14px;
   background: var(--bg);
   color: var(--text);
+  border: 1.5px solid transparent;
   box-shadow: var(--silk-raised-sm);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: .12rem;
+  gap: .14rem;
   font-size: .76rem;
+  transition: opacity 150ms ease, background-color 150ms ease, border-color 150ms ease;
 }
-.cal-cell.is-hit .cal-ring {
-  color: var(--accent-ink);
-  background: var(--recovery-color);
-  border-radius: 999px;
+.cal-ring {
   width: 24px;
   height: 24px;
+  border-radius: 999px;
   display: grid;
   place-items: center;
+  font-weight: 600;
+}
+.cal-ring.is-steps-good {
+  color: var(--accent-ink);
+  background: var(--recovery-color);
   font-weight: 700;
+}
+.cal-ring.is-steps-bad {
+  color: var(--accent-ink);
+  background: var(--status-bad);
+  font-weight: 700;
+}
+.cal-cal-bar {
+  width: 22px;
+  height: 3.5px;
+  border-radius: 999px;
+  background: transparent;
+}
+.cal-cal-bar.is-cal-good {
+  background: var(--status-good);
+}
+.cal-cal-bar.is-cal-bad {
+  background: var(--status-bad);
+}
+.cal-cell.is-filter-match {
+  background: rgba(139, 92, 246, 0.22);
+  border-color: var(--purple);
+  box-shadow: none;
+}
+.cal-cell.is-filter-dim {
+  opacity: .42;
 }
 .cal-cell.is-selected {
   box-shadow: var(--silk-inset);
@@ -1941,7 +2064,109 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   display: inline-flex;
   gap: 2px;
   min-height: 10px;
-  color: var(--accent);
+  color: var(--purple);
+}
+.cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem .8rem;
+  padding-top: .45rem;
+  border-top: 1px solid var(--border);
+  font-size: .7rem;
+  color: var(--muted);
+}
+.cal-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+}
+.cal-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+.cal-legend-dot.is-good { background: var(--recovery-color); }
+.cal-legend-dot.is-bad { background: var(--status-bad); }
+.cal-legend-bar {
+  width: 14px;
+  height: 4px;
+  border-radius: 999px;
+  display: inline-block;
+}
+.cal-legend-bar.is-good { background: var(--status-good); }
+.cal-legend-bar.is-bad { background: var(--status-bad); }
+.cal-legend-tile {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  background: rgba(139, 92, 246, 0.22);
+  border: 1.5px solid var(--purple);
+  display: inline-block;
+}
+
+/* Silk Home Bevel-style Energy Bank, Health Monitor & Sleep Needed */
+.energy-bank-bar {
+  height: 7px;
+  width: 100%;
+  border-radius: 999px;
+  background: var(--track);
+  overflow: hidden;
+  margin: .3rem 0 .25rem;
+}
+.energy-bank-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--teal), var(--accent-2));
+  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.health-monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: .35rem;
+}
+.health-vital-cell {
+  display: grid;
+  justify-items: center;
+  gap: .15rem;
+  padding: .45rem .2rem;
+  border-radius: 13px;
+  background: var(--surface-soft);
+  text-align: center;
+  min-width: 0;
+}
+.health-vital-label {
+  font-size: .64rem;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.health-vital-val {
+  font-size: .78rem;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+.health-vital-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--muted-2);
+}
+.health-vital-dot.is-in_range { background: var(--recovery-color); }
+.health-vital-dot.is-high,
+.health-vital-dot.is-low { background: var(--status-bad); }
+.sleep-need-formula {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .35rem;
+  padding: .5rem .7rem;
+  border-radius: 14px;
+  background: var(--surface-soft);
+  font-size: .74rem;
+  color: var(--muted);
+  flex-wrap: wrap;
 }
 
 /* Physique Check-in & Timelapse */

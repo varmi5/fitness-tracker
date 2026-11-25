@@ -398,30 +398,30 @@ export function HomeView({
         )}
       </section>
 
-      {/* Silk Pulse Telemetry Card (Energy Bank · Stress · Tomorrow · Sleep Debt) */}
+      {/* Silk Energy Bank & Daytime Stress Card */}
       {isFitbitMode && dayPulse && (
         <button
           type="button"
           className="card card-interactive"
           onClick={openTrainingView}
-          style={{ gap: ".45rem" }}
+          style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".55rem" }}
           aria-label="Pulse Telemetry summary"
         >
           <div className="split-row">
-            <span className="eyebrow">Pulse Telemetry</span>
+            <span className="eyebrow">Energy Bank &amp; Stress</span>
             <span
               className={`pill ${
-                dayPulse.healthMonitor.status === "elevated"
+                dayPulse.stress.band === "high"
                   ? "danger-soft"
-                  : dayPulse.healthMonitor.status === "watch"
+                  : dayPulse.stress.band === "moderate"
                     ? "amber-soft"
                     : "teal-soft"
               }`}
               style={{ fontSize: ".68rem" }}
             >
-              {dayPulse.healthMonitor.status === "unavailable"
-                ? "Syncing"
-                : `${dayPulse.healthMonitor.inRangeCount}/${dayPulse.healthMonitor.availableCount} Vitals`}
+              {dayPulse.stress.avgStress != null
+                ? `Stress ${dayPulse.stress.avgStress.toFixed(1)} · ${dayPulse.stress.band === "high" ? "High" : dayPulse.stress.band === "moderate" ? "Moderate" : "Low"}`
+                : "Syncing"}
             </span>
           </div>
           <div className="pulse-strip-grid">
@@ -430,12 +430,28 @@ export function HomeView({
               <strong className="num" style={{ color: "var(--recovery-color)" }}>
                 {dayPulse.energyBank.currentPct != null ? `${dayPulse.energyBank.currentPct}%` : "—"}
               </strong>
+              <div className="energy-bank-bar" aria-hidden="true">
+                <div
+                  className="energy-bank-fill"
+                  style={{ width: `${Math.max(0, Math.min(100, dayPulse.energyBank.currentPct ?? 0))}%` }}
+                />
+              </div>
+              <span style={{ fontSize: ".68rem", color: "var(--muted)" }}>
+                {dayPulse.energyBank.peakPct != null
+                  ? `Peak ${dayPulse.energyBank.peakPct}% · -${dayPulse.energyBank.drainedPct}%`
+                  : "Awaiting HR"}
+              </span>
             </div>
             <div className="energy-cell">
-              <span>Stress</span>
+              <span>Daytime Stress</span>
               <strong className="num">
-                {dayPulse.stress.avgStress != null ? `${dayPulse.stress.avgStress.toFixed(1)}` : "—"}
+                {dayPulse.stress.avgStress != null ? dayPulse.stress.avgStress.toFixed(1) : "—"}
               </strong>
+              <span style={{ fontSize: ".68rem", color: "var(--muted)", marginTop: ".15rem" }}>
+                {dayPulse.stress.avgStress != null
+                  ? `${dayPulse.stress.lowMinutes}m low · ${dayPulse.stress.mediumMinutes + dayPulse.stress.highMinutes}m load`
+                  : "Awaiting HR"}
+              </span>
             </div>
             <div className="energy-cell">
               <span>Tomorrow</span>
@@ -446,13 +462,104 @@ export function HomeView({
             <div className="energy-cell">
               <span>Sleep Debt</span>
               <strong className="num">
-                {dayPulse.sleep.sleepDebtHours != null
-                  ? `${dayPulse.sleep.sleepDebtHours}h`
-                  : "—"}
+                {dayPulse.sleep.sleepDebtHours != null ? `${dayPulse.sleep.sleepDebtHours}h` : "—"}
               </strong>
             </div>
           </div>
         </button>
+      )}
+
+      {/* Silk Health Monitor 5-Vital Baseline Strip */}
+      {isFitbitMode && dayPulse && dayPulse.healthMonitor.availableCount > 0 && (
+        <button
+          type="button"
+          className="card card-interactive"
+          onClick={openTrainingView}
+          style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".5rem" }}
+          aria-label="Health Monitor 5-vital baseline"
+        >
+          <div className="split-row">
+            <span className="eyebrow">Health Monitor</span>
+            <span
+              className={`pill ${
+                dayPulse.healthMonitor.status === "elevated"
+                  ? "danger-soft"
+                  : dayPulse.healthMonitor.status === "watch"
+                    ? "amber-soft"
+                    : "teal-soft"
+              }`}
+              style={{ fontSize: ".68rem" }}
+            >
+              {dayPulse.healthMonitor.inRangeCount}/{dayPulse.healthMonitor.availableCount} In Range
+            </span>
+          </div>
+          <div className="health-monitor-grid">
+            {dayPulse.healthMonitor.vitals.map((v) => {
+              const shortLabel =
+                v.key === "restingHr"
+                  ? "RHR"
+                  : v.key === "hrv"
+                    ? "HRV"
+                    : v.key === "resp"
+                      ? "RR"
+                      : v.key === "spo2"
+                        ? "SpO₂"
+                        : "Temp";
+              const shortVal = v.valueText.replace(/ (bpm|ms|rpm)$/, "");
+              return (
+                <div key={v.key} className="health-vital-cell">
+                  <span className="health-vital-label">{shortLabel}</span>
+                  <span className="health-vital-val num">{shortVal}</span>
+                  <span className={`health-vital-dot is-${v.status}`} aria-label={`${shortLabel} ${v.status}`} />
+                </div>
+              );
+            })}
+          </div>
+        </button>
+      )}
+
+      {/* Silk Sleep Needed Formula Card */}
+      {isFitbitMode && dayPulse && (
+        <section
+          className="card"
+          style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".45rem" }}
+          aria-label="Sleep Needed"
+        >
+          <div className="split-row">
+            <span className="eyebrow">Sleep Needed</span>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: ".4rem" }}>
+              {dayPulse.sleep.recommendedBedtime && (
+                <span className="pill" style={{ fontSize: ".68rem" }}>
+                  Bed ~{dayPulse.sleep.recommendedBedtime}
+                </span>
+              )}
+              <strong className="num" style={{ fontSize: "1rem", color: "var(--sleep-color)" }}>
+                {formatDurationMinutes(Math.round(dayPulse.sleep.sleepNeedHours * 60))}
+              </strong>
+            </div>
+          </div>
+          {(() => {
+            const totalMins = Math.round(dayPulse.sleep.sleepNeedHours * 60);
+            const baseMins = 480;
+            const debtAddMins = Math.round(Math.min(1.0, (dayPulse.sleep.sleepDebtHours ?? 0) * 0.25) * 60);
+            const strainAddMins = Math.max(0, totalMins - baseMins - debtAddMins);
+            return (
+              <div className="sleep-need-formula num">
+                <span>
+                  Goal <strong style={{ color: "var(--text)" }}>8h 00m</strong>
+                </span>
+                <span>+</span>
+                <span>
+                  Strain <strong style={{ color: "var(--strain-color)" }}>+{formatDurationMinutes(strainAddMins)}</strong>
+                </span>
+                <span>+</span>
+                <span>
+                  Debt <strong style={{ color: "var(--accent)" }}>+{formatDurationMinutes(debtAddMins)}</strong>
+                </span>
+              </div>
+            );
+          })()}
+        </section>
       )}
 
       {/* Calorie Intake Linear Slider */}
@@ -469,20 +576,24 @@ export function HomeView({
       />
 
       {/* Weight Sparkline + Steps + Energy Balance Trends */}
-      <section className="card" style={{ display: "grid", gap: ".15rem" }} aria-label="Weight and steps snapshot">
+      <section
+        className="card"
+        style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".15rem" }}
+        aria-label="Weight and steps snapshot"
+      >
         <button
           type="button"
           className="compact-row-btn"
           onClick={() => onOpenTrends("weight")}
         >
-          <div style={{ minWidth: 0 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <strong style={{ fontSize: ".92rem" }}>Body Weight</strong>
-            <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem" }}>
+            <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               <span className="num">{displayWeight != null ? `${displayWeight.toFixed(1)} kg` : "No weight logged"}</span>
               {weightChange7d != null ? ` · ${weightChange7d > 0 ? "+" : ""}${weightChange7d.toFixed(1)} kg (7d)` : ""}
             </div>
           </div>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: ".5rem" }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: ".5rem", flexShrink: 0 }}>
             {weightSparkPoints && (
               <svg width="104" height="28" viewBox="0 0 104 28" aria-hidden="true">
                 <polyline
@@ -504,15 +615,15 @@ export function HomeView({
           className="compact-row-btn"
           onClick={() => onOpenTrends("energy")}
         >
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <strong style={{ fontSize: ".92rem" }}>Energy Balance Trend</strong>
-            <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem" }}>
+            <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {daily.energy?.totalKcal != null
                 ? `Burn ${fmtKcal(daily.energy.totalKcal)} kcal · 7D/30D/90D chart`
                 : "7D / 30D / 90D intake vs expenditure"}
             </div>
           </div>
-          <ChevronRight size={16} style={{ color: "var(--muted)" }} />
+          <ChevronRight size={16} style={{ color: "var(--muted)", flexShrink: 0 }} />
         </button>
 
         {isFitbitMode && daily.energy?.steps != null && (
@@ -521,20 +632,24 @@ export function HomeView({
             className="compact-row-btn"
             onClick={openTrainingView}
           >
-            <div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <strong style={{ fontSize: ".92rem" }}>Daily Steps</strong>
-              <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem" }}>
+              <div style={{ fontSize: ".76rem", color: "var(--muted)", marginTop: ".1rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 <span className="num">{daily.energy.steps.toLocaleString("en-GB")}</span> steps
                 {daily.energy.totalKcal != null ? ` · ${fmtKcal(daily.energy.totalKcal)} kcal burn` : ""}
               </div>
             </div>
-            <ChevronRight size={16} style={{ color: "var(--muted)" }} />
+            <ChevronRight size={16} style={{ color: "var(--muted)", flexShrink: 0 }} />
           </button>
         )}
       </section>
 
       {/* Capped Fuel (max 3 meals) & Same-Day Workouts (max 2) */}
-      <section className="card" style={{ display: "grid", gap: ".4rem" }} aria-label="Fuel and workouts">
+      <section
+        className="card"
+        style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".45rem" }}
+        aria-label="Fuel and workouts"
+      >
         <div className="split-row">
           <span className="eyebrow">Fuel Today</span>
           {daily.nutritionScore.grade && (
@@ -549,34 +664,34 @@ export function HomeView({
             Tap + below to quick-log a meal or scan a barcode.
           </p>
         ) : (
-          <div style={{ display: "grid", gap: ".35rem" }}>
+          <div className="fuel-meal-list">
             {cappedMeals.map((meal) => (
               <button
                 key={meal.id}
                 type="button"
-                className="compact-row-btn"
-                style={{ padding: ".48rem .65rem", background: "var(--surface-soft)", borderRadius: "14px", borderTop: 0 }}
+                className="fuel-meal-row"
                 onClick={() => onEditMeal(meal)}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: ".45rem", minWidth: 0 }}>
-                  <MealCategoryIcon category={meal.category} size={14} />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: ".84rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {meal.name}
-                    </div>
-                    <div style={{ fontSize: ".72rem", color: "var(--muted)" }}>
+                <div className="fuel-meal-main">
+                  <span className="fuel-meal-icon" aria-hidden="true">
+                    <MealCategoryIcon category={meal.category} size={15} />
+                  </span>
+                  <div className="fuel-meal-text">
+                    <div className="fuel-meal-title">{meal.name}</div>
+                    <div className="fuel-meal-meta">
                       {CATEGORY_LABELS[meal.category]} · {meal.localTime}
                     </div>
                   </div>
                 </div>
-                <div style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
+                <div className="fuel-meal-right">
                   {meal.qualityScore.grade && (
                     <span className={`pill score-pill-${meal.qualityScore.grade}`} style={{ fontSize: ".68rem", padding: ".05rem .4rem", minHeight: "20px" }}>
                       {meal.qualityScore.grade}
                     </span>
                   )}
-                  <strong className="num" style={{ fontSize: ".86rem" }}>
-                    {fmtKcal(meal.totals.calories)}
+                  <strong className="num" style={{ fontSize: ".84rem" }}>
+                    {fmtKcal(meal.totals.calories)}{" "}
+                    <span style={{ fontSize: ".7rem", fontWeight: 500, color: "var(--muted)" }}>kcal</span>
                   </strong>
                 </div>
               </button>
@@ -595,30 +710,41 @@ export function HomeView({
           </button>
         )}
 
-        {sameDayWorkouts.map((workout) => (
-          <button
-            key={workout.id}
-            type="button"
-            className="compact-row-btn"
-            style={{ marginTop: ".15rem" }}
-            onClick={openTrainingView}
-          >
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: ".45rem" }}>
-                <strong style={{ fontSize: ".9rem" }}>{workout.title}</strong>
-                <span className="pill" style={{ fontSize: ".68rem", padding: ".1rem .45rem" }}>
-                  {workout.source}
-                </span>
-              </div>
-              <div style={{ fontSize: ".75rem", color: "var(--muted)", marginTop: ".12rem" }}>
-                {formatDurationSeconds(workout.durationSeconds) ?? "—"}
-                {workout.mRaw > 0 ? ` · Muscular ${Math.round(strain?.muscularStrain ?? 0)}` : ""}
-                {workout.cRaw > 0 ? ` · Cardio ${Math.round(strain?.cardioStrain ?? 0)}` : ""}
-              </div>
+        {sameDayWorkouts.length > 0 && (
+          <div className="fuel-workouts-section">
+            <div className="split-row fuel-workouts-header">
+              <span className="eyebrow">Workouts Today</span>
+              <span style={{ fontSize: ".72rem", color: "var(--muted)" }}>
+                {sameDayWorkouts.length} {sameDayWorkouts.length === 1 ? "session" : "sessions"}
+              </span>
             </div>
-            <ChevronRight size={16} style={{ color: "var(--muted)" }} />
-          </button>
-        ))}
+            {sameDayWorkouts.map((workout) => (
+              <button
+                key={workout.id}
+                type="button"
+                className="compact-row-btn"
+                onClick={openTrainingView}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: ".45rem", minWidth: 0 }}>
+                    <strong style={{ fontSize: ".9rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {workout.title}
+                    </strong>
+                    <span className="pill" style={{ fontSize: ".68rem", padding: ".1rem .45rem", flexShrink: 0 }}>
+                      {workout.source}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: ".75rem", color: "var(--muted)", marginTop: ".12rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {formatDurationSeconds(workout.durationSeconds) ?? "—"}
+                    {workout.mRaw > 0 ? ` · Muscular ${Math.round(strain?.muscularStrain ?? 0)}` : ""}
+                    {workout.cRaw > 0 ? ` · Cardio ${Math.round(strain?.cardioStrain ?? 0)}` : ""}
+                  </div>
+                </div>
+                <ChevronRight size={16} style={{ color: "var(--muted)", flexShrink: 0 }} />
+              </button>
+            ))}
+          </div>
+        )}
       </section>
     </>
   );
