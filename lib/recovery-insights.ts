@@ -2,8 +2,7 @@ import { and, desc, eq, gte, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { addDays } from "./nutrition-model";
 import * as schema from "./schema";
-import { computePulseRecovery, type PulseRecoveryDayInput } from "./pulse-engine";
-import { getPulseInsightsForUser } from "./pulse-data";
+import { computePulseRecovery, selectNonOverlappingSleepSessions, type PulseRecoveryDayInput } from "./pulse-engine";
 
 export interface RecoverySleepInput {
   minutesAsleep: number;
@@ -223,33 +222,48 @@ export async function getRecoveryInsightsForUser(
   userId: string,
   day: string,
 ): Promise<RecoveryInsightView> {
-  const from21 = addDays(day, -21);
+  const from29 = addDays(day, -29);
   const yesterday = addDays(day, -1);
   const from7 = addDays(day, -7);
 
-  const [sleepRows, recoveryRows, strainRows] = await Promise.all([
+  const [sleepRows, sessionRows, recoveryRows, goalRows, strainRows] = await Promise.all([
     db
       .select()
       .from(schema.dailySleep)
       .where(
         and(
           eq(schema.dailySleep.userId, userId),
-          gte(schema.dailySleep.day, from21),
+          gte(schema.dailySleep.day, from29),
           lte(schema.dailySleep.day, day),
         ),
       )
       .orderBy(desc(schema.dailySleep.day)),
     db
       .select()
+      .from(schema.sleepSession)
+      .where(
+        and(
+          eq(schema.sleepSession.userId, userId),
+          gte(schema.sleepSession.day, from29),
+          lte(schema.sleepSession.day, day),
+        ),
+      ),
+    db
+      .select()
       .from(schema.dailyRecovery)
       .where(
         and(
           eq(schema.dailyRecovery.userId, userId),
-          gte(schema.dailyRecovery.day, from21),
+          gte(schema.dailyRecovery.day, from29),
           lte(schema.dailyRecovery.day, day),
         ),
       )
       .orderBy(desc(schema.dailyRecovery.day)),
+    db
+      .select()
+      .from(schema.sleepGoal)
+      .where(eq(schema.sleepGoal.userId, userId))
+      .orderBy(desc(schema.sleepGoal.effectiveFrom)),
     db
       .select({ day: schema.dailyStrain.day, overallStrain: schema.dailyStrain.overallStrain })
       .from(schema.dailyStrain)
@@ -262,16 +276,43 @@ export async function getRecoveryInsightsForUser(
       ),
   ]);
 
-  const todaySleep = sleepRows.find((r) => r.day === day) ?? null;
-  const todayRecovery = recoveryRows.find((r) => r.day === day) ?? null;
+  const sessionDays = new Set(sessionRows.map((r) => r.day));
+  const sleepRecords = selectNonOverlappingSleepSessions([
+    ...sessionRows.filter((r) => r.processed !== false).map((r) => ({ ...r, coverageComplete: false })),
+    ...sleepRows.filter((r) => !sessionDays.has(r.day)).map((r) => ({ ...r, isMainSleep: true, coverageComplete: false })),
+  ]);
+  const sleepByDay = new Map<string, (typeof sleepRecords)[number]>();
+  for (const s of sleepRecords) {
+    if (s.isMainSleep === false) continue;
+    const prev = sleepByDay.get(s.day);
+    if (!prev || s.minutesAsleep > prev.minutesAsleep) sleepByDay.set(s.day, s);
+  }
 
-  const priorSleeps = sleepRows.filter((r) => r.day < day && r.minutesAsleep > 0);
-  const priorRhrs = recoveryRows
-    .filter((r) => r.day < day && r.restingHrBpm != null)
-    .map((r) => r.restingHrBpm as number);
-  const priorHrvs = recoveryRows
-    .filter((r) => r.day < day && r.hrvRmssdMs != null)
-    .map((r) => r.hrvRmssdMs as number);
+  const recByDay = new Map<string, (typeof recoveryRows)[number]>();
+  for (const r of [...recoveryRows].sort((a, b) => a.syncedAt.getTime() - b.syncedAt.getTime() || a.source.localeCompare(b.source))) {
+    recByDay.set(r.day, r);
+  }
+
+  const todaySleep = sleepByDay.get(day) ?? null;
+  const todayRecovery = recByDay.get(day) ?? null;
+
+  const priorDays: PulseRecoveryDayInput[] = Array.from({ length: 28 }, (_, i) => {
+    const d = addDays(day, -28 + i);
+    const r = recByDay.get(d);
+    const s = sleepByDay.get(d);
+    return {
+      source: r?.source,
+      hrvRmssdMs: r?.hrvRmssdMs ?? null,
+      restingHrBpm: r?.restingHrBpm ?? null,
+      respiratoryRate: r?.respiratoryRate ?? null,
+      skinTempDeltaC: r?.skinTempDeltaC ?? null,
+      sleepHours: s && s.minutesAsleep > 0 ? s.minutesAsleep / 60 : null,
+    };
+  });
+
+  const priorSleeps = [...sleepByDay.values()].filter((r) => r.day < day && r.minutesAsleep > 0);
+  const priorRhrs = [...recByDay.values()].filter((r) => r.day < day && r.restingHrBpm != null).map((r) => r.restingHrBpm as number);
+  const priorHrvs = [...recByDay.values()].filter((r) => r.day < day && r.hrvRmssdMs != null).map((r) => r.hrvRmssdMs as number);
 
   const baseline: RecoveryBaselineInput = {
     avgSleepMinutes: avg(priorSleeps.map((s) => s.minutesAsleep)),
@@ -280,14 +321,15 @@ export async function getRecoveryInsightsForUser(
     sampleDays: Math.max(priorSleeps.length, priorRhrs.length, priorHrvs.length),
   };
 
+  const goalRow = goalRows.find((g) => g.effectiveFrom <= day);
+  const sleepGoalHours = goalRow ? goalRow.goalMinutes / 60 : 8;
   const yesterdayStrainRow = strainRows.find((s) => s.day === yesterday);
   const sevenDayAvgStrain =
     strainRows.length > 0 ? round1(strainRows.reduce((s, r) => s + r.overallStrain, 0) / strainRows.length) : null;
 
-  const pulse = await getPulseInsightsForUser(db, userId, day);
-  const view = computeRecoveryInsights({
+  return computeRecoveryInsights({
     day,
-    sleep: pulse.recovery.availability !== "waiting_for_sleep" && todaySleep
+    sleep: todaySleep
       ? {
           minutesAsleep: todaySleep.minutesAsleep,
           deepMinutes: todaySleep.deepMinutes ?? null,
@@ -306,11 +348,9 @@ export async function getRecoveryInsightsForUser(
         }
       : null,
     baseline,
+    priorDays,
+    sleepGoalHours,
     yesterdayStrain: yesterdayStrainRow ? round1(yesterdayStrainRow.overallStrain) : null,
     sevenDayAvgStrain,
   });
-  return { ...view, score: pulse.recovery.score, band: pulse.recovery.band,
-    confidence: pulse.recovery.score == null ? view.confidence : "medium",
-    summary: pulse.recovery.summary,
-  };
 }

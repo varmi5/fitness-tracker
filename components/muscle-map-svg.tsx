@@ -72,7 +72,9 @@ export function MuscleFreshnessMap({ entries, compact = false, onExpandAll }: Mu
           All muscles <ChevronRight size={13} aria-hidden="true" />
         </button>}
       </div>
-      <div className="muscle-stage">
+
+      {/* Condensed Anatomy Stage: Figure Left + Selectable Sets List Right */}
+      <div className="muscle-stage muscle-stage-split">
         <div className="muscle-stage-figure">
           <svg viewBox={side === "front" ? "0 70 724 1320" : "724 70 724 1320"}
             className="muscle-svg" role="group" aria-label={`${side === "front" ? "Front" : "Back"} muscle training history; select a group for details`}>
@@ -92,24 +94,32 @@ export function MuscleFreshnessMap({ entries, compact = false, onExpandAll }: Mu
                   if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(muscle); }
                 }}>
                 {parts.flatMap((part) => pathsFor(part).map((d, index) => <path key={`${part.slug}-${index}`}
-                  d={d} fill={colorFor(entry)} fillOpacity={selected === muscle ? 1 : 0.75}
+                  d={d} fill={colorFor(entry)} fillOpacity={selected === muscle ? 1 : 0.78}
                   stroke={selected === muscle ? "var(--text)" : "var(--surface)"}
-                  strokeWidth={selected === muscle ? 1.4 : 0.6} vectorEffect="non-scaling-stroke" />))}
+                  strokeWidth={selected === muscle ? 1.5 : 0.6} vectorEffect="non-scaling-stroke" />))}
               </g>;
             })}
           </svg>
         </div>
-        <div className="muscle-legend">
-          {[
-            ["var(--accent)", "Personal baseline", "3+ training days recorded"],
-            ["var(--muscle-recovering)", "Building baseline", "More history needed"],
-            ["var(--muscle-body)", "No history", "Recovery unknown"],
-          ].map(([color, title, description]) => <div key={title} className="muscle-legend-item">
-            <span className="muscle-chip-dot" style={{ background: color }} aria-hidden="true" />
-            <div><strong>{title}</strong><span>{description}</span></div>
-          </div>)}
+
+        <div className="muscle-side-list" aria-label="Muscles and 7-day working sets">
+          {normalized.map((entry) => (
+            <button
+              key={entry.muscle}
+              type="button"
+              aria-pressed={selected === entry.muscle}
+              className={`muscle-side-row ${selected === entry.muscle ? "is-selected" : ""}`}
+              onClick={() => select(entry.muscle, true)}
+            >
+              <span className="muscle-chip-dot" style={{ background: colorFor(entry) }} aria-hidden="true" />
+              <span className="muscle-side-name">{entry.muscle}</span>
+              <span className="num muscle-side-sets">{entry.weeklyWorkingSets}</span>
+            </button>
+          ))}
         </div>
       </div>
+
+      {/* Selected Muscle Focus Detail */}
       <div className="muscle-detail-bar" aria-live="polite" aria-atomic="true">
         <div className="split-row"><strong>{active.muscle}</strong>
           <span className="pill">{labelFor(active)}</span>
@@ -117,27 +127,39 @@ export function MuscleFreshnessMap({ entries, compact = false, onExpandAll }: Mu
         <div className="split-row" style={{ fontSize: ".8rem", color: "var(--muted)", gap: ".5rem", flexWrap: "wrap" }}>
           <span>{elapsedLabel(active)}</span><span className="num">{active.weeklyWorkingSets} sets (7d)</span>
         </div>
-        <p className="muted" style={{ fontSize: ".75rem", margin: 0 }}>
+        <p className="muted" style={{ fontSize: ".74rem", margin: 0 }}>
           {active.sessionLoadRatio != null
             ? `Latest session: ${active.sessionLoadRatio.toFixed(2)}× your prior typical load for this muscle. `
             : `${active.trainingDays ?? 0} distinct training days recorded. `}
           Recovery percentage unavailable.
         </p>
       </div>
-      <div className="muscle-pacing-banner">
-        <span className="muscle-pacing-icon" aria-hidden="true"><Info size={15} /></span>
-        <div><strong>Training history, not tissue recovery</strong>
-          <p>Exercise names estimate the muscles worked. Sets and elapsed time cannot confirm readiness or repair. Use soreness, performance and how you feel alongside this history.</p>
-        </div>
+
+      {/* Key & Notes Underneath */}
+      <div className="muscle-key-row" aria-label="Anatomy color key">
+        {[
+          ["var(--accent)", "Personal baseline", "3+ days"],
+          ["var(--muscle-recovering)", "Building baseline", "1–2 days"],
+          ["var(--muscle-body)", "No history", "Unknown"],
+        ].map(([color, title, sub]) => (
+          <div key={title} className="muscle-key-item">
+            <span className="muscle-chip-dot" style={{ background: color }} aria-hidden="true" />
+            <span>
+              <strong>{title}</strong>
+              {!compact && <small> ({sub})</small>}
+            </span>
+          </div>
+        ))}
       </div>
-      {!compact && <div className="muscle-chip-grid">
-        {normalized.map((entry) => <button key={entry.muscle} type="button" aria-pressed={selected === entry.muscle}
-          className={`muscle-chip ${selected === entry.muscle ? "is-selected" : ""}`} onClick={() => select(entry.muscle, true)}>
-          <span className="muscle-chip-dot" style={{ background: colorFor(entry) }} aria-hidden="true" />
-          <span className="muscle-chip-name">{entry.muscle}</span>
-          <span className="num muscle-chip-pct">{entry.weeklyWorkingSets} sets</span>
-        </button>)}
-      </div>}
+
+      {!compact && (
+        <div className="muscle-pacing-banner">
+          <span className="muscle-pacing-icon" aria-hidden="true"><Info size={15} /></span>
+          <div><strong>Training history, not tissue recovery</strong>
+            <p>Exercise names estimate the muscles worked. Sets and elapsed time cannot confirm readiness or repair. Use soreness, performance and how you feel alongside this history.</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

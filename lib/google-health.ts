@@ -367,6 +367,8 @@ const recoveryTypes = {
     field: "hrvRmssdMs" as const,
     sections: ["dailyHeartRateVariability", "heartRateVariability"],
     keys: [
+      "averageHeartRateVariabilityMilliseconds",
+      "deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds",
       "rmssdMilliseconds",
       "rootMeanSquareOfSuccessiveDifferencesMilliseconds",
       "rmssdMsAvg",
@@ -415,7 +417,7 @@ const recoveryTypes = {
   "run-vo2-max": {
     field: "vo2Max" as const,
     sections: ["runVo2Max", "vo2Max"],
-    keys: ["vo2Max", "mlPerKgPerMin", "vo2MaxAvg", "value"],
+    keys: ["runVo2Max", "vo2Max", "mlPerKgPerMin", "vo2MaxAvg", "value"],
     min: 0.1,
     max: 150,
   },
@@ -514,6 +516,15 @@ export function parseGoogleRecovery(type: RecoveryType, payload: unknown, timezo
       if (item[k] != null && item[k] !== "" && typeof item[k] !== "object") {
         rawVal = item[k];
         break;
+      }
+    }
+    if (rawVal == null || rawVal === "") {
+      if (type === "daily-sleep-temperature-derivations" && sectionObj) {
+        const nightly = Number(sectionObj.nightlyTemperatureCelsius);
+        const baseline = Number(sectionObj.baselineTemperatureCelsius);
+        if (Number.isFinite(nightly) && Number.isFinite(baseline)) {
+          rawVal = nightly - baseline;
+        }
       }
     }
     if (rawVal == null || rawVal === "") continue;
@@ -1277,13 +1288,15 @@ export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE):
     let minutesAsleep = summary.minutesAsleep != null ? Number(summary.minutesAsleep) : NaN;
     if (!Number.isFinite(minutesAsleep)) {
       const stageAsleep = (deepMinutes ?? 0) + (remMinutes ?? 0) + (lightMinutes ?? 0);
-      if (deepMinutes !== null && remMinutes !== null && lightMinutes !== null && stageAsleep > 0) {
+      if (stageAsleep > 0 && ((deepMinutes != null && remMinutes != null && lightMinutes != null) || !startTimeRaw || !endTimeRaw)) {
         minutesAsleep = stageAsleep;
       } else if (startTimeRaw && endTimeRaw && minutesAwake !== null) {
         const diffMin = Math.round((new Date(endTimeRaw).getTime() - new Date(startTimeRaw).getTime()) / 60000);
         if (Number.isFinite(diffMin) && diffMin > 0) {
           minutesAsleep = Math.max(0, diffMin - (minutesAwake ?? 0));
         }
+      } else if (stageAsleep > 0) {
+        minutesAsleep = stageAsleep;
       }
     }
 
@@ -1291,7 +1304,8 @@ export function parseGoogleSleep(payload: unknown, timezone = DEFAULT_TIMEZONE):
 
     const sleepStart = startTimeRaw && !Number.isNaN(new Date(startTimeRaw).getTime()) ? new Date(startTimeRaw).toISOString() : null;
     const sleepEnd = endTimeRaw && !Number.isNaN(new Date(endTimeRaw).getTime()) ? new Date(endTimeRaw).toISOString() : null;
-    const sessionId = typeof item.name === "string" ? item.name.split("/").at(-1)?.slice(0, 160) ?? null : null;
+    const resourceName = typeof item.dataPointName === "string" ? item.dataPointName : typeof item.name === "string" ? item.name : null;
+    const sessionId = resourceName ? resourceName.split("/").at(-1)?.slice(0, 160) ?? null : null;
     const stagesJson = (["DEEP", "REM", "LIGHT", "AWAKE"] as const)
       .filter((s) => stageMap.has(s))
       .map((s) => ({ stage: s, minutes: stageMap.get(s)! }));

@@ -4,6 +4,7 @@ import { hevyStatus } from "../lib/hevy";
 import { nutritionData } from "../lib/nutrition-data";
 import { localDay } from "../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../lib/runtime";
+import { getPulseInsightsForUser } from "../lib/pulse-data";
 import { getRecoveryInsightsForUser } from "../lib/recovery-insights";
 import { strainData } from "../lib/strain-data";
 import { trackerData } from "../lib/tracker-data";
@@ -44,8 +45,12 @@ export default async function Home() {
 
   const prefToday = localDay(new Date(), nutritionSettings.timezone);
   const home = await nutrition.homeSnapshot(prefToday, { canReadSleep: google.canReadSleep });
-  const strain = await strainSvc.computeDay(home.activeDay, strainSettings);
-  const recoveryInsights = await getRecoveryInsightsForUser(db, userId, home.activeDay);
+  const isFitbit = (home.settings.trackingMode ?? (home.settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit";
+  const [strain, recoveryInsights, pulseInsights] = await Promise.all([
+    strainSvc.computeDay(home.activeDay, strainSettings),
+    getRecoveryInsightsForUser(db, userId, home.activeDay),
+    isFitbit ? getPulseInsightsForUser(db, userId, home.activeDay).catch(() => null) : Promise.resolve(null),
+  ]);
 
   return (
     <Dashboard
@@ -63,6 +68,7 @@ export default async function Home() {
         strain,
         strainSettings,
         recoveryInsights,
+        pulseInsights,
         audit,
         mcpEnabled: Boolean(config.mcpEnabled),
         syncToken,

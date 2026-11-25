@@ -1435,6 +1435,8 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   flex-direction: column;
   align-items: center;
   gap: .35rem;
+  min-width: 0;
+  width: 100%;
 }
 .bevel-ring-svg-wrap {
   position: relative;
@@ -1464,9 +1466,13 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   letter-spacing: -0.01em;
 }
 .bevel-ring-sub {
-  font-size: .68rem;
+  font-size: .64rem;
+  line-height: 1.2;
+  text-align: center;
   color: var(--muted);
-  margin-top: -.2rem;
+  margin-top: -.15rem;
+  max-width: 100%;
+  overflow-wrap: break-word;
 }
 
 /* Bevel-inspired Calorie Intake Linear Slider */
@@ -1608,10 +1614,10 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 }
 .muscle-stage {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, .9fr);
-  gap: .65rem;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  gap: .55rem;
   align-items: center;
-  padding: .75rem .75rem;
+  padding: .65rem;
   border-radius: 18px;
   background: var(--bg);
   box-shadow: var(--silk-inset);
@@ -1620,38 +1626,83 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 188px;
+  min-height: 205px;
 }
 .muscle-svg {
-  width: 146px;
+  width: 136px;
   height: auto;
   max-width: 100%;
   filter: drop-shadow(0 2px 4px rgba(46, 48, 64, 0.08));
 }
-.muscle-legend {
+.muscle-side-list {
   display: grid;
-  gap: .65rem;
+  gap: .22rem;
+  min-width: 0;
 }
-.muscle-legend-item {
+.muscle-side-row {
   display: flex;
-  align-items: flex-start;
-  gap: .48rem;
-}
-.muscle-legend-item .muscle-chip-dot {
-  margin-top: .25rem;
-}
-.muscle-legend-item strong {
-  display: block;
-  font-size: .75rem;
-  line-height: 1.15;
+  align-items: center;
+  gap: .36rem;
+  padding: .24rem .45rem;
+  min-height: 26px;
+  border-radius: 9px;
+  background: transparent;
   color: var(--text);
+  font-size: .7rem;
+  border: 1px solid transparent;
+  text-align: left;
+  min-width: 0;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
-.muscle-legend-item span {
-  display: block;
-  font-size: .66rem;
-  line-height: 1.25;
+.muscle-side-row.is-selected {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: var(--silk-raised-sm);
+}
+.muscle-side-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.muscle-side-sets {
+  font-size: .68rem;
+  font-weight: 700;
   color: var(--muted);
-  margin-top: .1rem;
+  flex-shrink: 0;
+}
+.muscle-key-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .45rem .7rem;
+  padding: .15rem .25rem 0;
+  font-size: .7rem;
+  color: var(--muted);
+}
+.muscle-key-item {
+  display: inline-flex;
+  align-items: center;
+  gap: .32rem;
+}
+.muscle-key-item strong {
+  color: var(--text);
+  font-weight: 620;
+}
+.sticky-subpage-header {
+  position: sticky;
+  top: 0;
+  z-index: 25;
+  padding: .45rem .55rem;
+  margin-inline: -.25rem;
+  border-radius: 16px;
+  background: rgba(232, 234, 240, 0.9);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 12px rgba(46, 48, 64, 0.06);
 }
 .muscle-zone {
   cursor: pointer;
@@ -2124,6 +2175,11 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: .35rem;
+}
+.compact-telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .4rem;
 }
 .health-vital-cell {
   display: grid;
