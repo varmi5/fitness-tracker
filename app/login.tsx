@@ -61,7 +61,7 @@ export function Login({ signup, oauth = false }: { signup: boolean; oauth?: bool
 
   return <main className="auth-card">
     <div className="brand-lockup">
-      <span className="brand-badge"><McpBrandMark size={18} /></span>
+      <span className="brand-badge"><McpBrandMark size={24} /></span>
       <span>FitnessTrackr</span>
     </div>
     <h1>{oauth ? "Sign in" : "Welcome back"}</h1>

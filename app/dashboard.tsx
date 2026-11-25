@@ -911,7 +911,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       <header className="silk-topbar">
         <div className="brand-lockup">
           <span className="brand-badge">
-            <McpBrandMark size={15} />
+            <McpBrandMark size={24} />
           </span>
           <span style={{ fontSize: ".9rem", letterSpacing: "-0.015em" }}>FitnessTrackr</span>
         </div>
