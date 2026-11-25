@@ -57,6 +57,18 @@ const OnboardingWizard = dynamic(
   { ssr: false },
 );
 
+const PAST_WEEK_DAYS = 7;
+const CURRENT_DAY_TTL = 60_000;
+const PAST_DAY_TTL = 5 * 60_000;
+type DayPart = "daily" | "strain" | "pulse";
+type DayCacheEntry = {
+  daily?: DailyNutritionView;
+  strain?: DailyStrainView;
+  recovery?: RecoveryInsightView;
+  pulse?: PulseInsightsView | null;
+  fetchedAt?: Partial<Record<DayPart, number>>;
+};
+
 const tabs: { title: AppTab; icon: typeof HomeRingIcon | typeof Scale }[] = [
   { title: "Today", icon: HomeRingIcon },
   { title: "Training", icon: FitbitPulseIcon },
@@ -64,7 +76,7 @@ const tabs: { title: AppTab; icon: typeof HomeRingIcon | typeof Scale }[] = [
   { title: "Body", icon: Scale },
 ];
 
-export function Dashboard({ initial }: { initial: InitialAppData }) {
+export function Dashboard({ initial, savedAt }: { initial: InitialAppData; savedAt: number }) {
   const initialCalendarToday = initial.calendarToday ?? initial.today;
   const initialActiveDay = initial.activeDay ?? initial.daily.day ?? initialCalendarToday;
 
@@ -81,22 +93,23 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   const [homeDay, setHomeDay] = useState(initialActiveDay);
   const homeDayRef = useRef(initialActiveDay);
-  const homeRequest = useRef<AbortController | null>(null);
+  const homeSelection = useRef(0);
   const [homeDaily, setHomeDaily] = useState<DailyNutritionView>(initial.daily);
 
   const selectedDayRef = useRef(initialActiveDay);
-  const dayRequest = useRef<AbortController | null>(null);
+  const diarySelection = useRef(0);
   const actionLock = useRef(false);
   const syncTokenRef = useRef(initial.syncToken);
   const syncInFlight = useRef(false);
   const lastSyncCheckRef = useRef(Date.now());
-  const [dayLoading, setDayLoading] = useState(false);
+
   const lastToday = useRef(initialCalendarToday);
   const [selectedDay, setSelectedDay] = useState(initialActiveDay);
   const [selectedDaily, setSelectedDaily] = useState<DailyNutritionView>(initial.daily);
   const [homeStrain, setHomeStrain] = useState<DailyStrainView | undefined>(initial.strain);
   const [trainingDay, setTrainingDay] = useState(initialActiveDay);
   const trainingDayRef = useRef(initialActiveDay);
+  const trainingSelection = useRef(0);
   const [trainingStrain, setTrainingStrain] = useState<DailyStrainView | undefined>(initial.strain);
   const [trainingLoading, setTrainingLoading] = useState(false);
   const [strainSettings, setStrainSettings] = useState<StrainSettings | undefined>(initial.strainSettings);
@@ -106,47 +119,106 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [pulseInsights, setPulseInsights] = useState<PulseInsightsView | null>(initial.pulseInsights ?? null);
   const [trainingPulse, setTrainingPulse] = useState<PulseInsightsView | null>(initial.pulseInsights ?? null);
 
-  type DayCacheEntry = {
-    daily?: DailyNutritionView;
-    strain?: DailyStrainView;
-    recovery?: RecoveryInsightView;
-    pulse?: PulseInsightsView | null;
-  };
-  const dayCacheRef = useRef<Map<string, DayCacheEntry>>(
-    new Map([
-      [
-        initialActiveDay,
-        {
-          daily: initial.daily,
-          strain: initial.strain,
-          recovery: initial.recoveryInsights,
-          pulse: initial.pulseInsights ?? undefined,
-        },
-      ],
-    ]),
-  );
-  const [cacheNotice, setCacheNotice] = useState<string | null>(null);
-  function cacheDay(day: string, entry: DayCacheEntry) {
-    dayCacheRef.current.delete(day);
-    dayCacheRef.current.set(day, entry);
-    while (dayCacheRef.current.size > 180) dayCacheRef.current.delete(dayCacheRef.current.keys().next().value!);
+  const dayCacheRef = useRef(new Map<string, DayCacheEntry>());
+  const invalidatedAt = useRef(0);
+  const invalidatedDays = useRef(new Map<string, number>());
+  const discardedAt = useRef(0);
+  const expiredSession = useRef(false);
+  const dayRequests = useRef(new Map<string, { controller: AbortController; promise: Promise<void> }>());
+
+  function rememberDay(day: string, entry: DayCacheEntry) {
+    const cache = dayCacheRef.current;
+    cache.delete(day);
+    cache.set(day, entry);
+    if (cache.size > 180) cache.delete(cache.keys().next().value!);
+  }
+
+  function cacheDay(day: string, result: DayCacheEntry) {
+    const previous = dayCacheRef.current.get(day);
+    const entry = { ...previous, ...result, fetchedAt: { ...previous?.fetchedAt, ...result.fetchedAt } };
+    rememberDay(day, entry);
     if (initial.userId) void writeBrowserCache(initial.userId, `day:${day}`, entry);
   }
-  async function cachedDay(day: string) {
+
+  async function readSavedDay(day: string) {
     const memory = dayCacheRef.current.get(day);
-    if (memory) return memory;
-    if (!initial.userId) return undefined;
+    if (memory?.daily || !initial.userId) return memory;
+    const discardVersion = discardedAt.current;
     const saved = await readBrowserCache<DayCacheEntry>(initial.userId, `day:${day}`);
-    if (saved?.value.daily?.day === day) {
-      dayCacheRef.current.set(day, saved.value);
-      return saved.value;
-    }
-    return undefined;
+    const current = dayCacheRef.current.get(day);
+    if (discardVersion !== discardedAt.current || current?.daily || saved?.value.daily?.day !== day) return current;
+    const entry = { ...saved.value, ...current, fetchedAt: { ...saved.value.fetchedAt, ...current?.fetchedAt } };
+    rememberDay(day, entry);
+    return entry;
   }
-  const invalidateDayCache = (day?: string) => {
-    if (day) dayCacheRef.current.delete(day);
-    else dayCacheRef.current.clear();
-  };
+
+  function invalidateDayCache(day?: string, discard = false) {
+    // Keep stale snapshots usable while changes are revalidated.
+    if (day) invalidatedDays.current.set(day, Date.now());
+    else {
+      invalidatedAt.current = Date.now();
+      invalidatedDays.current.clear();
+    }
+    for (const [key, request] of dayRequests.current) {
+      if (day && !key.startsWith(`${day}:`)) continue;
+      request.controller.abort();
+      dayRequests.current.delete(key);
+    }
+    if (discard) {
+      discardedAt.current++;
+      dayCacheRef.current.clear();
+    }
+  }
+
+  function loadDayPart(day: string, part: DayPart): Promise<void> {
+    if (expiredSession.current) return Promise.resolve();
+    const timestamp = dayCacheRef.current.get(day)?.fetchedAt?.[part] ?? 0;
+    const ttl = day === todayRef.current ? CURRENT_DAY_TTL : PAST_DAY_TTL;
+    if (timestamp >= Math.max(invalidatedAt.current, invalidatedDays.current.get(day) ?? 0) && Date.now() - timestamp < ttl) return Promise.resolve();
+
+    const key = `${day}:${part}`;
+    const pending = dayRequests.current.get(key);
+    if (pending) return pending.promise;
+
+    const controller = new AbortController();
+    const endpoint = part === "daily" ? "nutrition" : part;
+    const promise = (async () => {
+      const response = await fetch(`/api/${endpoint}?day=${day}`, {
+        cache: "no-store",
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
+      });
+      if (controller.signal.aborted) return;
+      if (response.status === 401) {
+        expiredSession.current = true;
+        invalidateDayCache(undefined, true);
+        void clearBrowserCache().finally(() => window.location.reload());
+        return;
+      }
+      if (!response.ok) throw new Error(`Could not load ${endpoint} (HTTP ${response.status}).`);
+      const payload = await response.json();
+      if (controller.signal.aborted) return;
+      const fetchedAt = { [part]: Date.now() };
+      if (part === "daily" && payload?.day === day) cacheDay(day, { daily: payload, fetchedAt });
+      else if (part === "strain") cacheDay(day, { strain: payload.strain, recovery: payload.recoveryInsights, fetchedAt });
+      else if (part === "pulse") cacheDay(day, { pulse: payload, fetchedAt });
+      else throw new Error("The diary returned a different date.");
+    })().catch((error: unknown) => {
+      if (!controller.signal.aborted) throw error;
+    }).finally(() => {
+      if (dayRequests.current.get(key)?.controller === controller) dayRequests.current.delete(key);
+    });
+    dayRequests.current.set(key, { controller, promise });
+    return promise;
+  }
+
+  function showHomeDay(day: string, entry: DayCacheEntry | undefined) {
+    if (!entry?.daily) return;
+    setHomeDay(day);
+    setHomeDaily(entry.daily);
+    setHomeStrain(entry.strain);
+    setHomeRecovery(entry.recovery);
+    setPulseInsights(isFitbitMode ? entry.pulse ?? null : null);
+  }
 
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
@@ -197,14 +269,20 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     todayRef.current = initial.calendarToday; setToday(initial.calendarToday);
     activeHomeDayRef.current = initial.activeDay; setActiveHomeDay(initial.activeDay);
     setShowSleep(initial.showSleep);
-    if (homeDayRef.current === previousActive) { homeDayRef.current = initial.activeDay; setHomeDay(initial.activeDay); }
+    if (homeDayRef.current === previousActive) homeDayRef.current = initial.activeDay;
     if (selectedDayRef.current === previousActive) { selectedDayRef.current = initial.activeDay; setSelectedDay(initial.activeDay); }
-    cacheDay(initial.daily.day, { daily: initial.daily, strain: initial.strain, recovery: initial.recoveryInsights, pulse: initial.pulseInsights });
-    if (homeDayRef.current === initial.daily.day) {
-      setHomeDaily(initial.daily); setHomeStrain(initial.strain); setHomeRecovery(initial.recoveryInsights); setPulseInsights(initial.pulseInsights ?? null);
+    const existing = dayCacheRef.current.get(initial.daily.day);
+    if ((existing?.fetchedAt?.daily ?? 0) <= savedAt) {
+      cacheDay(initial.daily.day, {
+        daily: initial.daily, strain: initial.strain, recovery: initial.recoveryInsights,
+        pulse: initial.pulseInsights ?? undefined,
+        fetchedAt: { daily: savedAt, strain: savedAt, ...(initial.pulseInsights ? { pulse: savedAt } : {}) },
+      });
     }
-    if (selectedDayRef.current === initial.daily.day) setSelectedDaily(initial.daily);
-  }, [initial]);
+    const entry = dayCacheRef.current.get(initial.daily.day);
+    if (homeDayRef.current === initial.daily.day) showHomeDay(initial.daily.day, entry);
+    if (selectedDayRef.current === initial.daily.day && entry?.daily) setSelectedDaily(entry.daily);
+  }, [initial, savedAt]);
 
   useEffect(() => {
     if (!google.connected || (!google.mealSync?.pending && !google.mealSync?.failed)) return;
@@ -466,7 +544,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         }
         if (homeDayRef.current === todayRef.current) {
           homeDayRef.current = currentDay;
-          setHomeDay(currentDay);
+
         }
         activeHomeDayRef.current = currentDay;
         setActiveHomeDay(currentDay);
@@ -505,8 +583,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   }, [today]);
 
   useEffect(() => () => {
-    dayRequest.current?.abort();
-    homeRequest.current?.abort();
+    for (const request of dayRequests.current.values()) request.controller.abort();
+    dayRequests.current.clear();
   }, []);
 
   function navigate(next: AppTab) {
@@ -553,7 +631,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         setActiveHomeDay(hs.activeDay);
         if (homeDayRef.current === prevActive && hs.activeDay !== prevActive) {
           homeDayRef.current = hs.activeDay;
-          setHomeDay(hs.activeDay);
+
         }
       }
       setShowSleep(Boolean(hs.showSleep));
@@ -605,114 +683,83 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   async function refreshHistoryAndToday(focusDay = selectedDayRef.current, focusHomeDay = homeDayRef.current) {
     invalidateDayCache();
     const calendarToday = todayRef.current;
-    const [histRes, homeRes, dayRes] = await Promise.all([
+    const [history] = await Promise.all([
       fetch(`/api/nutrition?from=${addDays(calendarToday, -29)}&to=${calendarToday}`, { cache: "no-store" }),
-      fetch(`/api/nutrition?day=${focusHomeDay}`, { cache: "no-store" }),
-      focusDay === focusHomeDay ? Promise.resolve(null) : fetch(`/api/nutrition?day=${focusDay}`, { cache: "no-store" }),
+      loadDayPart(focusHomeDay, "daily"),
+      focusDay === focusHomeDay ? undefined : loadDayPart(focusDay, "daily"),
     ]);
-    if (histRes.status === 401 || homeRes.status === 401 || dayRes?.status === 401) {
+    if (history.status === 401) {
+      invalidateDayCache(undefined, true);
       void clearBrowserCache().finally(() => window.location.reload());
       return;
     }
-    if (!histRes.ok || !homeRes.ok || (dayRes && !dayRes.ok)) throw new Error("Could not refresh the diary.");
-    if (histRes.ok) setHistory30(await histRes.json());
-    if (homeRes.ok) {
-      const freshHome = await homeRes.json();
-      cacheDay(focusHomeDay, { ...dayCacheRef.current.get(focusHomeDay), daily: freshHome });
-      if (homeDayRef.current === focusHomeDay) setHomeDaily(freshHome);
-      if (focusDay === focusHomeDay && selectedDayRef.current === focusDay) setSelectedDaily(freshHome);
+    if (!history.ok) throw new Error("Could not refresh the diary.");
+    setHistory30(await history.json());
+    if (homeDayRef.current === focusHomeDay) {
+      showHomeDay(focusHomeDay, dayCacheRef.current.get(focusHomeDay));
+      void refreshHomeMetrics(focusHomeDay);
     }
-    if (dayRes?.ok) {
-      const value = await dayRes.json();
-      cacheDay(focusDay, { ...dayCacheRef.current.get(focusDay), daily: value });
-      if (selectedDayRef.current === focusDay) setSelectedDaily(value);
+    const diary = dayCacheRef.current.get(focusDay)?.daily;
+    if (selectedDayRef.current === focusDay && diary) {
+      setSelectedDay(focusDay);
+      setSelectedDaily(diary);
     }
   }
 
-  async function selectHomeDay(day: string) {
-    const clamped = day > todayRef.current ? todayRef.current : day;
-    homeRequest.current?.abort();
-    homeDayRef.current = clamped;
-    setHomeDay(clamped);
-
-    const cached = await cachedDay(clamped);
-    if (homeDayRef.current !== clamped) return;
-    setCacheNotice(cached?.daily ? "Saved data · refreshing this date…" : null);
-    setHomeStrain(cached?.strain); setHomeRecovery(cached?.recovery); setPulseInsights(cached?.pulse ?? null);
-    if (cached?.daily) setHomeDaily(cached.daily);
-    if (cached?.strain) setHomeStrain(cached.strain);
-    if (cached?.recovery) setHomeRecovery(cached.recovery);
-    if (cached?.pulse !== undefined) setPulseInsights(cached.pulse);
-
-    const controller = new AbortController();
-    homeRequest.current = controller;
-    const fitbitActive = openWearables?.connected ||
+  async function refreshHomeMetrics(day: string) {
+    const wearable = openWearables?.connected ||
       (settings.trackingMode ?? (settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit";
+    await Promise.allSettled([loadDayPart(day, "strain"), wearable ? loadDayPart(day, "pulse") : undefined]);
+    if (homeDayRef.current === day) showHomeDay(day, dayCacheRef.current.get(day));
+  }
+
+  async function selectHomeDay(day: string) {
+    const target = day > todayRef.current ? todayRef.current : day;
+    const selection = ++homeSelection.current;
+    homeDayRef.current = target;
+    const cached = dayCacheRef.current.get(target)?.daily
+      ? dayCacheRef.current.get(target)
+      : await readSavedDay(target);
+    if (homeSelection.current !== selection || homeDayRef.current !== target) return;
+    showHomeDay(target, cached);
+
     try {
-      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
-      // Start optional metrics concurrently, but never make the diary wait for them.
-      const strainRequest = fetch(`/api/strain?day=${clamped}`, { signal, cache: "no-store" }).catch(() => null);
-      const pulseRequest = fitbitActive ? fetch(`/api/pulse?day=${clamped}`, { signal, cache: "no-store" }).catch(() => null) : Promise.resolve(null);
-      const res = await fetch(`/api/nutrition?day=${clamped}`, { signal, cache: "no-store" });
-      if (res.status === 401) {
-        void clearBrowserCache().finally(() => window.location.reload());
-        return;
+      await loadDayPart(target, "daily");
+      if (homeSelection.current === selection && homeDayRef.current === target) {
+        showHomeDay(target, dayCacheRef.current.get(target));
+        void refreshHomeMetrics(target);
       }
-      if (!res.ok) throw new Error("Could not load that date.");
-      const value = await res.json();
-      const nextCache: DayCacheEntry = { ...dayCacheRef.current.get(clamped), daily: value };
-      cacheDay(clamped, nextCache);
-      if (homeDayRef.current === clamped) { setHomeDaily(value); setCacheNotice(null); }
-      const [strainRes, pulseRes] = await Promise.all([strainRequest, pulseRequest]);
-      if (controller.signal.aborted) return;
-      if (strainRes?.ok) {
-        const strainJson = await strainRes.json();
-        if (strainJson?.strain) {
-          nextCache.strain = strainJson.strain;
-          if (homeDayRef.current === clamped) setHomeStrain(strainJson.strain);
-        }
-        if (strainJson?.recoveryInsights) {
-          nextCache.recovery = strainJson.recoveryInsights;
-          if (homeDayRef.current === clamped) setHomeRecovery(strainJson.recoveryInsights);
-        }
-      }
-      if (pulseRes?.ok) {
-        const pulseJson = (await pulseRes.json()) as PulseInsightsView;
-        nextCache.pulse = pulseJson;
-        if (homeDayRef.current === clamped) setPulseInsights(pulseJson);
-      }
-      cacheDay(clamped, nextCache);
-      if (homeDayRef.current === clamped) setCacheNotice(null);
-    } catch (error) {
-      if (!controller.signal.aborted && homeDayRef.current === clamped) {
-        setCacheNotice(cached?.daily ? "Saved data · unable to refresh right now" : "Connection interrupted. Select this date again to retry.");
+    } catch {
+      if (homeSelection.current === selection && homeDayRef.current === target && !cached?.daily) {
+        homeDayRef.current = homeDay;
+        showToast("Could not load that date. Try again.", "error");
       }
     }
   }
 
   async function selectTrainingDay(day: string) {
-    const clamped = day > todayRef.current ? todayRef.current : day;
-    trainingDayRef.current = clamped;
-    setTrainingDay(clamped);
-    setTrainingLoading(true);
+    const target = day > todayRef.current ? todayRef.current : day;
+    const selection = ++trainingSelection.current;
+    trainingDayRef.current = target;
+    setTrainingDay(target);
+    const cached = dayCacheRef.current.get(target);
+    if (cached?.strain) {
+      setTrainingStrain(cached.strain);
+      setTrainingRecovery(cached.recovery);
+    }
+    setTrainingLoading(!cached?.strain);
     try {
-      const res = await fetch(`/api/strain?day=${clamped}`, { cache: "no-store" });
-      if (res.status === 401) {
-        void clearBrowserCache().finally(() => window.location.reload());
-        return;
+      await readSavedDay(target);
+      await loadDayPart(target, "strain");
+      if (trainingSelection.current === selection && trainingDayRef.current === target) {
+        const entry = dayCacheRef.current.get(target);
+        if (entry?.strain) setTrainingStrain(entry.strain);
+        setTrainingRecovery(entry?.recovery);
       }
-      if (!res.ok) throw new Error("Could not load strain for that date.");
-      const json = await res.json();
-      if (trainingDayRef.current === clamped && json?.strain) {
-        setTrainingStrain(json.strain);
-      }
-      if (trainingDayRef.current === clamped && json?.recoveryInsights) {
-        setTrainingRecovery(json.recoveryInsights);
-      }
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : "Could not load strain.", "error");
+    } catch {
+      if (trainingSelection.current === selection && !cached?.strain) showToast("Could not load strain for that date.", "error");
     } finally {
-      setTrainingLoading(false);
+      if (trainingSelection.current === selection) setTrainingLoading(false);
     }
   }
 
@@ -728,6 +775,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       if (!res.ok) throw new Error(json.message ?? "Could not recompute strain.");
       if (json?.strain) {
         invalidateDayCache(day);
+        cacheDay(day, { strain: json.strain, recovery: json.recoveryInsights, fetchedAt: { strain: Date.now() } });
         if (trainingDayRef.current === day) setTrainingStrain(json.strain);
         if (homeDayRef.current === day) setHomeStrain(json.strain);
       }
@@ -759,6 +807,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Could not save strain settings.");
       if (json?.settings) setStrainSettings(json.settings);
+      invalidateDayCache();
       if (json?.strain) {
         if (homeDayRef.current === todayRef.current) setHomeStrain(json.strain);
         if (trainingDayRef.current === todayRef.current) setTrainingStrain(json.strain);
@@ -840,35 +889,29 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   }
 
   async function selectDay(day: string) {
-    dayRequest.current?.abort();
+    const selection = ++diarySelection.current;
     selectedDayRef.current = day;
-    setSelectedDay(day);
-    if (day === homeDaily.day) {
-      setSelectedDaily(homeDaily);
-      setDayLoading(false);
-      return;
+    const cached = dayCacheRef.current.get(day)?.daily
+      ? dayCacheRef.current.get(day)
+      : await readSavedDay(day);
+    if (diarySelection.current !== selection || selectedDayRef.current !== day) return;
+    if (cached?.daily) {
+      setSelectedDaily(cached.daily);
+      setSelectedDay(day);
     }
-    const cached = await cachedDay(day);
-    if (selectedDayRef.current !== day) return;
-    if (cached?.daily) setSelectedDaily(cached.daily);
-    setCacheNotice(cached?.daily ? "Saved diary · refreshing…" : null);
-    const controller = new AbortController();
-    dayRequest.current = controller;
-    setDayLoading(!cached?.daily);
+
     try {
-      const res = await fetch(`/api/nutrition?day=${day}`, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]), cache: "no-store" });
-      if (res.status === 401) {
-        void clearBrowserCache().finally(() => window.location.reload());
-        return;
+      await loadDayPart(day, "daily");
+      const daily = dayCacheRef.current.get(day)?.daily;
+      if (diarySelection.current === selection && selectedDayRef.current === day && daily) {
+        setSelectedDaily(daily);
+        setSelectedDay(day);
       }
-      if (!res.ok) throw new Error("Could not load that date. Select it again to retry.");
-      const value = await res.json();
-      cacheDay(day, { ...dayCacheRef.current.get(day), daily: value });
-      if (selectedDayRef.current === day) { setSelectedDaily(value); setCacheNotice(null); }
     } catch {
-      if (!controller.signal.aborted && selectedDayRef.current === day) setCacheNotice(cached?.daily ? "Saved diary · unable to refresh right now" : "Connection interrupted. Select this date again to retry.");
-    } finally {
-      if (selectedDayRef.current === day) setDayLoading(false);
+      if (diarySelection.current === selection && selectedDayRef.current === day && !cached?.daily) {
+        selectedDayRef.current = selectedDay;
+        showToast("Could not load that date. Try again.", "error");
+      }
     }
   }
 
@@ -913,11 +956,18 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message ?? "Could not save.");
 
-      if (action.action === "delete") await clearBrowserCache();
+      if (action.action === "delete") {
+        invalidateDayCache(undefined, true);
+        await clearBrowserCache();
+      }
       const savedDay = typeof payload.day === "object" ? payload.day : payload.meals ? payload : null;
       if (savedDay) {
-        if (savedDay.day === homeDayRef.current) setHomeDaily(savedDay);
-        if (savedDay.day === selectedDayRef.current) setSelectedDaily(savedDay);
+        cacheDay(savedDay.day, { daily: savedDay, fetchedAt: { daily: Date.now() } });
+        if (savedDay.day === homeDayRef.current) showHomeDay(savedDay.day, dayCacheRef.current.get(savedDay.day));
+        if (savedDay.day === selectedDayRef.current) {
+          setSelectedDay(savedDay.day);
+          setSelectedDaily(savedDay);
+        }
       }
       if (action.action === "target" || action.action === "macro-targets" || action.action === "preferences") {
         setSettings(payload);
@@ -1088,6 +1138,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Could not disconnect.");
       if (payload.status) setGoogle(payload.status);
+      invalidateDayCache(undefined, true);
+      await clearBrowserCache();
       await refreshAccountAndMeta();
       await Promise.all([refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current), refreshTracker()]);
       void refreshSyncToken().catch(() => null);
@@ -1157,8 +1209,8 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Could not disconnect Open Wearables.");
       if (payload.status) setOpenWearables(payload.status);
+      invalidateDayCache(undefined, true);
       await clearBrowserCache();
-      invalidateDayCache();
       await refreshAccountAndMeta();
       await Promise.all([
         refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
@@ -1206,82 +1258,47 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   }
 
   useEffect(() => {
-    if (!isFitbitMode) {
-      setPulseInsights(null);
-      return;
-    }
-    const cachedPulse = dayCacheRef.current.get(homeDay)?.pulse;
-    if (cachedPulse && cachedPulse.day === homeDay) {
-      setPulseInsights(cachedPulse);
-      return;
-    }
-    const controller = new AbortController();
-    fetch(`/api/pulse?day=${homeDay}`, { cache: "no-store", signal: controller.signal })
-      .then(async (res) => (res.ok ? ((await res.json()) as PulseInsightsView) : null))
-      .then((data) => {
-        if (!controller.signal.aborted && data) {
-          cacheDay(homeDay, { ...dayCacheRef.current.get(homeDay), pulse: data });
-          setPulseInsights(data);
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      controller.abort();
-    };
-  }, [
-    isFitbitMode,
-    homeDay,
-    homeStrain?.computedAt,
-    tracker.settings.birthDate,
-    tracker.settings.biologicalSex,
-    tracker.settings.heightCm,
-  ]);
+    if (isFitbitMode) void refreshHomeMetrics(homeDayRef.current);
+    else setPulseInsights(null);
+  }, [isFitbitMode]);
 
-  // Idle adjacent-day prefetch so Prev/Next day stepping renders instantaneously
+  // Warm today and the previous seven dates after rendering the initial view.
   useEffect(() => {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      const neighbors = [addDays(homeDay, -1)];
-      if (homeDay < todayRef.current) neighbors.push(addDays(homeDay, 1));
-      for (const targetDay of neighbors) {
-        if (dayCacheRef.current.get(targetDay)?.daily) continue;
-        void fetch(`/api/nutrition?day=${targetDay}`, { signal: controller.signal, cache: "no-store" })
-          .then(r => r.ok ? r.json() as Promise<DailyNutritionView> : null)
-          .then(daily => { if (!controller.signal.aborted && daily) cacheDay(targetDay, { ...dayCacheRef.current.get(targetDay), daily }); })
-          .catch(() => undefined);
-      }
-    }, 800);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [homeDay, isFitbitMode]);
-
-  useEffect(() => {
-    if (!isFitbitMode || trainingDay === homeDay) {
-      setTrainingPulse(null);
-      return;
-    }
     let active = true;
-    setTrainingPulse((prev) => (prev?.day === trainingDay ? prev : null));
-    fetch(`/api/pulse?day=${trainingDay}`, { cache: "no-store" })
-      .then(async (res) => (res.ok ? ((await res.json()) as PulseInsightsView) : null))
-      .then((data) => {
-        if (active && data) setTrainingPulse(data);
+    const timer = window.setTimeout(() => {
+      const days = Array.from({ length: PAST_WEEK_DAYS + 1 }, (_, offset) => addDays(today, -offset));
+      void (async () => {
+        for (const day of days) {
+          if (!active) return;
+          await readSavedDay(day);
+        }
+        for (let i = 0; i < days.length; i += 2) {
+          if (!active) return;
+          await Promise.allSettled(days.slice(i, i + 2).map((day) => loadDayPart(day, "daily")));
+        }
+        for (const day of days) {
+          if (!active) return;
+          await Promise.allSettled([loadDayPart(day, "strain"), isFitbitMode ? loadDayPart(day, "pulse") : undefined]);
+          if (active && homeDayRef.current === day) showHomeDay(day, dayCacheRef.current.get(day));
+        }
+      })();
+    }, 150);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [today, isFitbitMode]);
+
+  useEffect(() => {
+    if (tab !== "Training" || !isFitbitMode || trainingDay === homeDay) return;
+    let active = true;
+    const cached = dayCacheRef.current.get(trainingDay);
+    setTrainingPulse(cached?.pulse ?? null);
+    void readSavedDay(trainingDay)
+      .then(() => loadDayPart(trainingDay, "pulse"))
+      .then(() => {
+        if (active) setTrainingPulse(dayCacheRef.current.get(trainingDay)?.pulse ?? null);
       })
       .catch(() => undefined);
-    return () => {
-      active = false;
-    };
-  }, [
-    isFitbitMode,
-    trainingDay,
-    homeDay,
-    trainingStrain?.computedAt,
-    tracker.settings.birthDate,
-    tracker.settings.biologicalSex,
-    tracker.settings.heightCm,
-  ]);
+    return () => { active = false; };
+  }, [tab, isFitbitMode, trainingDay, homeDay, trainingStrain?.computedAt]);
 
   return (
     <main className="shell">
@@ -1346,7 +1363,6 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         </div>
       </header>
 
-      {cacheNotice && <p className="cache-status" role="status">{cacheNotice}</p>}
       <div className="screen" key={tab}>
         {tab === "Today" && homeDaily.day !== homeDay && <p className="startup-status" role="status">Loading {homeDay}…</p>}
         {tab === "Today" && homeDaily.day === homeDay && (
@@ -1380,7 +1396,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             selectedDay={trainingDay}
             strain={trainingStrain}
             recoveryInsights={trainingRecovery}
-            pulseInsights={trainingDay === homeDay ? pulseInsights : trainingPulse}
+            pulseInsights={isFitbitMode ? (trainingDay === homeDay ? pulseInsights : trainingPulse) : null}
             strainSettings={strainSettings}
             hevy={hevy}
             google={google}
@@ -1404,7 +1420,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             tracker={tracker}
             settings={settings}
             busy={busy}
-            loading={dayLoading || selectedDaily.day !== selectedDay}
+            loading={selectedDaily.day !== selectedDay}
             onSelectDay={(d) => void selectDay(d)}
             onLogMeal={() => openNewMeal(selectedDay)}
             onEditMeal={openEditMeal}

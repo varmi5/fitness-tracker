@@ -1,3 +1,4 @@
+import { logDiaryLoadFailure } from "../../../lib/diary-load-diagnostics";
 import { macroTargetInput } from "../../../lib/macro-targets";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -79,6 +80,7 @@ export async function GET(request: Request) {
     const homeState = await data.homeState({ canReadSleep: google.canReadSleep, timezone: settings.timezone });
     return json({ settings, google, audit, homeState, mcpEnabled: getAuthConfig().mcpEnabled });
   } catch (error) {
+    if (!(error instanceof z.ZodError) && !(error instanceof NutritionError)) logDiaryLoadFailure("nutrition", error);
     return handleError(error);
   }
 }

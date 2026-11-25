@@ -1,3 +1,4 @@
+import { logDiaryLoadFailure } from "../../../lib/diary-load-diagnostics";
 import { z } from "zod";
 import { historyInput } from "../../../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
@@ -42,6 +43,7 @@ export async function GET(request: Request) {
     return json({ settings: await strain.getSettings() });
   } catch (error) {
     if (error instanceof z.ZodError) return json({ message: error.issues[0]?.message ?? "Invalid request." }, 400);
+    logDiaryLoadFailure("strain", error);
     return json({ message: "Could not load strain data." }, 500);
   }
 }
