@@ -28,6 +28,13 @@ import {
   type PulseSleepResult,
 } from "./pulse-engine";
 import * as schema from "./schema";
+import {
+  dedupeWorkoutsAcrossSources,
+  pickDailyEnergyRow,
+  pickRecoveryRowForDay,
+  selectDailyHrStream,
+  workoutsOverlap,
+} from "./source-priority";
 import { computeTargetStrain, type TargetStrainRecommendation } from "./strain-engine";
 import { getTrainingLoadSummary } from "./training-load";
 
@@ -115,7 +122,11 @@ export async function getPulseInsightsForUser(
       .where(and(eq(schema.hevyWorkout.userId, userId), gte(schema.hevyWorkout.day, from180), lte(schema.hevyWorkout.day, day)))
       .orderBy(asc(schema.hevyWorkout.day)),
     db
-      .select({ recordedAt: schema.heartRateSample.recordedAt, bpm: schema.heartRateSample.bpm })
+      .select({
+        source: schema.heartRateSample.source,
+        recordedAt: schema.heartRateSample.recordedAt,
+        bpm: schema.heartRateSample.bpm,
+      })
       .from(schema.heartRateSample)
       .where(and(eq(schema.heartRateSample.userId, userId), eq(schema.heartRateSample.day, day)))
       .orderBy(asc(schema.heartRateSample.recordedAt)),
@@ -143,10 +154,10 @@ export async function getPulseInsightsForUser(
   ]);
 
   const timezone = nutritionPrefRows[0]?.timezone ?? "Europe/London";
+  const primaryRecoverySource = nutritionPrefRows[0]?.primaryRecoverySource ?? "auto";
+  const primaryWorkoutSource = nutritionPrefRows[0]?.primaryWorkoutSource ?? "auto";
   const goalForDay = (d: string) => (goalRows.find((g) => g.effectiveFrom <= d)?.goalMinutes ?? 480) / 60;
-  const recByDay = new Map<string, (typeof recoveryRows)[number]>();
-  // Prefer the most recently synced record; ties are stable by source.
-  for (const r of [...recoveryRows].sort((a, b) => a.syncedAt.getTime() - b.syncedAt.getTime() || a.source.localeCompare(b.source))) recByDay.set(r.day, r);
+  const recByDay = pickRecoveryRowForDay(recoveryRows, primaryRecoverySource);
   const sessionDays = new Set(sessionRows.map((r) => r.day));
   const sleepRecords: SleepNightRecord[] = selectNonOverlappingSleepSessions([
     ...sessionRows.filter((r) => r.processed !== false).map((r) => ({ ...r, coverageComplete: false })),
@@ -159,10 +170,16 @@ export async function getPulseInsightsForUser(
     if (!previous || s.minutesAsleep > previous.minutesAsleep) sleepByDay.set(s.day, s);
   }
 
-  const energyByDay = new Map<string, (typeof energyRows)[number]>();
+  const energyByDayRaw = new Map<string, (typeof energyRows)[number][]>();
   for (const e of energyRows) {
-    const prev = energyByDay.get(e.day);
-    if (!prev || e.source === "google") energyByDay.set(e.day, e);
+    const list = energyByDayRaw.get(e.day) ?? [];
+    list.push(e);
+    energyByDayRaw.set(e.day, list);
+  }
+  const energyByDay = new Map<string, (typeof energyRows)[number]>();
+  for (const [d, rows] of energyByDayRaw.entries()) {
+    const chosen = pickDailyEnergyRow(rows, primaryRecoverySource);
+    if (chosen) energyByDay.set(d, chosen);
   }
 
   const strainByDay = new Map<string, (typeof strainRows)[number]>();
@@ -237,12 +254,19 @@ export async function getPulseInsightsForUser(
   const strainTarget = computeTargetStrain(recovery.score, { acwr, priorEffort });
 
   const maxHr = trainingPrefRows[0]?.maxHrBpm ?? 190;
-  const todayHrSamples = hrDayRows.map((h) => ({ recordedAt: h.recordedAt.toISOString(), bpm: h.bpm }));
+  const todayHrSamples = selectDailyHrStream(hrDayRows, primaryRecoverySource).map((h) => ({
+    recordedAt: h.recordedAt.toISOString(),
+    bpm: h.bpm,
+  }));
+  const dedupedDayWorkouts = dedupeWorkoutsAcrossSources(
+    workoutRows.filter((w) => w.day === day),
+    primaryWorkoutSource,
+  );
   const todayWorkouts = [
-    ...workoutRows
-      .filter((w) => w.day === day && w.startTime && w.endTime)
+    ...dedupedDayWorkouts
+      .filter((w) => w.startTime && w.endTime)
       .map((w) => ({
-        id: `google:${w.sessionId}`,
+        id: `${w.source}:${w.sessionId}`,
         startMs: w.startTime!.getTime(),
         endMs: w.endTime!.getTime(),
       })),
@@ -281,24 +305,42 @@ export async function getPulseInsightsForUser(
     [...recoveryRows].reverse().find((r) => r.vo2Max != null)?.vo2Max ?? null;
   const fitnessLevel = computeFitnessLevel(latestVo2, age, sex);
 
-  // Build 180-day HealthspanDayInput array
+  // Build 180-day HealthspanDayInput array (deduplicated per day across wearables and Hevy)
   const workoutsByDay = new Map<string, { strengthMin: number; cardioMin: number; vigorousMin: number }>();
+  const hevyByDayMap = new Map<string, (typeof hevyRows)[number][]>();
+  const hevyMatchedSessionIds = new Set(
+    hevyRows.map((h) => h.matchedGoogleSessionId).filter((v): v is string => Boolean(v)),
+  );
   for (const h of hevyRows) {
+    const list = hevyByDayMap.get(h.day) ?? [];
+    list.push(h);
+    hevyByDayMap.set(h.day, list);
+
     const cur = workoutsByDay.get(h.day) ?? { strengthMin: 0, cardioMin: 0, vigorousMin: 0 };
     cur.strengthMin += Math.round((h.durationSeconds ?? 0) / 60);
     workoutsByDay.set(h.day, cur);
   }
+  const rawWorkoutsByDay = new Map<string, (typeof workoutRows)[number][]>();
   for (const w of workoutRows) {
-    const cur = workoutsByDay.get(w.day) ?? { strengthMin: 0, cardioMin: 0, vigorousMin: 0 };
-    const mins = Math.round((w.durationSeconds ?? 0) / 60);
-    if (/strength|weight|crossfit|calisthenics/i.test(w.exerciseType || w.title)) {
-      cur.strengthMin += mins;
-    } else if (w.activeZoneMinutes != null && w.activeZoneMinutes > 0) {
-      cur.cardioMin += mins; // AZM does not identify elapsed time in individual HR zones.
-    } else {
-      cur.cardioMin += mins;
+    if (hevyMatchedSessionIds.has(w.sessionId)) continue;
+    const list = rawWorkoutsByDay.get(w.day) ?? [];
+    list.push(w);
+    rawWorkoutsByDay.set(w.day, list);
+  }
+  for (const [d, rows] of rawWorkoutsByDay.entries()) {
+    const deduped = dedupeWorkoutsAcrossSources(rows, primaryWorkoutSource);
+    const hevyForDay = hevyByDayMap.get(d) ?? [];
+    for (const w of deduped) {
+      if (hevyForDay.some((h) => workoutsOverlap(h, w))) continue;
+      const cur = workoutsByDay.get(d) ?? { strengthMin: 0, cardioMin: 0, vigorousMin: 0 };
+      const mins = Math.round((w.durationSeconds ?? 0) / 60);
+      if (/strength|weight|crossfit|calisthenics/i.test(w.exerciseType || w.title)) {
+        cur.strengthMin += mins;
+      } else {
+        cur.cardioMin += mins;
+      }
+      workoutsByDay.set(d, cur);
     }
-    workoutsByDay.set(w.day, cur);
   }
 
   const allDaysSet = new Set<string>([

@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { ArrowLeft, CalendarDays, Plus, RefreshCw, Scale, User } from "lucide-react";
+import { ArrowLeft, CalendarDays, Check, Plus, RefreshCw, Scale, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   FitbitPulseIcon,
@@ -19,6 +19,7 @@ import type {
   DailyStrainView,
   HevyIntegrationStatus,
   InitialAppData,
+  OpenWearablesIntegrationStatus,
   PulseInsightsView,
   RecoveryInsightView,
   StrainSettings,
@@ -130,7 +131,9 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
-  const lastAutoSyncRef = useRef(Date.now());
+  const [openWearables, setOpenWearables] = useState<OpenWearablesIntegrationStatus | undefined>(initial.openWearables);
+  const lastAutoSyncRef = useRef(0);
+  const lastRolloverSyncDayRef = useRef(initialCalendarToday);
 
   const [audit, setAudit] = useState(initial.audit);
   const [busy, setBusy] = useState(false);
@@ -170,13 +173,15 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     };
   }, [google.connected, google.mealSync?.pending, google.mealSync?.failed]);
 
-  // Automatic background sync: 14d on initial unconnected/unsynced load, fast 3d hot-sync when stale > 5m
+  // Intelligent background sync: morning rollover + 15m stale freshness check (respects autoSyncEnabled)
   useEffect(() => {
-    if (!google.connected && !hevy?.connected) return;
+    if (settings.autoSyncEnabled === false) return;
+    if (!google.connected && !openWearables?.connected && !hevy?.connected) return;
     let active = true;
     let running = false;
 
-    const isStale = (iso?: string | null, minAgeMs = 5 * 60 * 1000) => {
+    const FRESHNESS_MS = 15 * 60 * 1000;
+    const isStale = (iso?: string | null, minAgeMs = FRESHNESS_MS) => {
       if (!iso) return true;
       const t = Date.parse(iso);
       return Number.isNaN(t) || Date.now() - t >= minAgeMs;
@@ -185,23 +190,37 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     const runSilentSync = async (isAppOpen = false) => {
       if (!active || running || document.visibilityState !== "visible") return;
       const now = Date.now();
-      const minGap = isAppOpen ? 0 : 5 * 60 * 1000;
-      if (!isAppOpen && now - lastAutoSyncRef.current < minGap) return;
+      const dayChanged = todayRef.current !== lastRolloverSyncDayRef.current;
+      const minGap = isAppOpen || dayChanged ? 0 : FRESHNESS_MS;
+      if (!isAppOpen && !dayChanged && now - lastAutoSyncRef.current < minGap) return;
+
       const isInitialGoogleSync = google.connected && !google.lastSync;
+      const isInitialOwSync = Boolean(openWearables?.connected && !openWearables.lastSync);
       const shouldSyncGoogle =
-        google.connected && !googleSyncLock.current && (isInitialGoogleSync || (isAppOpen ? isStale(google.lastSync, 5 * 60 * 1000) : true));
-      const shouldSyncHevy = Boolean(hevy?.connected) && (isAppOpen ? isStale(hevy?.lastSync, 5 * 60 * 1000) : true);
-      if (!shouldSyncGoogle && !shouldSyncHevy) return;
+        google.connected &&
+        !googleSyncLock.current &&
+        (isInitialGoogleSync || dayChanged || isStale(google.lastSync, FRESHNESS_MS));
+      const shouldSyncOw =
+        Boolean(openWearables?.connected) &&
+        (isInitialOwSync || dayChanged || isStale(openWearables?.lastSync, FRESHNESS_MS));
+      const shouldSyncHevy = Boolean(hevy?.connected) && (dayChanged || isStale(hevy?.lastSync, FRESHNESS_MS));
+      if (!shouldSyncGoogle && !shouldSyncOw && !shouldSyncHevy) return;
 
       running = true;
       lastAutoSyncRef.current = now;
+      if (dayChanged) lastRolloverSyncDayRef.current = todayRef.current;
+
+      // Only show progress ticker on initial backfill so steady-state freshness stays quiet
+      const showInitialProgress = isInitialGoogleSync;
       let ticker: number | null = null;
       if (shouldSyncGoogle) {
         googleSyncLock.current = true;
-        setGoogleSyncPct(12);
-        ticker = window.setInterval(() => {
-          setGoogleSyncPct((p) => (p == null ? null : Math.min(72, p + Math.max(1, Math.round((72 - p) * 0.14)))));
-        }, 250);
+        if (showInitialProgress) {
+          setGoogleSyncPct(12);
+          ticker = window.setInterval(() => {
+            setGoogleSyncPct((p) => (p == null ? null : Math.min(72, p + Math.max(1, Math.round((72 - p) * 0.14)))));
+          }, 250);
+        }
       }
       try {
         const jobs: Promise<boolean>[] = [];
@@ -217,7 +236,24 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
               .then(async (res) => (res.ok ? res.json() : null))
               .then((payload) => {
                 if (payload?.status && active) setGoogle(payload.status);
-                if (active) setGoogleSyncPct(82);
+                if (showInitialProgress && active) setGoogleSyncPct(82);
+                return Boolean(payload);
+              })
+              .catch(() => false),
+          );
+        }
+        if (shouldSyncOw) {
+          const owFrom = addDays(todayRef.current, isInitialOwSync ? -13 : -2);
+          jobs.push(
+            fetch("/api/integrations/open-wearables/sync", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ from: owFrom, to: todayRef.current }),
+              cache: "no-store",
+            })
+              .then(async (res) => (res.ok ? res.json() : null))
+              .then((payload) => {
+                if (payload?.status && active) setOpenWearables(payload.status);
                 return Boolean(payload);
               })
               .catch(() => false),
@@ -245,7 +281,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
             refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
             selectTrainingDay(trainingDayRef.current),
           ]).catch(() => undefined);
-          if (shouldSyncGoogle && active) {
+          if (showInitialProgress && active) {
             setGoogleSyncPct(100);
             await new Promise((resolve) => window.setTimeout(resolve, 350));
           }
@@ -253,7 +289,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       } finally {
         if (ticker != null) window.clearInterval(ticker);
         if (shouldSyncGoogle) {
-          if (active) setGoogleSyncPct(null);
+          if (showInitialProgress && active) setGoogleSyncPct(null);
           googleSyncLock.current = false;
         }
         running = false;
@@ -272,7 +308,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [google.connected, hevy?.connected]);
+  }, [settings.autoSyncEnabled, google.connected, openWearables?.connected, hevy?.connected, today]);
 
   function showToast(text: string, kind?: "success" | "error" | "info") {
     if (!text) {
@@ -973,6 +1009,81 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     }
   }
 
+  async function createOpenWearablesInvite(): Promise<{ code: string; expiresAt: string | null; apiUrl: string | null } | null> {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/integrations/open-wearables/invite", { method: "POST" });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.message ?? "Could not generate connection code.");
+      if (payload.status) setOpenWearables(payload.status);
+      showToast("Open Wearables connection code ready.", "success");
+      return {
+        code: payload.code,
+        expiresAt: payload.expiresAt ?? null,
+        apiUrl: payload.apiUrl ?? null,
+      };
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not generate connection code.", "error");
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncOpenWearables(days = 14) {
+    setBusy(true);
+    setToast(null);
+    try {
+      const from = addDays(today, 1 - days);
+      const res = await fetch("/api/integrations/open-wearables/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to: today }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.message ?? "Open Wearables sync failed.");
+      if (payload.status) setOpenWearables(payload.status);
+      invalidateDayCache();
+      await refreshAccountAndMeta();
+      await Promise.all([
+        refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
+        selectTrainingDay(trainingDayRef.current),
+        refreshTracker(),
+      ]);
+      void refreshSyncToken().catch(() => null);
+      showToast("Open Wearables data synced.", "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Open Wearables sync failed.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disconnectOpenWearables() {
+    if (!window.confirm("Disconnect Open Wearables and remove synced Apple Health / Garmin / Health Connect data?")) return;
+    setBusy(true);
+    setToast(null);
+    try {
+      const res = await fetch("/api/integrations/open-wearables/disconnect", { method: "POST" });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.message ?? "Could not disconnect Open Wearables.");
+      if (payload.status) setOpenWearables(payload.status);
+      invalidateDayCache();
+      await refreshAccountAndMeta();
+      await Promise.all([
+        refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
+        selectTrainingDay(trainingDayRef.current),
+        refreshTracker(),
+      ]);
+      void refreshSyncToken().catch(() => null);
+      showToast("Open Wearables disconnected.", "success");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not disconnect Open Wearables.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function openNewMeal(day = todayRef.current, openBarcode = false) {
     setComposerDay(day);
     setEditingMeal(null);
@@ -987,7 +1098,22 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   }
 
   const activeFocusDay = tab === "Today" ? homeDay : tab === "Nutrition" ? selectedDay : today;
-  const isFitbitMode = (settings.trackingMode ?? (settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit";
+  const isFitbitMode =
+    (settings.trackingMode ?? (settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit" ||
+    Boolean(openWearables?.connected);
+
+  const latestWearableSyncMs = Math.max(
+    google.connected && google.lastSync ? Date.parse(google.lastSync) || 0 : 0,
+    openWearables?.connected && openWearables.lastSync ? Date.parse(openWearables.lastSync) || 0 : 0,
+  );
+  const wearableSyncFresh = latestWearableSyncMs > 0 && Date.now() - latestWearableSyncMs < 15 * 60 * 1000;
+
+  async function syncConnectedWearables(days?: number) {
+    const tasks: Promise<void>[] = [];
+    if (google.connected) tasks.push(syncGoogle(days ?? (google.lastSync ? 3 : 14)));
+    if (openWearables?.connected) tasks.push(syncOpenWearables(days ?? (openWearables.lastSync ? 3 : 14)));
+    await Promise.all(tasks);
+  }
 
   useEffect(() => {
     if (!isFitbitMode) {
@@ -1096,20 +1222,36 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           <span style={{ fontSize: ".9rem", letterSpacing: "-0.015em" }}>FitnessTrackr</span>
         </div>
         <div className="silk-topbar-actions">
-          {isFitbitMode && google.connected && (
+          {((isFitbitMode && google.connected) || openWearables?.connected) && (
             <button
               type="button"
               className={`secondary compact sync-pill-btn ${googleSyncPct != null ? "is-syncing" : ""}`}
               style={{ ["--sync-pct" as string]: `${googleSyncPct ?? 0}%` }}
               disabled={busy || googleSyncPct != null}
-              onClick={() => void syncGoogle(google.lastSync ? 3 : 14)}
-              aria-label={googleSyncPct != null ? `Syncing Google Health ${googleSyncPct}%` : "Sync Google Health"}
+              onClick={() => void syncConnectedWearables()}
+              aria-label={
+                googleSyncPct != null
+                  ? `Syncing wearables ${googleSyncPct}%`
+                  : wearableSyncFresh
+                    ? "Wearables up to date — tap to force refresh"
+                    : "Sync wearables"
+              }
             >
-              <RefreshCw size={13} className={googleSyncPct != null ? "spin" : undefined} />
               {googleSyncPct != null ? (
-                <span className="num sync-pct-label">{googleSyncPct}%</span>
+                <>
+                  <RefreshCw size={13} className="spin" />
+                  <span className="num sync-pct-label">{googleSyncPct}%</span>
+                </>
+              ) : wearableSyncFresh ? (
+                <>
+                  <Check size={13} style={{ color: "var(--teal)" }} />
+                  <span>Up to date</span>
+                </>
               ) : (
-                "Sync"
+                <>
+                  <RefreshCw size={13} />
+                  <span>Sync</span>
+                </>
               )}
               {googleSyncPct != null && <span className="sync-pill-fill" aria-hidden="true" />}
             </button>
@@ -1245,6 +1387,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
               tracker={tracker}
               settings={settings}
               google={google}
+              openWearables={openWearables}
               hevy={hevy}
               strainSettings={strainSettings}
               audit={audit}
@@ -1260,6 +1403,9 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
               onSyncGoogle={syncGoogle}
               onPushGoogle={pushGoogle}
               onDisconnectGoogle={disconnectGoogle}
+              onCreateOpenWearablesInvite={createOpenWearablesInvite}
+              onSyncOpenWearables={syncOpenWearables}
+              onDisconnectOpenWearables={disconnectOpenWearables}
               onOpenOnboarding={() => {
                 setSettingsOpen(false);
                 setOnboardingOpen(true);
@@ -1277,6 +1423,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         tracker={tracker}
         settings={settings}
         google={google}
+        openWearables={openWearables}
         hevy={hevy}
         mcpEnabled={initial.mcpEnabled}
         busy={busy}
@@ -1284,6 +1431,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         onSaveTracker={saveTracker}
         onNutritionAction={(action, msg) => runNutritionAction(action as { action: string }, msg)}
         onImportHevy={importHevy}
+        onCreateOpenWearablesInvite={createOpenWearablesInvite}
         onMessage={(msg) => showToast(msg)}
       />
 

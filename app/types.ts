@@ -24,6 +24,9 @@ export type NutritionSettings = Awaited<ReturnType<ReturnType<typeof nutritionDa
   sleepGoals?: { effectiveFrom: string; goalMinutes: number }[];
   onboardingCompletedAt?: string | null;
   needsOnboarding?: boolean;
+  primaryRecoverySource?: string;
+  primaryWorkoutSource?: string;
+  autoSyncEnabled?: boolean;
 };
 export type NutritionHistory = Awaited<ReturnType<ReturnType<typeof nutritionData>["history"]>>;
 export type HistoryDay = NutritionHistory["days"][number];
@@ -55,6 +58,18 @@ export interface HevyIntegrationStatus {
   workoutCount: number;
 }
 
+export interface OpenWearablesIntegrationStatus {
+  available: boolean;
+  apiUrl: string | null;
+  connected: boolean;
+  owUserId: string | null;
+  providers: string[];
+  accountLabel: string | null;
+  status: string | null;
+  lastSync: string | null;
+  lastError: string | null;
+}
+
 export interface InitialAppData {
   userName?: string | null;
   tracker: TrackerSnapshot;
@@ -68,6 +83,7 @@ export interface InitialAppData {
   history30: NutritionHistory;
   google: GoogleIntegrationStatus;
   hevy: HevyIntegrationStatus;
+  openWearables?: OpenWearablesIntegrationStatus;
   strain: DailyStrainView;
   strainSettings: StrainSettings;
   recoveryInsights?: RecoveryInsightView;

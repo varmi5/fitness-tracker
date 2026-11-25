@@ -1,5 +1,5 @@
 import { saveSleepSession, sleepSessionKey } from "./sleep-session-data";
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createPublicKey, randomBytes, timingSafeEqual, verify as verifyCrypto, type KeyObject } from "node:crypto";
 import { and, asc, eq, gt, gte, inArray, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
 import type { AuthDatabase } from "./auth";
@@ -14,6 +14,7 @@ import {
   resolveLocalDateTime,
   sleepInput,
   workoutInput,
+  type EnergySource,
   type MealCategory,
 } from "./nutrition-model";
 import {
@@ -197,12 +198,21 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
 
     await tx
       .insert(healthIntegration)
-      .values({ userId, provider: "google", credential: seal(grant, userId), accountLabel, status: "connected", lastError: null })
+      .values({
+        userId,
+        provider: "google",
+        credential: seal(grant, userId),
+        accountLabel,
+        externalUserId: healthUserId ?? null,
+        status: "connected",
+        lastError: null,
+      })
       .onConflictDoUpdate({
         target: [healthIntegration.userId, healthIntegration.provider],
         set: {
           credential: seal(grant, userId),
           accountLabel,
+          ...(healthUserId ? { externalUserId: healthUserId } : {}),
           connectionId: randomBytes(16).toString("hex"),
           status: "connected",
           lastSync: isSameAccount ? existing?.lastSync ?? null : null,
@@ -1195,7 +1205,7 @@ const own = (userId: string) => and(eq(healthIntegration.userId, userId), eq(hea
 type SleepStageType = "AWAKE" | "LIGHT" | "DEEP" | "REM";
 
 export interface ParsedSleepSession {
-  source?: "google" | "apple" | "manual";
+  source?: EnergySource;
   day: string;
   sessionId: string | null;
   sleepStart: string | null;
@@ -1536,6 +1546,24 @@ async function runSyncGoogle(db: AuthDatabase, userId: string, from: string, to:
     const endExclusive = addDays(through, 1);
     const recoveryMetricNames = Object.keys(recoveryTypes) as RecoveryType[];
 
+    let resolvedHealthUserId = linked.externalUserId ?? null;
+    if (!resolvedHealthUserId) {
+      try {
+        const idRes = await fetch(`${googleAPI}/identity`, {
+          headers: { Authorization: `Bearer ${grant.accessToken}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (idRes.ok) {
+          const idJson = (await idRes.json().catch(() => null)) as { healthUserId?: string } | null;
+          if (typeof idJson?.healthUserId === "string" && idJson.healthUserId.trim()) {
+            resolvedHealthUserId = idJson.healthUserId.trim();
+          }
+        }
+      } catch {
+        // Non-fatal; webhook mapping will populate on next sync
+      }
+    }
+
     const [remoteHeightCm, sleepSessions, recoveryResults, workoutSessions, hrResult, stepIntervalResult] =
       await Promise.all([
         fetchLatestHeightCm(grant),
@@ -1785,6 +1813,9 @@ async function runSyncGoogle(db: AuthDatabase, userId: string, from: string, to:
         .update(healthIntegration)
         .set({
           ...(tokenRefreshed ? { credential: seal(grant, userId) } : {}),
+          ...(resolvedHealthUserId && resolvedHealthUserId !== linked.externalUserId
+            ? { externalUserId: resolvedHealthUserId }
+            : {}),
           lastSync: new Date(),
           status: "connected",
           lastError: null,
@@ -1792,6 +1823,7 @@ async function runSyncGoogle(db: AuthDatabase, userId: string, from: string, to:
             syncedAt: new Date().toISOString(),
             from,
             to: through,
+            ...(resolvedHealthUserId ? { healthUserId: resolvedHealthUserId } : {}),
             dataTypes: diagnostics,
           },
         })
@@ -2655,4 +2687,218 @@ export async function disconnectGoogle(db: AuthDatabase, userId: string) {
   } catch {
     return { removed: true, revoked: false };
   }
+}
+
+function sha256Equal(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a, "utf8").digest();
+  const hb = createHash("sha256").update(b, "utf8").digest();
+  return timingSafeEqual(ha, hb);
+}
+
+/**
+ * Verifies the `Authorization` header against comma-separated secrets in `GOOGLE_HEALTH_WEBHOOK_SECRET`
+ * (supports zero-downtime key rotation per https://developers.google.com/health/webhooks).
+ */
+export function verifyGoogleWebhookAuthorization(
+  authHeader: string | null,
+  rawSecret = process.env.GOOGLE_HEALTH_WEBHOOK_SECRET,
+): boolean {
+  if (!authHeader || !rawSecret) return false;
+  const header = authHeader.trim();
+  if (!header) return false;
+  const candidates = rawSecret
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const token of candidates) {
+    if (sha256Equal(header, `Bearer ${token}`) || sha256Equal(header, token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const GOOGLE_WEBHOOK_KEYSET_URL =
+  "https://www.gstatic.com/googlehealthapi/webhooks/webhooks_public_keyset.json";
+let cachedGoogleKeyset: { keys: Map<number, KeyObject>; expiresAt: number } | null = null;
+
+function padCoord32(bytes: Buffer): Buffer {
+  if (bytes.length === 32) return bytes;
+  if (bytes.length > 32) return bytes.subarray(bytes.length - 32);
+  return Buffer.concat([Buffer.alloc(32 - bytes.length), bytes]);
+}
+
+function parseTinkEcdsaPublicKeyValue(base64Value: string): KeyObject | null {
+  const raw = Buffer.from(base64Value, "base64");
+  let i = 0;
+  let xBuf: Buffer | null = null;
+  let yBuf: Buffer | null = null;
+  while (i < raw.length) {
+    const tag = raw[i++];
+    const field = tag >> 3;
+    const wireType = tag & 7;
+    if (wireType === 2) {
+      let len = 0;
+      let shift = 0;
+      while (i < raw.length) {
+        const b = raw[i++];
+        len |= (b & 0x7f) << shift;
+        if (!(b & 0x80)) break;
+        shift += 7;
+      }
+      if (i + len > raw.length) return null;
+      const val = raw.subarray(i, i + len);
+      i += len;
+      if (field === 3) xBuf = padCoord32(val);
+      if (field === 4) yBuf = padCoord32(val);
+    } else if (wireType === 0) {
+      while (i < raw.length && raw[i++] & 0x80) {
+        // varint
+      }
+    } else {
+      return null;
+    }
+  }
+  if (!xBuf || !yBuf) return null;
+  return createPublicKey({
+    key: {
+      kty: "EC",
+      crv: "P-256",
+      x: xBuf.toString("base64url"),
+      y: yBuf.toString("base64url"),
+    },
+    format: "jwk",
+  });
+}
+
+export function buildGoogleWebhookKeyMap(keysetPayload: unknown): Map<number, KeyObject> {
+  const map = new Map<number, KeyObject>();
+  if (!keysetPayload || typeof keysetPayload !== "object") return map;
+  const keys = (keysetPayload as { key?: unknown }).key;
+  if (!Array.isArray(keys)) return map;
+  for (const entry of keys) {
+    if (!entry || typeof entry !== "object") continue;
+    const item = entry as {
+      keyId?: number;
+      status?: string;
+      keyData?: { typeUrl?: string; value?: string };
+    };
+    if (item.status && item.status !== "ENABLED") continue;
+    if (typeof item.keyId !== "number" || typeof item.keyData?.value !== "string") continue;
+    try {
+      const pub = parseTinkEcdsaPublicKeyValue(item.keyData.value);
+      if (pub) map.set(item.keyId >>> 0, pub);
+    } catch {
+      // Skip malformed entry
+    }
+  }
+  return map;
+}
+
+async function getGoogleWebhookKeys(keysetOverride?: unknown): Promise<Map<number, KeyObject>> {
+  if (keysetOverride !== undefined) {
+    return buildGoogleWebhookKeyMap(keysetOverride);
+  }
+  if (cachedGoogleKeyset && cachedGoogleKeyset.expiresAt > Date.now()) {
+    return cachedGoogleKeyset.keys;
+  }
+  const response = await fetch(GOOGLE_WEBHOOK_KEYSET_URL, { signal: AbortSignal.timeout(5000) });
+  if (!response.ok) throw new Error(`Keyset fetch failed (${response.status})`);
+  const jsonPayload = await response.json();
+  const keys = buildGoogleWebhookKeyMap(jsonPayload);
+  cachedGoogleKeyset = { keys, expiresAt: Date.now() + 3600_000 };
+  return keys;
+}
+
+/**
+ * Verifies the `GOOGLE-HEALTH-API-SIGNATURE` header (Tink EcdsaPublicKey P-256)
+ * against the raw webhook JSON body per https://developers.google.com/health/webhooks.
+ */
+export async function verifyGoogleWebhookSignature(
+  rawBody: string,
+  signatureHeader: string | null,
+  keysetOverride?: unknown,
+): Promise<boolean> {
+  if (!signatureHeader || !signatureHeader.trim()) return false;
+  const decoded = Buffer.from(signatureHeader.trim(), "base64");
+  if (decoded.length <= 6 || decoded[0] !== 0x01) return false;
+  const keyId = decoded.readUInt32BE(1);
+  const derSignature = decoded.subarray(5);
+  try {
+    const keys = await getGoogleWebhookKeys(keysetOverride);
+    const keyObj = keys.get(keyId);
+    if (!keyObj) return false;
+    return verifyCrypto("sha256", Buffer.from(rawBody, "utf8"), keyObj, derSignature);
+  } catch {
+    return false;
+  }
+}
+
+export async function handleGoogleWebhookNotifications(
+  db: AuthDatabase,
+  notifications: unknown[],
+): Promise<{ matchedNotifications: number; processedUsers: number }> {
+  const byHealthUser = new Map<string, { minMs: number | null; maxMs: number | null; count: number }>();
+
+  for (const item of notifications) {
+    if (!item || typeof item !== "object") continue;
+    const data = (item as { data?: unknown }).data;
+    if (!data || typeof data !== "object") continue;
+    const d = data as {
+      healthUserId?: unknown;
+      intervals?: { physicalTimeInterval?: { startTime?: string; endTime?: string } }[];
+    };
+    if (typeof d.healthUserId !== "string" || !d.healthUserId.trim()) continue;
+    const healthUserId = d.healthUserId.trim();
+    const cur = byHealthUser.get(healthUserId) ?? { minMs: null, maxMs: null, count: 0 };
+    cur.count += 1;
+
+    if (Array.isArray(d.intervals)) {
+      for (const iv of d.intervals) {
+        const s = iv?.physicalTimeInterval?.startTime ? Date.parse(iv.physicalTimeInterval.startTime) : Number.NaN;
+        const e = iv?.physicalTimeInterval?.endTime ? Date.parse(iv.physicalTimeInterval.endTime) : Number.NaN;
+        if (Number.isFinite(s)) cur.minMs = cur.minMs == null ? s : Math.min(cur.minMs, s);
+        if (Number.isFinite(e)) cur.maxMs = cur.maxMs == null ? e : Math.max(cur.maxMs, e);
+      }
+    }
+    byHealthUser.set(healthUserId, cur);
+  }
+
+  let matchedNotifications = 0;
+  let processedUsers = 0;
+
+  for (const [healthUserId, window] of byHealthUser) {
+    const rows = await db
+      .select({ userId: healthIntegration.userId })
+      .from(healthIntegration)
+      .where(and(eq(healthIntegration.provider, "google"), eq(healthIntegration.externalUserId, healthUserId)));
+
+    if (rows.length === 0) continue;
+    matchedNotifications += window.count;
+
+    for (const row of rows) {
+      try {
+        const settings = await nutritionData(db, row.userId).settings();
+        const tz = settings.timezone;
+        const today = localDay(new Date(), tz);
+        let from = addDays(today, -1);
+        let to = today;
+        if (window.minMs != null) {
+          from = addDays(localDay(new Date(window.minMs), tz), -1);
+        }
+        if (window.maxMs != null) {
+          const cand = addDays(localDay(new Date(window.maxMs), tz), 1);
+          to = cand <= today ? cand : today;
+        }
+        if (addDays(from, 13) < to) from = addDays(to, -13);
+        if (from > to) from = to;
+        await syncGoogle(db, row.userId, from, to);
+        processedUsers += 1;
+      } catch {
+        // Keep failures isolated per user
+      }
+    }
+  }
+
+  return { matchedNotifications, processedUsers };
 }

@@ -5,12 +5,20 @@ import { findMatchingGoogleWorkout } from "./hevy";
 import { MUSCLE_GROUPS, type MuscleGroup } from "./muscle-map";
 import { addDays, dayRange } from "./nutrition-model";
 import {
+  dedupeWorkoutsAcrossSources,
+  formatSourceLabel,
+  pickDailyEnergyRow,
+  selectHrSamplesForWindow,
+  selectStepIntervalsForEnergySource,
+} from "./source-priority";
+import {
   dailyEnergy,
   dailyStrain,
   dailyWorkout,
   heartRateSample,
   hevySet,
   hevyWorkout,
+  nutritionPreference,
   stepInterval,
   trainingPreference,
 } from "./schema";
@@ -203,7 +211,7 @@ export function strainData(db: AuthDatabase, userId: string) {
   async function computeDay(day: string, settingsOverride?: StrainSettings): Promise<DailyStrainView> {
     const settings = settingsOverride ?? (await getSettings());
 
-    const [hevyRows, googleWorkoutRows, hrRows, energyRows, stepRows] = await Promise.all([
+    const [hevyRows, rawWorkoutRows, hrRows, energyRows, stepRows, navPrefRows] = await Promise.all([
       db
         .select()
         .from(hevyWorkout)
@@ -228,7 +236,18 @@ export function strainData(db: AuthDatabase, userId: string) {
         .from(stepInterval)
         .where(and(eq(stepInterval.userId, userId), eq(stepInterval.day, day)))
         .orderBy(asc(stepInterval.startTime)),
+      db
+        .select({
+          primaryWorkoutSource: nutritionPreference.primaryWorkoutSource,
+          primaryRecoverySource: nutritionPreference.primaryRecoverySource,
+        })
+        .from(nutritionPreference)
+        .where(eq(nutritionPreference.userId, userId))
+        .limit(1),
     ]);
+    const primaryWorkoutSource = navPrefRows[0]?.primaryWorkoutSource ?? "auto";
+    const primaryRecoverySource = navPrefRows[0]?.primaryRecoverySource ?? "auto";
+    const googleWorkoutRows = dedupeWorkoutsAcrossSources(rawWorkoutRows, primaryWorkoutSource);
 
     const hevyIds = hevyRows.map((h) => h.hevyId);
     const setRows = hevyIds.length
@@ -256,7 +275,6 @@ export function strainData(db: AuthDatabase, userId: string) {
       setsByHevy.set(s.hevyId, list);
     }
 
-    const hrSeriesAll = hrRows.map((r) => ({ recordedAt: r.recordedAt.toISOString(), bpm: r.bpm }));
     const matchedGoogleIds = new Set(
       hevyRows.map((h) => h.matchedGoogleSessionId).filter((v): v is string => Boolean(v)),
     );
@@ -284,10 +302,16 @@ export function strainData(db: AuthDatabase, userId: string) {
       const endMs = hw.endTime.getTime();
       workoutWindows.push({ startTime: hw.startTime, endTime: hw.endTime });
 
-      const windowHr = hrSeriesAll.filter((s) => {
-        const t = new Date(s.recordedAt).getTime();
-        return t >= startMs && t <= endMs;
-      });
+      const matchedHrRows = selectHrSamplesForWindow(
+        hrRows,
+        startMs,
+        endMs,
+        matchedG?.source ?? primaryWorkoutSource,
+      );
+      const windowHr = matchedHrRows.map((s) => ({
+        recordedAt: s.recordedAt.toISOString(),
+        bpm: s.bpm,
+      }));
 
       const trimp = computeEdwardsTrimp(windowHr, settings.maxHrBpm, {
         fallbackActiveZoneMinutes: matchedG?.activeZoneMinutes ?? null,
@@ -324,7 +348,7 @@ export function strainData(db: AuthDatabase, userId: string) {
         id: `hevy:${hw.hevyId}`,
         kind: "strength",
         title: hw.title,
-        source: matchedG ? "Hevy + Google Health" : "Hevy",
+        source: matchedG ? `Hevy + ${formatSourceLabel(matchedG.source)}` : "Hevy",
         startTime: hw.startTime.toISOString(),
         endTime: hw.endTime.toISOString(),
         durationSeconds: hw.durationSeconds,
@@ -357,13 +381,12 @@ export function strainData(db: AuthDatabase, userId: string) {
       }
       const startMs = gw.startTime?.getTime() ?? 0;
       const endMs = gw.endTime?.getTime() ?? startMs + (gw.durationSeconds ?? 0) * 1000;
-      const windowHr =
-        gw.startTime != null
-          ? hrSeriesAll.filter((s) => {
-              const t = new Date(s.recordedAt).getTime();
-              return t >= startMs && t <= endMs;
-            })
-          : [];
+      const matchedHrRows =
+        gw.startTime != null ? selectHrSamplesForWindow(hrRows, startMs, endMs, gw.source) : [];
+      const windowHr = matchedHrRows.map((s) => ({
+        recordedAt: s.recordedAt.toISOString(),
+        bpm: s.bpm,
+      }));
 
       const isStrength = isStrengthGoogleWorkout(gw.title, gw.exerciseType);
       const trimp = computeEdwardsTrimp(windowHr, settings.maxHrBpm, {
@@ -389,6 +412,7 @@ export function strainData(db: AuthDatabase, userId: string) {
         for (const g of MUSCLE_GROUPS) totalMuscleLoads[g] += strengthEst.muscleLoads[g];
       }
 
+      const sourceLabel = formatSourceLabel(gw.source);
       const gwNotes = [trimp.note];
       if (isStrength && trimp.cRaw > 0) {
         gwNotes.push(
@@ -397,15 +421,15 @@ export function strainData(db: AuthDatabase, userId: string) {
       }
       if (strengthEst) {
         gwNotes.push(
-          "Muscular load unavailable: Google session duration does not establish sets, resistance or effort. Sync Hevy set details for an estimated set-based load.",
+          `Muscular load unavailable: ${sourceLabel} session duration does not establish sets, resistance or effort. Sync Hevy set details for an estimated set-based load.`,
         );
       }
 
       activities.push({
-        id: `google:${gw.sessionId}`,
+        id: `${gw.source}:${gw.sessionId}`,
         kind: isStrength ? "strength" : "cardio",
         title: gw.title,
-        source: isStrength ? "Google Health (Strength)" : "Google Health",
+        source: isStrength ? `${sourceLabel} (Strength)` : sourceLabel,
         startTime: gw.startTime?.toISOString() ?? null,
         endTime: gw.endTime?.toISOString() ?? null,
         durationSeconds: durSec,
@@ -429,9 +453,10 @@ export function strainData(db: AuthDatabase, userId: string) {
       });
     }
 
-    const googleEnergy = energyRows.find((e) => e.source === "google") ?? energyRows[0];
-    const totalSteps = googleEnergy?.steps ?? null;
-    const verifiedWorkoutSteps = overlapStepsForWindows(stepRows, workoutWindows);
+    const selectedEnergy = pickDailyEnergyRow(energyRows, primaryRecoverySource);
+    const totalSteps = selectedEnergy?.steps ?? null;
+    const filteredStepRows = selectStepIntervalsForEnergySource(stepRows, selectedEnergy?.source);
+    const verifiedWorkoutSteps = overlapStepsForWindows(filteredStepRows, workoutWindows);
     const walking = computeWalkingContribution(
       {
         totalSteps,
@@ -463,11 +488,13 @@ export function strainData(db: AuthDatabase, userId: string) {
         id: `walking:${day}`,
         kind: "walking",
         title: "Daily Walking",
-        source: googleEnergy?.source === "google" ? "Google Health Steps" : "Manual / Device Steps",
+        source: selectedEnergy?.source && selectedEnergy.source !== "manual"
+          ? `${formatSourceLabel(selectedEnergy.source)} Steps`
+          : "Manual / Device Steps",
         startTime: null,
         endTime: null,
         durationSeconds: null,
-        distanceMeters: googleEnergy?.distanceMeters ?? null,
+        distanceMeters: selectedEnergy?.distanceMeters ?? null,
         caloriesKcal: null,
         avgHrBpm: null,
         cRaw: 0,
