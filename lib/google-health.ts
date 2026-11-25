@@ -182,6 +182,17 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
   const accountLabel = await fetchGoogleAccountLabel(grant.accessToken, healthUserId);
 
   await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ accountLabel: healthIntegration.accountLabel, lastSync: healthIntegration.lastSync })
+      .from(healthIntegration)
+      .where(and(eq(healthIntegration.userId, userId), eq(healthIntegration.provider, "google")));
+
+    const isSameAccount = Boolean(
+      existing?.accountLabel &&
+        accountLabel &&
+        existing.accountLabel.trim().toLowerCase() === accountLabel.trim().toLowerCase(),
+    );
+
     await tx
       .insert(healthIntegration)
       .values({ userId, provider: "google", credential: seal(grant, userId), accountLabel, status: "connected", lastError: null })
@@ -192,7 +203,7 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
           accountLabel,
           connectionId: randomBytes(16).toString("hex"),
           status: "connected",
-          lastSync: null,
+          lastSync: isSameAccount ? existing?.lastSync ?? null : null,
           lastError: null,
         },
       });
@@ -213,13 +224,16 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
           preferredEnergySource: "google",
         },
       });
-    await tx.delete(googleMealSync).where(eq(googleMealSync.userId, userId));
-    await tx.update(meal).set({ googleDatapointName: null }).where(eq(meal.userId, userId));
-    // Replacing a connection clears prior Google energy, sleep, recovery & workout rows so two accounts never mix.
-    await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
-    await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google")));
-    await tx.delete(dailyRecovery).where(and(eq(dailyRecovery.userId, userId), eq(dailyRecovery.source, "google")));
-    await tx.delete(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google")));
+
+    // Only purge prior synced tables when switching to a different Google account so same-account reconnects keep data intact.
+    if (!isSameAccount) {
+      await tx.delete(googleMealSync).where(eq(googleMealSync.userId, userId));
+      await tx.update(meal).set({ googleDatapointName: null }).where(eq(meal.userId, userId));
+      await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
+      await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google")));
+      await tx.delete(dailyRecovery).where(and(eq(dailyRecovery.userId, userId), eq(dailyRecovery.source, "google")));
+      await tx.delete(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google")));
+    }
   });
 }
 

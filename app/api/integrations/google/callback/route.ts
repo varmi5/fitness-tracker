@@ -44,7 +44,7 @@ export async function GET(request: Request) {
     await connectGoogle(db, session.user.id, code, sealed.verifier, callback);
     const settings = await nutritionData(db, session.user.id).settings();
     const today = localDay(new Date(), settings.timezone);
-    await syncGoogle(db, session.user.id, addDays(today, -13), today).catch(() => null);
+    await syncGoogle(db, session.user.id, addDays(today, -6), today).catch(() => null);
     return back({ tab: "Settings", google: "connected" });
   } catch (error) {
     const reason = error instanceof NutritionError ? error.message : "connection-failed";

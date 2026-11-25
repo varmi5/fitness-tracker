@@ -547,6 +547,87 @@ button.card:active,
 .compact { padding: .36rem .72rem; min-height: 44px; font-size: .82rem; border-radius: 12px; }
 .danger { background: var(--danger-bg); color: var(--danger-fg); border: 1px solid var(--danger-border); }
 
+.success-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .45rem;
+  min-height: 44px;
+  padding: .52rem .9rem;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #ffffff;
+  font-size: .84rem;
+  font-weight: 650;
+  text-decoration: none;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.28), -2px -2px 6px rgba(255, 255, 255, 0.55);
+  transition: transform 140ms ease, filter 140ms ease;
+}
+.success-btn:hover { filter: brightness(1.04); }
+.success-btn:active { transform: translateY(1px); }
+.success-btn.wide { width: 100%; }
+
+.danger-zone-box {
+  display: grid;
+  gap: .5rem;
+  padding: .78rem .85rem;
+  border-radius: 14px;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+}
+.danger-zone-head {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  color: var(--danger-fg);
+  font-size: .78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.danger-zone-copy {
+  margin: 0;
+  font-size: .75rem;
+  line-height: 1.42;
+  color: var(--danger-fg);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+.sync-pill-btn {
+  position: relative;
+  overflow: hidden;
+  min-height: 38px;
+  padding: .2rem .65rem;
+  font-size: .74rem;
+  gap: .32rem;
+}
+.sync-pill-btn.is-syncing {
+  color: var(--accent);
+}
+.sync-pct-label {
+  font-size: .71rem;
+  font-weight: 700;
+  min-width: 2.3ch;
+  text-align: right;
+}
+.sync-pill-fill {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2.5px;
+  width: var(--sync-pct, 0%);
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 220ms ease;
+}
+
 .button-row { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: .45rem; }
 .button-row a.secondary {
   display: inline-flex;

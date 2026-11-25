@@ -675,9 +675,9 @@ export function computeFitnessLevel(
 }
 
 function referenceVo2max(age: number, sex: BiologicalSex): number {
-  const col75 = FRIEND_PERCENTILES.indexOf(75);
+  const col50 = FRIEND_PERCENTILES.indexOf(50);
   return piecewiseLinear(
-    FRIEND_TREADMILL[sex].map((row, i) => [25 + 10 * i, row[col75]] as const),
+    FRIEND_TREADMILL[sex].map((row, i) => [25 + 10 * i, row[col50]] as const),
     age,
   );
 }
@@ -687,16 +687,12 @@ const lnHr = (rows: [number, number][]) => rows.map(([x, hr]) => [x, Math.log(hr
 const HEALTHSPAN_CURVES = {
   vo2max: lnHr([[10, 1], [80, 0.87 ** (70 / 3.5)]]),
   restingHr: lnHr([[45, 1], [105, 1.09 ** 6]]),
-  steps: lnHr([[3553, 1], [5801, 0.6], [7842, 0.55], [10901, 0.47]]),
+  steps: lnHr([[3000, 1], [5500, 0.82], [7500, 0.74], [10500, 0.68]]),
   sleepHours: lnHr([[5, 1.12], [7, 1], [8, 1], [9, 1.3]]),
   sri: lnHr([[65.1, 1], [75.62, 0.8], [80.99, 0.75], [85.22, 0.72], [89.8, 0.7]]),
-  zone13: lnHr(
-    [[0, 1], [2, 0.89], [4, 0.79], [6, 0.7], [8, 0.62], [10, 0.56], [12, 0.5], [14, 0.46], [16, 0.43], [18, 0.41], [20, 0.4], [22, 0.4], [24, 0.39]].map(
-      ([d, hr]): [number, number] => [d * 7, hr],
-    ),
-  ),
+  zone13: lnHr([[0, 1], [75, 0.9], [150, 0.82], [300, 0.76]]),
   zone45: lnHr([[0, 1], [112, 0.81], [225, 0.81 * 0.97]]),
-  strength: lnHr([[0, 1], [40, 0.83], [140, 1]]),
+  strength: lnHr([[0, 1], [45, 0.85], [120, 0.82], [300, 0.83]]),
   leanMass: lnHr([[16.1, 1], [21.9, 0.7]]),
 };
 
@@ -751,9 +747,10 @@ export function computeBiologicalAge(
   const age = profile.age;
   const sex = profile.sex;
   const DOUBLING_YEARS = 8;
-  const OVERLAP_SHRINK = 0.75;
+  const OVERLAP_SHRINK = 0.65;
   const CLAMP_YEARS = 15;
   const LN2 = Math.LN2;
+  const maxSpan = Math.min(CLAMP_YEARS, Math.max(4, age * 0.25));
 
   const evalWindow = (fromDay: string) => {
     const slice = days.filter((d) => d.day >= fromDay && d.day <= anchorDay);
@@ -769,11 +766,11 @@ export function computeBiologicalAge(
     const ref = {
       vo2max: referenceVo2max(age, sex),
       restingHr: 58,
-      steps: 8000,
+      steps: 7000,
       sleepHours: 7.5,
       sri: 80,
-      zone13: 150,
-      zone45: 45,
+      zone13: 100,
+      zone45: 35,
       strength: 45,
       leanMass: sex === "male" ? 19.5 : 16.5,
     };
@@ -806,23 +803,24 @@ export function computeBiologicalAge(
       }
     }
 
-    let sumLnHr = 0;
+    const confidenceScale = Math.min(1, slice.length / 14);
+    let totalYears = 0;
     const contributors: BiologicalAgeContributor[] = [];
     for (const key of Object.keys(obs) as (keyof typeof HEALTHSPAN_CURVES)[]) {
       const entry = obs[key]!;
       const curve = HEALTHSPAN_CURVES[key];
       const deltaLn = piecewiseLinear(curve, entry.val) - piecewiseLinear(curve, ref[key]);
-      sumLnHr += deltaLn;
-      const yrs = ((OVERLAP_SHRINK * deltaLn) / LN2) * DOUBLING_YEARS;
+      const yrs = clamp(((OVERLAP_SHRINK * deltaLn) / LN2) * DOUBLING_YEARS, -3.5, 3.5);
+      totalYears += yrs;
       contributors.push({
         key,
         label: entry.label,
         valueText: entry.fmt(entry.val),
-        deltaYears: round1(yrs),
+        deltaYears: round1(yrs * confidenceScale),
       });
     }
 
-    const deltaYears = clamp(((OVERLAP_SHRINK * sumLnHr) / LN2) * DOUBLING_YEARS, -CLAMP_YEARS, CLAMP_YEARS);
+    const deltaYears = clamp(totalYears * confidenceScale, -maxSpan, maxSpan);
     return {
       activeDays: slice.length,
       deltaYears: round1(deltaYears),
