@@ -7,7 +7,7 @@ export function proxy(request: NextRequest) {
   const dev = process.env.NODE_ENV !== "production" ? " 'unsafe-eval'" : "";
   const csp = [
     "default-src 'self'", `script-src 'self' 'nonce-${nonce}'${dev}${challenge}`,
-    "style-src 'self' 'unsafe-inline'", "font-src 'self'", "img-src 'self' data:",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com", "img-src 'self' data:",
     `connect-src 'self'${challenge}`, `frame-src 'self'${challenge}`, "worker-src 'self'",
     "frame-ancestors 'none'", "object-src 'none'", "base-uri 'self'", "form-action 'self'",
   ].join("; ");

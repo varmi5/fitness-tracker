@@ -245,7 +245,7 @@ export async function getPulseInsightsForUser(
     sleep.sleepNeedHours,
   );
 
-  const acwr = loadSummary?.cardio.status.acwr ?? loadSummary?.muscular.status.acwr ?? null;
+  const acwr = loadSummary?.cardioStatus?.acwr ?? loadSummary?.muscularStatus?.acwr ?? null;
   const priorEffort = Array.from({ length: 14 }, (_, idx) => strainByDay.get(addDays(day, -14 + idx))?.overallStrain ?? null);
   const strainTarget = computeTargetStrain(recovery.score, { acwr, priorEffort });
 
@@ -255,14 +255,14 @@ export async function getPulseInsightsForUser(
     ...workoutRows
       .filter((w) => w.day === day && w.startTime && w.endTime)
       .map((w) => ({
-        id: w.sessionId,
+        id: `google:${w.sessionId}`,
         startMs: w.startTime!.getTime(),
         endMs: w.endTime!.getTime(),
       })),
     ...hevyRows
       .filter((h) => h.day === day)
       .map((h) => ({
-        id: h.hevyId,
+        id: `hevy:${h.hevyId}`,
         startMs: h.startTime.getTime(),
         endMs: h.endTime.getTime(),
       })),

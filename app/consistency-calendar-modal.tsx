@@ -223,7 +223,7 @@ export function ConsistencyCalendarModal({
                 Open in Today <ChevronRight size={14} />
               </button>
             </div>
-            <div className="energy-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
+            <div className="energy-strip cal-detail-strip" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 0 }}>
               <div className="energy-cell">
                 <span>Calories</span>
                 <strong className="num">
