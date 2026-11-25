@@ -965,9 +965,6 @@ test("syncGoogle ingests Fitbit Air metrics best-effort and syncGoogleAllUsers/p
   }
 });
 
-
-
-
 test("health MCP exposes only the user's synced sleep, vitals and workouts in manual mode", async () => {
   for (const id of ["HEALTH-A", "HEALTH-B"]) {
     await db.insert(schema.user).values({id,name:id,email:`${id}@example.test`,createdAt:new Date(),updatedAt:new Date()});
@@ -1165,6 +1162,46 @@ test("Stage 2: syncGoogle paginates HR samples, backfills workout avgHrBpm, reco
     await disconnectGoogle(db, userId);
     assert.equal((await db.select().from(schema.heartRateSample).where(eq(schema.heartRateSample.userId, userId))).length, 0);
     assert.equal((await db.select().from(schema.stepInterval).where(eq(schema.stepInterval.userId, userId))).length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.FITNESS_INTEGRATION_KEY;
+  }
+});
+
+test("concurrent syncGoogle calls coalesce cleanly without triggering a 409 connection-changed error", async () => {
+  process.env.FITNESS_INTEGRATION_KEY = randomBytes(32).toString("hex");
+  const originalFetch = globalThis.fetch;
+  const userId = "CONCURRENT-SYNC-1";
+  await db.insert(schema.user).values({ id: userId, name: userId, email: "concurrent@example.test", createdAt: new Date(), updatedAt: new Date() });
+  await nutritionData(db, userId).setPreferences({ timezone: "Europe/London", trackingMode: "fitbit", preferredEnergySource: "google" });
+  await db.insert(schema.healthIntegration).values({
+    userId,
+    provider: "google",
+    status: "connected",
+    accountLabel: "concurrent@example.test",
+    credential: seal(
+      {
+        accessToken: "token",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 3600_000,
+        scopes: [
+          "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly",
+          "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
+        ],
+      },
+      userId,
+    ),
+  });
+
+  globalThis.fetch = (async () => new Response(JSON.stringify({ rollupDataPoints: [], dataPoints: [] }), { status: 200 })) as typeof fetch;
+
+  try {
+    const [a, b] = await Promise.all([
+      syncGoogle(db, userId, "2026-11-23", "2026-11-23"),
+      syncGoogle(db, userId, "2026-11-23", "2026-11-23"),
+    ]);
+    assert.equal(a.syncedDays, 0);
+    assert.equal(b.syncedDays, 0);
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.FITNESS_INTEGRATION_KEY;

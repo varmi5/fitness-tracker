@@ -12,28 +12,69 @@ interface PhysiqueCheckinViewProps {
   onMessage: (msg: string) => void;
 }
 
+async function loadImageElement(file: File): Promise<HTMLImageElement> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Could not read image."));
+    };
+    reader.onerror = () => reject(new Error("Could not read image."));
+    reader.readAsDataURL(file);
+  });
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Unsupported image format. Try JPEG, PNG, or WebP."));
+    img.src = dataUrl;
+  });
+}
+
 async function compressPhoto(file: File): Promise<string> {
-  const bitmapUrl = URL.createObjectURL(file);
+  const attempts = [
+    { maxDim: 960, q: 0.78 },
+    { maxDim: 840, q: 0.66 },
+    { maxDim: 720, q: 0.54 },
+    { maxDim: 600, q: 0.44 },
+  ];
+
+  let bitmap: ImageBitmap | null = null;
+  let fallbackImg: HTMLImageElement | null = null;
   try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error("Could not read image."));
-      el.src = bitmapUrl;
-    });
-    const maxDim = 960;
-    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-    const width = Math.max(1, Math.round(img.width * scale));
-    const height = Math.max(1, Math.round(img.height * scale));
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas unavailable.");
-    ctx.drawImage(img, 0, 0, width, height);
-    return canvas.toDataURL("image/jpeg", 0.78);
+    let srcW = 0;
+    let srcH = 0;
+    if (typeof createImageBitmap === "function") {
+      try {
+        bitmap = await createImageBitmap(file);
+        srcW = bitmap.width;
+        srcH = bitmap.height;
+      } catch {
+        bitmap = null;
+      }
+    }
+    if (!bitmap) {
+      fallbackImg = await loadImageElement(file);
+      srcW = fallbackImg.naturalWidth || fallbackImg.width;
+      srcH = fallbackImg.naturalHeight || fallbackImg.height;
+    }
+
+    const source: CanvasImageSource = bitmap ?? fallbackImg!;
+    for (const { maxDim, q } of attempts) {
+      const scale = Math.min(1, maxDim / Math.max(srcW, srcH, 1));
+      const width = Math.max(1, Math.round(srcW * scale));
+      const height = Math.max(1, Math.round(srcH * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas unavailable.");
+      ctx.drawImage(source, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL("image/jpeg", q);
+      if (dataUrl.length <= 850_000) return dataUrl;
+    }
+    throw new Error("Photo is still too large after compression. Try a smaller image.");
   } finally {
-    URL.revokeObjectURL(bitmapUrl);
+    bitmap?.close();
   }
 }
 
@@ -57,6 +98,7 @@ export function PhysiqueCheckinView({
   const [weightKg, setWeightKg] = useState(latestWeight != null ? latestWeight.toFixed(1) : "");
   const [bodyFatPct, setBodyFatPct] = useState(latestBodyFat != null ? latestBodyFat.toFixed(1) : "");
   const [note, setNote] = useState("");
+  const [processingPhoto, setProcessingPhoto] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Timelapse player state
@@ -105,11 +147,14 @@ export function PhysiqueCheckinView({
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    setProcessingPhoto(true);
     try {
       const compressed = await compressPhoto(file);
       setPhotoData(compressed);
-    } catch {
-      onMessage("Could not process image file.");
+    } catch (err) {
+      onMessage(err instanceof Error ? err.message : "Could not process image file.");
+    } finally {
+      setProcessingPhoto(false);
     }
   }
 
@@ -253,8 +298,8 @@ export function PhysiqueCheckinView({
             Note
             <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Lighting, fasted, pump…" />
           </label>
-          <button type="submit" disabled={saving || !photoData}>
-            {saving ? "Saving…" : "Save Check-in"}
+          <button type="submit" disabled={saving || processingPhoto || !photoData}>
+            {processingPhoto ? "Processing photo…" : saving ? "Saving…" : "Save Check-in"}
           </button>
         </form>
       )}

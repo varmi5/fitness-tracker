@@ -1382,16 +1382,42 @@ export async function getFreshGrant(db: AuthDatabase, userId: string) {
   return { linked, grant };
 }
 
+const inFlightGoogleSync = new Map<string, Promise<{
+  syncedDays: number;
+  syncedSleepDays: number;
+  syncedRecoveryDays: number;
+  syncedWorkouts: number;
+  syncedHeartRateSamples: number;
+  syncedStepIntervals: number;
+  syncedHeight: boolean;
+  diagnostics: Record<string, SyncDataTypeDiagnostic>;
+}>>();
+
 export async function syncGoogle(db: AuthDatabase, userId: string, from: string, to: string) {
   historyInput.parse({ from, to });
   if (addDays(from, 89) < to) throw new NutritionError("Sync at most 90 days at a time.");
+  const active = inFlightGoogleSync.get(userId);
+  if (active) return active;
+
+  const task = runSyncGoogle(db, userId, from, to).finally(() => {
+    if (inFlightGoogleSync.get(userId) === task) {
+      inFlightGoogleSync.delete(userId);
+    }
+  });
+  inFlightGoogleSync.set(userId, task);
+  return task;
+}
+
+async function runSyncGoogle(db: AuthDatabase, userId: string, from: string, to: string) {
   const [linked] = await db.select().from(healthIntegration).where(own(userId));
   if (!linked) throw new NutritionError("Connect Google Health first.", 409);
 
   try {
     let grant = tokens.parse(unseal(linked.credential, userId));
+    let tokenRefreshed = false;
     if (grant.expiresAt < Date.now() + 60000) {
       grant = await exchange({ grant_type: "refresh_token", refresh_token: grant.refreshToken }, grant);
+      tokenRefreshed = true;
     }
 
     const readings = new Map<string, Partial<Record<Field, number>>>();
@@ -1533,7 +1559,7 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
 
     await db.transaction(async (tx) => {
       const [current] = await tx.select().from(healthIntegration).where(own(userId)).for("update");
-      if (current?.credential !== linked.credential) {
+      if (!current || current.connectionId !== linked.connectionId) {
         throw new NutritionError("The Google connection changed. Retry the sync.", 409);
       }
       await tx
@@ -1711,7 +1737,7 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
       await tx
         .update(healthIntegration)
         .set({
-          credential: seal(grant, userId),
+          ...(tokenRefreshed ? { credential: seal(grant, userId) } : {}),
           lastSync: new Date(),
           status: "connected",
           lastError: null,
@@ -1740,7 +1766,7 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
     await db
       .update(healthIntegration)
       .set({ status: "sync_failed", lastError: message.slice(0, 240) })
-      .where(and(own(userId), eq(healthIntegration.credential, linked.credential)));
+      .where(and(own(userId), eq(healthIntegration.connectionId, linked.connectionId)));
     throw error;
   }
 }

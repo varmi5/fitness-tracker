@@ -100,6 +100,29 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   const [pulseInsights, setPulseInsights] = useState<PulseInsightsView | null>(null);
   const [trainingPulse, setTrainingPulse] = useState<PulseInsightsView | null>(null);
 
+  type DayCacheEntry = {
+    daily?: DailyNutritionView;
+    strain?: DailyStrainView;
+    recovery?: RecoveryInsightView;
+    pulse?: PulseInsightsView | null;
+  };
+  const dayCacheRef = useRef<Map<string, DayCacheEntry>>(
+    new Map([
+      [
+        initialActiveDay,
+        {
+          daily: initial.daily,
+          strain: initial.strain,
+          recovery: initial.recoveryInsights,
+        },
+      ],
+    ]),
+  );
+  const invalidateDayCache = (day?: string) => {
+    if (day) dayCacheRef.current.delete(day);
+    else dayCacheRef.current.clear();
+  };
+
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
   const lastAutoSyncRef = useRef(Date.now());
@@ -158,12 +181,14 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const now = Date.now();
       const minGap = isAppOpen ? 0 : 3 * 60 * 1000;
       if (!isAppOpen && now - lastAutoSyncRef.current < minGap) return;
-      const shouldSyncGoogle = google.connected && (isAppOpen ? isStale(google.lastSync, 2 * 60 * 1000) : true);
+      const shouldSyncGoogle =
+        google.connected && !googleSyncLock.current && (isAppOpen ? isStale(google.lastSync, 2 * 60 * 1000) : true);
       const shouldSyncHevy = Boolean(hevy?.connected) && (isAppOpen ? isStale(hevy?.lastSync, 2 * 60 * 1000) : true);
       if (!shouldSyncGoogle && !shouldSyncHevy) return;
 
       running = true;
       lastAutoSyncRef.current = now;
+      if (shouldSyncGoogle) googleSyncLock.current = true;
       try {
         const jobs: Promise<boolean>[] = [];
         if (shouldSyncGoogle) {
@@ -190,12 +215,14 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         }
         const results = await Promise.all(jobs);
         if (active && results.some(Boolean)) {
+          invalidateDayCache();
           await Promise.all([
             refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
             selectTrainingDay(trainingDayRef.current),
           ]).catch(() => undefined);
         }
       } finally {
+        if (shouldSyncGoogle) googleSyncLock.current = false;
         running = false;
       }
     };
@@ -431,6 +458,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   }
 
   async function refreshHistoryAndToday(focusDay = selectedDayRef.current, focusHomeDay = homeDayRef.current) {
+    invalidateDayCache();
     const calendarToday = todayRef.current;
     const [histRes, homeRes, dayRes] = await Promise.all([
       fetch(`/api/nutrition?from=${addDays(calendarToday, -29)}&to=${calendarToday}`, { cache: "no-store" }),
@@ -445,11 +473,13 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     if (histRes.ok) setHistory30(await histRes.json());
     if (homeRes.ok) {
       const freshHome = await homeRes.json();
+      dayCacheRef.current.set(focusHomeDay, { ...dayCacheRef.current.get(focusHomeDay), daily: freshHome });
       if (homeDayRef.current === focusHomeDay) setHomeDaily(freshHome);
       if (focusDay === focusHomeDay && selectedDayRef.current === focusDay) setSelectedDaily(freshHome);
     }
     if (dayRes?.ok) {
       const value = await dayRes.json();
+      dayCacheRef.current.set(focusDay, { ...dayCacheRef.current.get(focusDay), daily: value });
       if (selectedDayRef.current === focusDay) setSelectedDaily(value);
     }
   }
@@ -459,12 +489,24 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     homeRequest.current?.abort();
     homeDayRef.current = clamped;
     setHomeDay(clamped);
+
+    const cached = dayCacheRef.current.get(clamped);
+    if (cached?.daily) setHomeDaily(cached.daily);
+    if (cached?.strain) setHomeStrain(cached.strain);
+    if (cached?.recovery) setHomeRecovery(cached.recovery);
+    if (cached?.pulse !== undefined) setPulseInsights(cached.pulse);
+
     const controller = new AbortController();
     homeRequest.current = controller;
+    const fitbitActive =
+      (settings.trackingMode ?? (settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit";
     try {
-      const [res, strainRes] = await Promise.all([
+      const [res, strainRes, pulseRes] = await Promise.all([
         fetch(`/api/nutrition?day=${clamped}`, { signal: controller.signal, cache: "no-store" }),
         fetch(`/api/strain?day=${clamped}`, { signal: controller.signal, cache: "no-store" }).catch(() => null),
+        fitbitActive
+          ? fetch(`/api/pulse?day=${clamped}`, { signal: controller.signal, cache: "no-store" }).catch(() => null)
+          : Promise.resolve(null),
       ]);
       if (res.status === 401) {
         window.location.reload();
@@ -472,12 +514,25 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       }
       if (!res.ok) throw new Error("Could not load that date.");
       const value = await res.json();
+      const nextCache: DayCacheEntry = { ...dayCacheRef.current.get(clamped), daily: value };
       if (homeDayRef.current === clamped) setHomeDaily(value);
       if (strainRes?.ok) {
         const strainJson = await strainRes.json();
-        if (homeDayRef.current === clamped && strainJson?.strain) setHomeStrain(strainJson.strain);
-        if (homeDayRef.current === clamped && strainJson?.recoveryInsights) setHomeRecovery(strainJson.recoveryInsights);
+        if (strainJson?.strain) {
+          nextCache.strain = strainJson.strain;
+          if (homeDayRef.current === clamped) setHomeStrain(strainJson.strain);
+        }
+        if (strainJson?.recoveryInsights) {
+          nextCache.recovery = strainJson.recoveryInsights;
+          if (homeDayRef.current === clamped) setHomeRecovery(strainJson.recoveryInsights);
+        }
       }
+      if (pulseRes?.ok) {
+        const pulseJson = (await pulseRes.json()) as PulseInsightsView;
+        nextCache.pulse = pulseJson;
+        if (homeDayRef.current === clamped) setPulseInsights(pulseJson);
+      }
+      dayCacheRef.current.set(clamped, nextCache);
     } catch (error) {
       if (!controller.signal.aborted) showToast(error instanceof Error ? error.message : "Could not load that date.", "error");
     }
@@ -520,6 +575,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Could not recompute strain.");
       if (json?.strain) {
+        invalidateDayCache(day);
         if (trainingDayRef.current === day) setTrainingStrain(json.strain);
         if (homeDayRef.current === day) setHomeStrain(json.strain);
       }
@@ -581,6 +637,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Could not import Hevy data.");
       if (json?.status) setHevy(json.status);
+      invalidateDayCache();
       await Promise.all([selectTrainingDay(trainingDayRef.current), selectHomeDay(homeDayRef.current)]);
       showToast(`Imported ${json.imported ?? 0} Hevy workout(s).`, "success");
       return true;
@@ -599,6 +656,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Hevy sync failed.");
       if (json?.status) setHevy(json.status);
+      invalidateDayCache();
       await Promise.all([selectTrainingDay(trainingDayRef.current), selectHomeDay(homeDayRef.current)]);
       showToast(`Synced ${json.synced ?? 0} Hevy workout(s).`, "success");
     } catch (error) {
@@ -903,15 +961,22 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       setPulseInsights(null);
       return;
     }
-    let active = true;
-    fetch(`/api/pulse?day=${homeDay}`, { cache: "no-store" })
+    const cachedPulse = dayCacheRef.current.get(homeDay)?.pulse;
+    if (cachedPulse && cachedPulse.day === homeDay) {
+      setPulseInsights(cachedPulse);
+    }
+    const controller = new AbortController();
+    fetch(`/api/pulse?day=${homeDay}`, { cache: "no-store", signal: controller.signal })
       .then(async (res) => (res.ok ? ((await res.json()) as PulseInsightsView) : null))
       .then((data) => {
-        if (active && data) setPulseInsights(data);
+        if (!controller.signal.aborted && data) {
+          dayCacheRef.current.set(homeDay, { ...dayCacheRef.current.get(homeDay), pulse: data });
+          setPulseInsights(data);
+        }
       })
       .catch(() => undefined);
     return () => {
-      active = false;
+      controller.abort();
     };
   }, [
     isFitbitMode,
@@ -921,6 +986,45 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     tracker.settings.biologicalSex,
     tracker.settings.heightCm,
   ]);
+
+  // Idle adjacent-day prefetch so Prev/Next day stepping renders instantaneously
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      const neighbors = [addDays(homeDay, -1)];
+      if (homeDay < todayRef.current) neighbors.push(addDays(homeDay, 1));
+      for (const targetDay of neighbors) {
+        if (dayCacheRef.current.get(targetDay)?.daily) continue;
+        void Promise.all([
+          fetch(`/api/nutrition?day=${targetDay}`, { signal: controller.signal, cache: "no-store" }).then((r) =>
+            r.ok ? (r.json() as Promise<DailyNutritionView>) : null,
+          ),
+          fetch(`/api/strain?day=${targetDay}`, { signal: controller.signal, cache: "no-store" })
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null),
+          isFitbitMode
+            ? fetch(`/api/pulse?day=${targetDay}`, { signal: controller.signal, cache: "no-store" })
+                .then((r) => (r.ok ? (r.json() as Promise<PulseInsightsView>) : null))
+                .catch(() => null)
+            : Promise.resolve(null),
+        ])
+          .then(([dailyRes, strainRes, pulseRes]) => {
+            if (controller.signal.aborted || !dailyRes) return;
+            dayCacheRef.current.set(targetDay, {
+              daily: dailyRes,
+              strain: strainRes?.strain,
+              recovery: strainRes?.recoveryInsights,
+              pulse: pulseRes ?? undefined,
+            });
+          })
+          .catch(() => undefined);
+      }
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [homeDay, isFitbitMode]);
 
   useEffect(() => {
     if (!isFitbitMode || trainingDay === homeDay) {
@@ -1178,6 +1282,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           open={calendarOpen}
           today={today}
           settings={settings}
+          stepsThreshold={strainSettings?.walkingStepThreshold ?? 10500}
           onClose={() => setCalendarOpen(false)}
           onJumpToDay={(day) => {
             navigate("Today");
