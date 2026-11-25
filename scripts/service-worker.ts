@@ -20,7 +20,7 @@ self.addEventListener("push", ((event: PushMessageEvent) => {
   let payload: { title?: string; body?: string; tag?: string } = {};
   try { payload = event.data?.json() ?? {}; } catch { /* Use a neutral fallback. */ }
   event.waitUntil(worker.registration.showNotification(payload.title ?? "FitnessTrackr", {
-    body: payload.body ?? "Open your diary to log a meal.", icon: "/icon-192.png", badge: "/icon-192.png", tag: payload.tag ?? "meal-reminder",
+    body: payload.body ?? "Open your diary to log a meal.", icon: "/icon-192.png?v=2", badge: "/icon-192.png?v=2", tag: payload.tag ?? "meal-reminder",
     data: { url: "/?tab=Nutrition" },
   }));
 }) as EventListener);
