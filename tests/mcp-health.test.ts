@@ -26,6 +26,7 @@ import {
   syncGoogleAllUsers,
   unseal,
 } from "../lib/google-health";
+import { GET as getOpenAiChallenge } from "../app/.well-known/openai-apps-challenge/route";
 import { allowedMcpCallback } from "../lib/mcp-config";
 import { fitnessMcp } from "../lib/mcp-tools";
 import { nutritionData } from "../lib/nutrition-data";
@@ -154,10 +155,12 @@ test("MCP server enforces read vs write scopes and executes meal + energy tools 
   const rwClient = new Client({ name: "test-rw", version: "1.0.0" });
   await Promise.all([rwServer.connect(rwServerT), rwClient.connect(rwClientT)]);
 
-  const rwTools = (await rwClient.listTools()).tools.map((t) => t.name);
+  const rwListed = (await rwClient.listTools()).tools;
+  const rwTools = rwListed.map((t) => t.name);
   assert.equal(rwTools.length, 14);
   assert.equal(rwTools.includes("set_nutrition_targets"), false);
   assert.equal(rwTools.includes("set_logging_reminders"), false);
+  assert.equal(rwListed.find((t) => t.name === "update_meal")?.annotations?.destructiveHint, true);
 
   const logged = await rwClient.callTool({
     name: "log_meal",
@@ -1288,4 +1291,28 @@ test("concurrent syncGoogle calls coalesce cleanly without triggering a 409 conn
     delete process.env.FITNESS_INTEGRATION_KEY;
   }
 });
+
+test("OpenAI domain verification challenge route serves default token, allows env override, and returns 404 when blank", async () => {
+  const prev = process.env.OPENAI_APPS_CHALLENGE;
+  try {
+    delete process.env.OPENAI_APPS_CHALLENGE;
+    const defRes = getOpenAiChallenge();
+    assert.equal(defRes.status, 200);
+    assert.ok(defRes.headers.get("content-type")?.startsWith("text/plain"));
+    assert.equal(await defRes.text(), "1bh80Pgqg1cn1aJM7kyJQznU8EIweL");
+
+    process.env.OPENAI_APPS_CHALLENGE = "custom-token-123";
+    const overrideRes = getOpenAiChallenge();
+    assert.equal(overrideRes.status, 200);
+    assert.equal(await overrideRes.text(), "custom-token-123");
+
+    process.env.OPENAI_APPS_CHALLENGE = "   ";
+    const blankRes = getOpenAiChallenge();
+    assert.equal(blankRes.status, 404);
+  } finally {
+    if (prev === undefined) delete process.env.OPENAI_APPS_CHALLENGE;
+    else process.env.OPENAI_APPS_CHALLENGE = prev;
+  }
+});
+
 
