@@ -423,7 +423,7 @@ export function HomeView({
                 : `${pulseInsights.healthMonitor.inRangeCount}/${pulseInsights.healthMonitor.availableCount} Vitals`}
             </span>
           </div>
-          <div className="energy-strip" style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))", marginTop: 0 }}>
+          <div className="pulse-strip-grid">
             <div className="energy-cell">
               <span>Energy Bank</span>
               <strong className="num" style={{ color: "var(--recovery-color)" }}>

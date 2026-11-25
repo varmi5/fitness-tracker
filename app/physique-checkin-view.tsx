@@ -179,8 +179,8 @@ export function PhysiqueCheckinView({
         </button>
       </div>
 
-      <div className="split-row" style={{ gap: ".5rem" }}>
-        <div className="segmented" style={{ flex: 1, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }} role="tablist" aria-label="Pose filter">
+      <div style={{ display: "grid", gap: ".45rem" }}>
+        <div className="segmented" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }} role="tablist" aria-label="Pose filter">
           {PHYSIQUE_POSES.map((pose) => (
             <button
               key={pose}

@@ -1803,6 +1803,48 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   display: block;
 }
 
+/* Mobile-first responsive tightening (iPhone 375–430px) */
+.pulse-strip-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .45rem;
+}
+@media (min-width: 500px) {
+  .pulse-strip-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+.cal-filter-row {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: .38rem;
+  padding: .15rem .1rem;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.cal-filter-row::-webkit-scrollbar {
+  display: none;
+}
+.cal-filter-row button {
+  flex-shrink: 0;
+}
+@media (max-width: 440px) {
+  .energy-cell {
+    padding: .5rem .6rem;
+  }
+  .energy-cell strong {
+    font-size: .98rem;
+  }
+  .triple-ring-grid {
+    gap: .3rem;
+  }
+  .cal-cell {
+    min-height: 42px;
+    font-size: .74rem;
+  }
+}
+
 
 
 

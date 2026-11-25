@@ -587,7 +587,7 @@ export function TrainingView({
           <button
             type="button"
             className="secondary compact"
-            onClick={() => onOpenSettings("Settings")}
+            onClick={() => onOpenSettings()}
             aria-label="Walking and strain settings"
           >
             <SlidersHorizontal size={14} />
@@ -766,7 +766,7 @@ export function TrainingView({
                       Connect Google Health
                     </a>
                   ) : (
-                    <button type="button" className="unlock-btn" onClick={() => onOpenSettings("Settings")}>
+                    <button type="button" className="unlock-btn" onClick={() => onOpenSettings()}>
                       Open Settings
                     </button>
                   )}
