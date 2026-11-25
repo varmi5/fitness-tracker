@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { clearBrowserCache, readBrowserCache, writeBrowserCache } from "../lib/browser-cache";
 import { ArrowLeft, CalendarDays, Check, Plus, RefreshCw, Scale, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -124,6 +125,24 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       ],
     ]),
   );
+  const [cacheNotice, setCacheNotice] = useState<string | null>(null);
+  function cacheDay(day: string, entry: DayCacheEntry) {
+    dayCacheRef.current.delete(day);
+    dayCacheRef.current.set(day, entry);
+    while (dayCacheRef.current.size > 180) dayCacheRef.current.delete(dayCacheRef.current.keys().next().value!);
+    if (initial.userId) void writeBrowserCache(initial.userId, `day:${day}`, entry);
+  }
+  async function cachedDay(day: string) {
+    const memory = dayCacheRef.current.get(day);
+    if (memory) return memory;
+    if (!initial.userId) return undefined;
+    const saved = await readBrowserCache<DayCacheEntry>(initial.userId, `day:${day}`);
+    if (saved?.value.daily?.day === day) {
+      dayCacheRef.current.set(day, saved.value);
+      return saved.value;
+    }
+    return undefined;
+  }
   const invalidateDayCache = (day?: string) => {
     if (day) dayCacheRef.current.delete(day);
     else dayCacheRef.current.clear();
@@ -149,11 +168,43 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
   // Silk modals & stack overlays
   const [quickLogOpen, setQuickLogOpen] = useState(false);
+  const [quickLogMounted, setQuickLogMounted] = useState(false);
+  const [mcpConnected, setMcpConnected] = useState<boolean | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      void fetch("/api/mcp-status", { cache: "no-store", signal: controller.signal })
+        .then(async r => r.ok ? r.json() : null)
+        .then(data => { if (!controller.signal.aborted) setMcpConnected(data ? data.connected === true : null); })
+        .catch(() => { if (!controller.signal.aborted) setMcpConnected(null); });
+    };
+    check(); document.addEventListener("visibilitychange", check);
+    return () => { controller.abort(); document.removeEventListener("visibilitychange", check); };
+  }, [quickLogOpen]);
   const [trendsMetric, setTrendsMetric] = useState<TrendMetricKind | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(Boolean(initial.settings.needsOnboarding));
   const [bodySubPage, setBodySubPage] = useState<"physique" | null>(null);
+
+  // A fresh bootstrap updates current views without resetting the user's open tab/date.
+  useEffect(() => {
+    setTracker(initial.tracker); setSettings(initial.settings);
+    setGoogle(initial.google); setHevy(initial.hevy); setOpenWearables(initial.openWearables);
+    setHistory30(initial.history30); setAudit(initial.audit);
+    const previousActive = activeHomeDayRef.current;
+    todayRef.current = initial.calendarToday; setToday(initial.calendarToday);
+    activeHomeDayRef.current = initial.activeDay; setActiveHomeDay(initial.activeDay);
+    setShowSleep(initial.showSleep);
+    if (homeDayRef.current === previousActive) { homeDayRef.current = initial.activeDay; setHomeDay(initial.activeDay); }
+    if (selectedDayRef.current === previousActive) { selectedDayRef.current = initial.activeDay; setSelectedDay(initial.activeDay); }
+    cacheDay(initial.daily.day, { daily: initial.daily, strain: initial.strain, recovery: initial.recoveryInsights, pulse: initial.pulseInsights });
+    if (homeDayRef.current === initial.daily.day) {
+      setHomeDaily(initial.daily); setHomeStrain(initial.strain); setHomeRecovery(initial.recoveryInsights); setPulseInsights(initial.pulseInsights ?? null);
+    }
+    if (selectedDayRef.current === initial.daily.day) setSelectedDaily(initial.daily);
+  }, [initial]);
 
   useEffect(() => {
     if (!google.connected || (!google.mealSync?.pending && !google.mealSync?.failed)) return;
@@ -469,7 +520,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   async function refreshTracker() {
     const res = await fetch("/api/tracker", { cache: "no-store" });
     if (res.status === 401) {
-      window.location.reload();
+      void clearBrowserCache().finally(() => window.location.reload());
       return;
     }
     if (res.ok) setTracker(await res.json());
@@ -478,7 +529,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   async function refreshAccountAndMeta() {
     const res = await fetch("/api/nutrition", { cache: "no-store" });
     if (res.status === 401) {
-      window.location.reload();
+      void clearBrowserCache().finally(() => window.location.reload());
       return;
     }
     if (!res.ok) return;
@@ -512,7 +563,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
   async function refreshSyncToken() {
     const res = await fetch("/api/nutrition?sync=1", { cache: "no-store" });
     if (res.status === 401) {
-      window.location.reload();
+      void clearBrowserCache().finally(() => window.location.reload());
       return;
     }
     if (res.ok) {
@@ -531,7 +582,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     try {
       const res = await fetch("/api/nutrition?sync=1", { cache: "no-store" });
       if (res.status === 401) {
-        window.location.reload();
+        void clearBrowserCache().finally(() => window.location.reload());
         return;
       }
       if (!res.ok) return;
@@ -560,20 +611,20 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       focusDay === focusHomeDay ? Promise.resolve(null) : fetch(`/api/nutrition?day=${focusDay}`, { cache: "no-store" }),
     ]);
     if (histRes.status === 401 || homeRes.status === 401 || dayRes?.status === 401) {
-      window.location.reload();
+      void clearBrowserCache().finally(() => window.location.reload());
       return;
     }
     if (!histRes.ok || !homeRes.ok || (dayRes && !dayRes.ok)) throw new Error("Could not refresh the diary.");
     if (histRes.ok) setHistory30(await histRes.json());
     if (homeRes.ok) {
       const freshHome = await homeRes.json();
-      dayCacheRef.current.set(focusHomeDay, { ...dayCacheRef.current.get(focusHomeDay), daily: freshHome });
+      cacheDay(focusHomeDay, { ...dayCacheRef.current.get(focusHomeDay), daily: freshHome });
       if (homeDayRef.current === focusHomeDay) setHomeDaily(freshHome);
       if (focusDay === focusHomeDay && selectedDayRef.current === focusDay) setSelectedDaily(freshHome);
     }
     if (dayRes?.ok) {
       const value = await dayRes.json();
-      dayCacheRef.current.set(focusDay, { ...dayCacheRef.current.get(focusDay), daily: value });
+      cacheDay(focusDay, { ...dayCacheRef.current.get(focusDay), daily: value });
       if (selectedDayRef.current === focusDay) setSelectedDaily(value);
     }
   }
@@ -584,7 +635,10 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     homeDayRef.current = clamped;
     setHomeDay(clamped);
 
-    const cached = dayCacheRef.current.get(clamped);
+    const cached = await cachedDay(clamped);
+    if (homeDayRef.current !== clamped) return;
+    setCacheNotice(cached?.daily ? "Saved data · refreshing this date…" : null);
+    setHomeStrain(cached?.strain); setHomeRecovery(cached?.recovery); setPulseInsights(cached?.pulse ?? null);
     if (cached?.daily) setHomeDaily(cached.daily);
     if (cached?.strain) setHomeStrain(cached.strain);
     if (cached?.recovery) setHomeRecovery(cached.recovery);
@@ -592,24 +646,25 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
 
     const controller = new AbortController();
     homeRequest.current = controller;
-    const fitbitActive =
+    const fitbitActive = openWearables?.connected ||
       (settings.trackingMode ?? (settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit";
     try {
-      const [res, strainRes, pulseRes] = await Promise.all([
-        fetch(`/api/nutrition?day=${clamped}`, { signal: controller.signal, cache: "no-store" }),
-        fetch(`/api/strain?day=${clamped}`, { signal: controller.signal, cache: "no-store" }).catch(() => null),
-        fitbitActive
-          ? fetch(`/api/pulse?day=${clamped}`, { signal: controller.signal, cache: "no-store" }).catch(() => null)
-          : Promise.resolve(null),
-      ]);
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
+      // Start optional metrics concurrently, but never make the diary wait for them.
+      const strainRequest = fetch(`/api/strain?day=${clamped}`, { signal, cache: "no-store" }).catch(() => null);
+      const pulseRequest = fitbitActive ? fetch(`/api/pulse?day=${clamped}`, { signal, cache: "no-store" }).catch(() => null) : Promise.resolve(null);
+      const res = await fetch(`/api/nutrition?day=${clamped}`, { signal, cache: "no-store" });
       if (res.status === 401) {
-        window.location.reload();
+        void clearBrowserCache().finally(() => window.location.reload());
         return;
       }
       if (!res.ok) throw new Error("Could not load that date.");
       const value = await res.json();
       const nextCache: DayCacheEntry = { ...dayCacheRef.current.get(clamped), daily: value };
-      if (homeDayRef.current === clamped) setHomeDaily(value);
+      cacheDay(clamped, nextCache);
+      if (homeDayRef.current === clamped) { setHomeDaily(value); setCacheNotice(null); }
+      const [strainRes, pulseRes] = await Promise.all([strainRequest, pulseRequest]);
+      if (controller.signal.aborted) return;
       if (strainRes?.ok) {
         const strainJson = await strainRes.json();
         if (strainJson?.strain) {
@@ -626,9 +681,12 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         nextCache.pulse = pulseJson;
         if (homeDayRef.current === clamped) setPulseInsights(pulseJson);
       }
-      dayCacheRef.current.set(clamped, nextCache);
+      cacheDay(clamped, nextCache);
+      if (homeDayRef.current === clamped) setCacheNotice(null);
     } catch (error) {
-      if (!controller.signal.aborted) showToast(error instanceof Error ? error.message : "Could not load that date.", "error");
+      if (!controller.signal.aborted && homeDayRef.current === clamped) {
+        setCacheNotice(cached?.daily ? "Saved data · unable to refresh right now" : "Connection interrupted. Select this date again to retry.");
+      }
     }
   }
 
@@ -640,7 +698,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     try {
       const res = await fetch(`/api/strain?day=${clamped}`, { cache: "no-store" });
       if (res.status === 401) {
-        window.location.reload();
+        void clearBrowserCache().finally(() => window.location.reload());
         return;
       }
       if (!res.ok) throw new Error("Could not load strain for that date.");
@@ -790,20 +848,25 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       setDayLoading(false);
       return;
     }
+    const cached = await cachedDay(day);
+    if (selectedDayRef.current !== day) return;
+    if (cached?.daily) setSelectedDaily(cached.daily);
+    setCacheNotice(cached?.daily ? "Saved diary · refreshing…" : null);
     const controller = new AbortController();
     dayRequest.current = controller;
-    setDayLoading(true);
+    setDayLoading(!cached?.daily);
     try {
-      const res = await fetch(`/api/nutrition?day=${day}`, { signal: controller.signal, cache: "no-store" });
+      const res = await fetch(`/api/nutrition?day=${day}`, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]), cache: "no-store" });
       if (res.status === 401) {
-        window.location.reload();
+        void clearBrowserCache().finally(() => window.location.reload());
         return;
       }
       if (!res.ok) throw new Error("Could not load that date. Select it again to retry.");
       const value = await res.json();
-      if (selectedDayRef.current === day) setSelectedDaily(value);
-    } catch (error) {
-      if (!controller.signal.aborted) showToast(error instanceof Error ? error.message : "Could not load the diary.", "error");
+      cacheDay(day, { ...dayCacheRef.current.get(day), daily: value });
+      if (selectedDayRef.current === day) { setSelectedDaily(value); setCacheNotice(null); }
+    } catch {
+      if (!controller.signal.aborted && selectedDayRef.current === day) setCacheNotice(cached?.daily ? "Saved diary · unable to refresh right now" : "Connection interrupted. Select this date again to retry.");
     } finally {
       if (selectedDayRef.current === day) setDayLoading(false);
     }
@@ -821,6 +884,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message ?? "Could not save.");
       if (payload.deleted) {
+        await clearBrowserCache();
         location.reload();
         return;
       }
@@ -849,6 +913,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message ?? "Could not save.");
 
+      if (action.action === "delete") await clearBrowserCache();
       const savedDay = typeof payload.day === "object" ? payload.day : payload.meals ? payload : null;
       if (savedDay) {
         if (savedDay.day === homeDayRef.current) setHomeDaily(savedDay);
@@ -1092,6 +1157,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Could not disconnect Open Wearables.");
       if (payload.status) setOpenWearables(payload.status);
+      await clearBrowserCache();
       invalidateDayCache();
       await refreshAccountAndMeta();
       await Promise.all([
@@ -1154,7 +1220,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       .then(async (res) => (res.ok ? ((await res.json()) as PulseInsightsView) : null))
       .then((data) => {
         if (!controller.signal.aborted && data) {
-          dayCacheRef.current.set(homeDay, { ...dayCacheRef.current.get(homeDay), pulse: data });
+          cacheDay(homeDay, { ...dayCacheRef.current.get(homeDay), pulse: data });
           setPulseInsights(data);
         }
       })
@@ -1179,31 +1245,12 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
       if (homeDay < todayRef.current) neighbors.push(addDays(homeDay, 1));
       for (const targetDay of neighbors) {
         if (dayCacheRef.current.get(targetDay)?.daily) continue;
-        void Promise.all([
-          fetch(`/api/nutrition?day=${targetDay}`, { signal: controller.signal, cache: "no-store" }).then((r) =>
-            r.ok ? (r.json() as Promise<DailyNutritionView>) : null,
-          ),
-          fetch(`/api/strain?day=${targetDay}`, { signal: controller.signal, cache: "no-store" })
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null),
-          isFitbitMode
-            ? fetch(`/api/pulse?day=${targetDay}`, { signal: controller.signal, cache: "no-store" })
-                .then((r) => (r.ok ? (r.json() as Promise<PulseInsightsView>) : null))
-                .catch(() => null)
-            : Promise.resolve(null),
-        ])
-          .then(([dailyRes, strainRes, pulseRes]) => {
-            if (controller.signal.aborted || !dailyRes) return;
-            dayCacheRef.current.set(targetDay, {
-              daily: dailyRes,
-              strain: strainRes?.strain,
-              recovery: strainRes?.recoveryInsights,
-              pulse: pulseRes ?? undefined,
-            });
-          })
+        void fetch(`/api/nutrition?day=${targetDay}`, { signal: controller.signal, cache: "no-store" })
+          .then(r => r.ok ? r.json() as Promise<DailyNutritionView> : null)
+          .then(daily => { if (!controller.signal.aborted && daily) cacheDay(targetDay, { ...dayCacheRef.current.get(targetDay), daily }); })
           .catch(() => undefined);
       }
-    }, 250);
+    }, 800);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
@@ -1299,8 +1346,10 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         </div>
       </header>
 
+      {cacheNotice && <p className="cache-status" role="status">{cacheNotice}</p>}
       <div className="screen" key={tab}>
-        {tab === "Today" && (
+        {tab === "Today" && homeDaily.day !== homeDay && <p className="startup-status" role="status">Loading {homeDay}…</p>}
+        {tab === "Today" && homeDaily.day === homeDay && (
           <HomeView
             calendarToday={today}
             activeDay={activeHomeDay}
@@ -1470,10 +1519,11 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
         </div>
       )}
 
-      {quickLogOpen && (
+      {quickLogMounted && (
         <QuickLogModal
           open={quickLogOpen}
           defaultDay={activeFocusDay}
+          mcpConnected={mcpConnected}
           tracker={tracker}
           google={google}
           hevy={hevy}
@@ -1560,7 +1610,7 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
           className="nav-center-log"
           type="button"
           aria-label="Quick log"
-          onClick={() => setQuickLogOpen(true)}
+          onClick={() => { setQuickLogMounted(true); setQuickLogOpen(true); }}
         >
           <Plus size={22} aria-hidden="true" />
         </button>

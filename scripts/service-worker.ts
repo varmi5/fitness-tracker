@@ -1,11 +1,14 @@
-import { CacheFirst, Serwist } from "serwist";
+import { CacheFirst, NetworkFirst, ExpirationPlugin, Serwist } from "serwist";
 
 const serwist = new Serwist({
   skipWaiting: true,
   clientsClaim: true,
   runtimeCaching: [{
+    matcher: ({ request, sameOrigin, url }) => sameOrigin && request.mode === "navigate" && url.pathname === "/",
+    handler: new NetworkFirst({ cacheName: "fitness-public-shell-v1", networkTimeoutSeconds: 3, plugins: [new ExpirationPlugin({ maxEntries: 1, maxAgeSeconds: 7 * 86400 })] }),
+  }, {
     matcher: ({ sameOrigin, url }) => sameOrigin && url.pathname.startsWith("/_next/static/"),
-    handler: new CacheFirst({ cacheName: "fitness-build-assets" }),
+    handler: new CacheFirst({ cacheName: "fitness-build-assets", plugins: [new ExpirationPlugin({ maxEntries: 160, maxAgeSeconds: 30 * 86400 })] }),
   }],
 });
 serwist.addEventListeners();

@@ -1,5 +1,7 @@
 "use client";
 
+import { clearBrowserCache } from "../lib/browser-cache";
+
 import { ReminderSettings } from "./reminder-settings";
 import { MacroTargetEditor } from "./macro-target-editor";
 import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
@@ -1198,13 +1200,14 @@ export function SettingsView({
             <ArrowDownToLine size={17} /> Measurements (CSV)
           </button>
         </div>
+        <button type="button" className="secondary wide" onClick={async () => { await clearBrowserCache(); onMessage("Saved data cleared from this device. Your server records are unchanged."); }}>Clear this device’s cache</button>
         <button
           type="button"
           className="secondary wide"
           onClick={async () => {
             const result = await authClient.signOut({});
             if (result.error) onMessage("Could not sign out.");
-            else location.reload();
+            else { await clearBrowserCache(); location.reload(); }
           }}
         >
           Sign out
