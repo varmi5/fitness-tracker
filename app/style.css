@@ -2641,48 +2641,28 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   text-underline-offset: .18em;
 }
 .ow-progress {
-  --ow-progress-green: #16825e;
   display: flex;
-  align-items: center;
+  gap: .4rem;
   list-style: none;
   margin: .3rem 0 0;
   padding: 0;
   min-width: 0;
 }
-.ow-progress li {
-  display: flex;
-  align-items: center;
-  flex: 1;
-}
-.ow-progress li:last-child {
-  flex: 0;
-}
-.ow-progress li:not(:last-child)::after {
-  content: "";
-  flex: 1;
-  height: 2px;
+.ow-progress li { flex: 1; min-width: 0; }
+.ow-progress-segment {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
   background: var(--border-strong);
 }
-.ow-progress li.is-complete::after {
-  background: var(--ow-progress-green);
+.ow-progress li.is-complete .ow-progress-segment,
+.ow-progress li[aria-current="step"] .ow-progress-segment {
+  background: var(--accent);
 }
-.ow-progress-dot {
-  display: grid;
-  place-items: center;
-  width: 25px;
-  height: 25px;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  font-size: .75rem;
-  font-weight: 700;
-}
-.ow-progress li[aria-current="step"] .ow-progress-dot {
-  border: 2px solid var(--ow-progress-green);
-}
-.ow-progress li.is-complete .ow-progress-dot {
-  border-color: var(--ow-progress-green);
-  background: var(--ow-progress-green);
-  color: white;
+.ow-guide-box button { min-height: 44px; white-space: normal; }
+.ow-guide-box a { overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .ow-step-panel > button { width: 100%; justify-self: stretch; }
 }
 .ow-step-panel {
   display: grid;

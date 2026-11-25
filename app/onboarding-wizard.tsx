@@ -464,6 +464,8 @@ export function OnboardingWizard({
               </button>
             </div>
 
+            <p className="ow-detail">Choose a source to follow its setup guide. You can connect Google Health and Open Wearables to the same account; choosing a guide does not disconnect your other sources.</p>
+
             {sourceChoice === "fitbit" && (
               <div className="card" style={{ background: "var(--surface-soft)", display: "grid", gap: ".6rem" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: ".55rem" }}>
@@ -500,6 +502,7 @@ export function OnboardingWizard({
 
             {(sourceChoice === "apple" || sourceChoice === "other_wearable") && (
               <div className="card" style={{ background: "var(--surface-soft)", display: "grid", gap: ".6rem", minWidth: 0 }}>
+                {openWearables?.connected && <p className="ow-detail" role="status">Open Wearables is connected. Your linked devices use this account; no new pairing code is needed.</p>}
                 <OpenWearablesGuide
                   openWearables={openWearables}
                   invite={owInvite}
