@@ -173,6 +173,31 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     };
   }, [google.connected, google.mealSync?.pending, google.mealSync?.failed]);
 
+  // Observe pairing on return from the mobile app, without issuing another invitation.
+  useEffect(() => {
+    if (!openWearables?.owUserId || openWearables.connected) return;
+    const controller = new AbortController();
+    let running = false;
+    const check = async () => {
+      if (running || document.visibilityState !== "visible") return;
+      running = true;
+      try {
+        const res = await fetch("/api/integrations/open-wearables/status", { signal: controller.signal, cache: "no-store" });
+        const payload = await res.json();
+        if (res.ok && !controller.signal.aborted && payload.status) setOpenWearables(payload.status);
+      } catch { /* Retry quietly on the next check; never restart pairing automatically. */ }
+      finally { running = false; }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 15000);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [openWearables?.owUserId, openWearables?.connected]);
+
   // Intelligent background sync: morning rollover + 15m stale freshness check (respects autoSyncEnabled)
   useEffect(() => {
     if (settings.autoSyncEnabled === false) return;

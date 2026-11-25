@@ -211,6 +211,23 @@ export async function openWearablesStatus(
   };
 }
 
+// Check only the signed-in user's mapped remote account; provisioning alone is not a connection.
+export async function refreshOpenWearablesConnection(db: AuthDatabase, userId: string) {
+  const current = await openWearablesStatus(db, userId);
+  if (!current.available || !current.owUserId || current.connected) return current;
+  const remote = await owFetch<Record<string, unknown>>(`/api/v1/users/${encodeURIComponent(current.owUserId)}`);
+  if (!remote.ok || remote.data?.id !== current.owUserId) return current;
+  const synced = typeof remote.data.last_synced_at === "string" && Number.isFinite(Date.parse(remote.data.last_synced_at));
+  if (remote.data.has_active_connection === true || synced) {
+    await db.update(healthIntegration).set({
+      status: "connected",
+      accountLabel: "Open Wearables linked",
+      lastError: null,
+    }).where(ownOw(userId));
+  }
+  return openWearablesStatus(db, userId);
+}
+
 export async function ensureOpenWearablesUser(db: AuthDatabase, userId: string): Promise<string> {
   if (!openWearablesConfigured()) {
     throw new NutritionError("Open Wearables integration is not configured on this server.", 503);
@@ -785,8 +802,8 @@ export async function syncOpenWearables(
       syncedStepIntervals = stepBatch.length;
 
       const providersList = [...activeProviders];
-      const isConnected = providersList.length > 0 || syncedDays > 0 || syncedWorkouts > 0 || syncedSleepDays > 0;
-      const label = providersList.length > 0 ? providersList.map(formatSourceLabel).join(", ") : "Awaiting device link";
+      const isConnected = linked.status === "connected" || providersList.length > 0 || syncedDays > 0 || syncedWorkouts > 0 || syncedSleepDays > 0 || syncedStepIntervals > 0 || hrItems.length > 0;
+      const label = providersList.length > 0 ? providersList.map(formatSourceLabel).join(", ") : isConnected ? "Open Wearables linked" : "Awaiting device link";
 
       await tx
         .update(healthIntegration)

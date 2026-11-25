@@ -584,7 +584,7 @@ export function SettingsView({
                 </div>
               )}
 
-              <OpenWearablesGuide
+              {!openWearables.connected && <OpenWearablesGuide
                 openWearables={openWearables}
                 invite={owInvite}
                 busy={busy}
@@ -598,9 +598,9 @@ export function SettingsView({
                 }
                 onMessage={onMessage}
                 formatExpiry={fmtRelativeSync}
-              />
+              />}
 
-              {openWearables.owUserId && onSyncOpenWearables && (
+              {openWearables.owUserId && openWearables.lastError && onSyncOpenWearables && (
                 <div className="button-row">
                   <button type="button" className="secondary compact" disabled={busy} onClick={() => void onSyncOpenWearables(3)}>
                     <RefreshCw size={14} /> Sync now (3d)
