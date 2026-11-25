@@ -316,6 +316,11 @@ test("syncOpenWearables ingests Apple Health + Garmin safely, isolates users, sk
   try {
     const invite = await createOpenWearablesInviteCode(typedDb, "OW-1");
     assert.equal(invite.code, "ABCD1234");
+    await assert.rejects(() => createOpenWearablesInviteCode(typedDb, "OW-1"), /wait 30 seconds/);
+    await assert.rejects(() => createOpenWearablesInviteCode(typedDb, "OW-1", true), /wait 30 seconds/);
+    await db.update(schema.healthIntegration).set({ diagnosticsJson: { pairingIssuedAt: Date.now() - 31000 } }).where(eq(schema.healthIntegration.userId, "OW-1"));
+    await assert.rejects(() => createOpenWearablesInviteCode(typedDb, "OW-1"), /Reset pairing code/);
+    assert.equal((await createOpenWearablesInviteCode(typedDb, "OW-1", true)).code, "ABCD1234");
 
     const syncRes = await syncOpenWearables(typedDb, "OW-1", { from: "2026-11-24", to: "2026-11-24" });
     assert.equal(syncRes.syncedDays, 1);

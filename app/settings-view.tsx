@@ -45,7 +45,7 @@ interface SettingsViewProps {
   onSyncGoogle: (days?: number) => Promise<void>;
   onPushGoogle: (days?: number) => Promise<void>;
   onDisconnectGoogle: () => Promise<void>;
-  onCreateOpenWearablesInvite?: () => Promise<{ code: string; expiresAt: string | null; apiUrl: string | null } | null>;
+  onCreateOpenWearablesInvite?: (reset?: boolean) => Promise<{ code: string; expiresAt: string | null; apiUrl: string | null } | null>;
   onSyncOpenWearables?: (days?: number) => Promise<void>;
   onDisconnectOpenWearables?: () => Promise<void>;
   onOpenOnboarding?: () => void;
@@ -590,8 +590,8 @@ export function SettingsView({
                 busy={busy}
                 onGenerateInvite={
                   onCreateOpenWearablesInvite
-                    ? async () => {
-                        const invite = await onCreateOpenWearablesInvite();
+                    ? async (reset?: boolean) => {
+                        const invite = await onCreateOpenWearablesInvite(reset);
                         if (invite) setOwInvite(invite);
                       }
                     : undefined

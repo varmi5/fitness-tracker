@@ -49,7 +49,7 @@ interface OnboardingWizardProps {
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
   onNutritionAction: (action: object, successMessage: string) => Promise<boolean>;
   onImportHevy?: (rawText: string) => Promise<boolean>;
-  onCreateOpenWearablesInvite?: () => Promise<{ code: string; expiresAt: string | null; apiUrl: string | null } | null>;
+  onCreateOpenWearablesInvite?: (reset?: boolean) => Promise<{ code: string; expiresAt: string | null; apiUrl: string | null } | null>;
   onMessage: (msg: string) => void;
 }
 
@@ -512,8 +512,8 @@ export function OnboardingWizard({
                   hideSourcePicker={sourceChoice === "apple"}
                   onGenerateInvite={
                     onCreateOpenWearablesInvite
-                      ? async () => {
-                          const invite = await onCreateOpenWearablesInvite();
+                      ? async (reset?: boolean) => {
+                          const invite = await onCreateOpenWearablesInvite(reset);
                           if (invite) setOwInvite(invite);
                         }
                       : undefined

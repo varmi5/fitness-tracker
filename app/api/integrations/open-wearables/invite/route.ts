@@ -16,7 +16,9 @@ export async function POST(request: Request) {
   if (!session) return json({ message: "Please sign in." }, 401);
 
   try {
-    const result = await createOpenWearablesInviteCode(getDatabase(), session.user.id);
+    const body = await request.json().catch(() => ({}));
+    if (body === null || typeof body !== "object" || (body.reset !== undefined && typeof body.reset !== "boolean")) return json({ message: "Invalid reset request." }, 400);
+    const result = await createOpenWearablesInviteCode(getDatabase(), session.user.id, body.reset === true);
     return json(result);
   } catch (error) {
     if (error instanceof NutritionError) return json({ message: error.message }, error.status);

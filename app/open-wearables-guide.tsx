@@ -26,7 +26,7 @@ interface OpenWearablesGuideProps {
   busy?: boolean;
   initialPlatform?: DataSource;
   hideSourcePicker?: boolean;
-  onGenerateInvite?: () => Promise<void>;
+  onGenerateInvite?: (reset?: boolean) => Promise<void>;
   onMessage: (msg: string) => void;
   formatExpiry?: (iso: string | null) => string;
 }
@@ -171,7 +171,7 @@ export function OpenWearablesGuide({
             {step === 2 && (
               <>
                 <strong>Get your pairing code</strong>
-                <p className="ow-detail">Use this one-time code and Host URL in Open Wearables.</p>
+                <p className="ow-detail">Use this one-time code and Host URL in Open Wearables. Only the latest code works; resetting replaces the previous code.</p>
                 {canGenerate && !invite && (
                   <button
                     type="button"
@@ -209,9 +209,9 @@ export function OpenWearablesGuide({
                 {invite && (
                   <button type="button" className="unlock-btn" onClick={() => advanceTo(3)}>Next · Sync</button>
                 )}
-                {canGenerate && invite && (
-                  <button type="button" className="secondary compact ow-regenerate" disabled={busy} onClick={() => void onGenerateInvite()}>
-                    {busy ? "Getting code…" : "Get a new code"}
+                {canGenerate && (invite || openWearables?.owUserId) && (
+                  <button type="button" className="secondary compact ow-regenerate" disabled={busy} onClick={() => { if (window.confirm("Reset pairing code? Your previous unused code will stop working. Your account and health data will be kept.")) void onGenerateInvite(true); }}>
+                    {busy ? "Getting code…" : "Reset pairing code"}
                   </button>
                 )}
                 <button type="button" className="secondary compact ow-regenerate" onClick={() => advanceTo(1)}>Back to install</button>
