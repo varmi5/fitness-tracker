@@ -1034,10 +1034,10 @@ export function Dashboard({ initial }: { initial: InitialAppData }) {
     }
   }
 
-  async function createOpenWearablesInvite(): Promise<{ code: string; expiresAt: string | null; apiUrl: string | null } | null> {
+  async function createOpenWearablesInvite(reset = false): Promise<{ code: string; expiresAt: string | null; apiUrl: string | null } | null> {
     setBusy(true);
     try {
-      const res = await fetch("/api/integrations/open-wearables/invite", { method: "POST" });
+      const res = await fetch("/api/integrations/open-wearables/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset }) });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Could not generate connection code.");
       if (payload.status) setOpenWearables(payload.status);

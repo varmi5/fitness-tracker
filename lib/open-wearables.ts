@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { and, eq, gte, inArray, lte, ne } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import type { AuthDatabase } from "./auth";
 import { NutritionError, nutritionData, upsertSyncedWeight } from "./nutrition-data";
 import {
@@ -302,8 +302,21 @@ export async function ensureOpenWearablesUser(db: AuthDatabase, userId: string):
   return owUserId;
 }
 
-export async function createOpenWearablesInviteCode(db: AuthDatabase, userId: string) {
+export async function createOpenWearablesInviteCode(db: AuthDatabase, userId: string, reset = false) {
   const owUserId = await ensureOpenWearablesUser(db, userId);
+  const current = await refreshOpenWearablesConnection(db, userId);
+  if (current.connected) throw new NutritionError("Open Wearables is already connected. No new code is needed.", 409);
+  const [row] = await db.select({ diagnostics: healthIntegration.diagnosticsJson }).from(healthIntegration).where(ownOw(userId));
+  const diagnostics = row?.diagnostics as Record<string, unknown> | undefined;
+  const previous = typeof diagnostics?.pairingIssuedAt === "number" ? diagnostics.pairingIssuedAt : null;
+  const now = Date.now();
+  if (previous !== null && now - previous < 30000) throw new NutritionError("Please wait 30 seconds before resetting your pairing code.", 429);
+  if (previous !== null && !reset) throw new NutritionError("A pairing code was already issued. Use Reset pairing code to replace it.", 409);
+  // Atomic reservation across tabs and app instances. Never store the code itself.
+  const claimed = await db.update(healthIntegration).set({
+    diagnosticsJson: sql`coalesce(${healthIntegration.diagnosticsJson}, '{}'::jsonb) || ${JSON.stringify({ pairingIssuedAt: now })}::jsonb`,
+  }).where(and(ownOw(userId), sql`(${healthIntegration.diagnosticsJson}->>'pairingIssuedAt') IS NOT DISTINCT FROM ${previous === null ? null : String(previous)}`)).returning({ userId: healthIntegration.userId });
+  if (!claimed.length) throw new NutritionError("A code request is already in progress. Use the latest code or wait 30 seconds.", 429);
   const base = apiBaseUrl();
   const email = process.env.OPEN_WEARABLES_DEVELOPER_EMAIL?.trim();
   const password = process.env.OPEN_WEARABLES_DEVELOPER_PASSWORD;
@@ -812,12 +825,7 @@ export async function syncOpenWearables(
           accountLabel: label,
           lastSync: new Date(),
           lastError: null,
-          diagnosticsJson: {
-            providers: providersList,
-            syncedAt: new Date().toISOString(),
-            from,
-            to,
-          },
+          diagnosticsJson: sql`${healthIntegration.diagnosticsJson} || ${JSON.stringify({ providers: providersList, syncedAt: new Date().toISOString(), from, to })}::jsonb`,
         })
         .where(ownOw(userId));
 
