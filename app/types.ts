@@ -22,6 +22,8 @@ export type NutritionSettings = Awaited<ReturnType<ReturnType<typeof nutritionDa
   bulkMode?: boolean;
   sleepGoalMinutes?: number;
   sleepGoals?: { effectiveFrom: string; goalMinutes: number }[];
+  onboardingCompletedAt?: string | null;
+  needsOnboarding?: boolean;
 };
 export type NutritionHistory = Awaited<ReturnType<ReturnType<typeof nutritionData>["history"]>>;
 export type HistoryDay = NutritionHistory["days"][number];
@@ -54,6 +56,7 @@ export interface HevyIntegrationStatus {
 }
 
 export interface InitialAppData {
+  userName?: string | null;
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
   today: string;

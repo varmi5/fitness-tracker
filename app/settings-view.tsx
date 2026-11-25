@@ -9,6 +9,7 @@ import { Button } from "../components/ui/button";
 import { authClient } from "../lib/auth-client";
 import { displayUnit, displayValue, metrics, type Reading } from "../lib/metrics";
 import { type EnergySource, type TrackingMode } from "../lib/nutrition-model";
+import { CHATGPT_MCP_INSTRUCTIONS } from "../lib/onboarding";
 import {
   fmtRelativeSync,
   type AuditEntry,
@@ -21,6 +22,7 @@ import {
 
 interface SettingsViewProps {
   today: string;
+  userName?: string | null;
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
   google: GoogleIntegrationStatus;
@@ -39,18 +41,13 @@ interface SettingsViewProps {
   onSyncGoogle: (days?: number) => Promise<void>;
   onPushGoogle: (days?: number) => Promise<void>;
   onDisconnectGoogle: () => Promise<void>;
+  onOpenOnboarding?: () => void;
   onMessage: (msg: string) => void;
 }
 
-const CHATGPT_INSTRUCTIONS = `When I upload a food photo:
-1. Search my saved recipes/foods first via search_saved_foods.
-2. Prioritise weights (g/ml) and packet labels I give; estimate missing portions using objects for scale and account for oils, sauces, and cooking methods with a calMin/calMax uncertainty range.
-3. Leave unknown micronutrients (such as fibre) as null rather than 0.
-4. Only log when I ask, using log_meal with a unique idempotencyKey, and report the saved ID and database totals.
-5. For "add another spoon/item", call update_meal with appendItems instead of creating a duplicate meal.`;
-
 export function SettingsView({
   today,
+  userName,
   tracker,
   settings,
   google,
@@ -69,6 +66,7 @@ export function SettingsView({
   onSyncGoogle,
   onPushGoogle,
   onDisconnectGoogle,
+  onOpenOnboarding,
   onMessage,
 }: SettingsViewProps) {
   const resolvedInitialMode: TrackingMode =
@@ -297,15 +295,22 @@ export function SettingsView({
 
   return (
     <>
-      <section className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".75rem" }}>
-        <div>
-          <strong style={{ fontSize: "1rem" }}>@varmisan</strong>
+      <section className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".75rem", flexWrap: "wrap" }}>
+        <div style={{ minWidth: 0 }}>
+          <strong style={{ fontSize: "1rem", overflowWrap: "anywhere" }}>{userName || "Member"}</strong>
           <div style={{ fontSize: ".76rem", color: "var(--muted)" }}>
-            Silk Telemetry · {google.connected ? "Google Health connected" : "Local"}
+            Silk Telemetry · {google.connected ? "Google Health connected" : trackingMode === "manual" ? "Manual TDEE" : "Local"}
             {hevy?.connected ? " · Hevy connected" : ""}
           </div>
         </div>
-        <span className="pill accent-soft">Pro</span>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: ".45rem" }}>
+          {onOpenOnboarding && (
+            <button type="button" className="secondary compact" onClick={onOpenOnboarding}>
+              Setup guide
+            </button>
+          )}
+          <span className="pill accent-soft">Pro</span>
+        </div>
       </section>
 
       {/* Nutrition Targets */}
@@ -464,7 +469,7 @@ export function SettingsView({
         }
         badgeClass={google.connected ? (trackingMode === "fitbit" ? "teal-soft" : "amber-soft") : ""}
       >
-        <div style={{ display: "grid", gap: ".65rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".65rem", minWidth: 0 }}>
           {!google.available && (
             <p style={{ fontSize: ".82rem" }}>
               Set <code>GOOGLE_HEALTH_CLIENT_ID</code>, <code>GOOGLE_HEALTH_CLIENT_SECRET</code>, and 64-hex{" "}
@@ -642,7 +647,7 @@ export function SettingsView({
         }
         badgeClass={hevy?.connected ? "teal-soft" : ""}
       >
-        <div style={{ display: "grid", gap: ".65rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".65rem", minWidth: 0 }}>
           <div className="muted" style={{ fontSize: ".82rem" }}>
             {hevy?.accountLabel && (
               <>
@@ -847,10 +852,11 @@ export function SettingsView({
         badge={mcpEnabled ? "Enabled" : "Disabled"}
         badgeClass={mcpEnabled ? "accent-soft" : ""}
       >
-        <div style={{ display: "grid", gap: ".65rem" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".65rem", minWidth: 0 }}>
           <div className="mono-box">{mcpUrl}</div>
-          <details>
-            <summary>Connect on ChatGPT web first, then use on your phone</summary><p><a href="/connect" target="_blank" rel="noreferrer">Open the connection guide and plugin download</a></p>
+          <details style={{ minWidth: 0 }}>
+            <summary>Connect on ChatGPT web first, then use on your phone</summary>
+            <p style={{ marginTop: ".45rem" }}><a href="/connect" target="_blank" rel="noreferrer">Open the connection guide and plugin download</a></p>
             <ol className="connector-steps">
               <li><a href="https://chatgpt.com/plugins" target="_blank" rel="noreferrer">Use this link to open ChatGPT on the web and add FitnessTrackr</a>. Select +, then Add custom MCP server.</li>
               <li>Use the connection URL here: <code>{mcpUrl}</code>. Choose OAuth with automatic client registration, then create the plugin.</li>
@@ -860,6 +866,10 @@ export function SettingsView({
             </ol>
             <p className="search-hint">Custom MCP setup is done on the web. Plugin availability on mobile depends on your account and workspace. If this endpoint is disabled, it must be enabled before connecting.</p>
             <a href="https://learn.chatgpt.com/docs/plugins" target="_blank" rel="noreferrer">ChatGPT plugin instructions</a>
+          </details>
+          <details style={{ minWidth: 0 }}>
+            <summary>View ChatGPT meal-logging instructions</summary>
+            <pre className="prompt-preview-box" style={{ marginTop: ".5rem" }}>{CHATGPT_MCP_INSTRUCTIONS}</pre>
           </details>
           <div className="button-row">
             <button
@@ -876,8 +886,8 @@ export function SettingsView({
               type="button"
               className="secondary compact"
               onClick={async () => {
-                try { await navigator.clipboard.writeText(CHATGPT_INSTRUCTIONS); onMessage("ChatGPT instructions copied."); }
-                catch { onMessage("Copy was blocked. See the connector guide for the instructions."); }
+                try { await navigator.clipboard.writeText(CHATGPT_MCP_INSTRUCTIONS); onMessage("ChatGPT instructions copied."); }
+                catch { onMessage("Copy was blocked. Open instructions above to copy manually."); }
               }}
             >
               <Copy size={14} /> Copy ChatGPT instructions
@@ -896,7 +906,7 @@ export function SettingsView({
             </button>
           </div>
           {audit.length > 0 && (
-            <details>
+            <details style={{ minWidth: 0 }}>
               <summary>Recent MCP tool activity ({audit.length})</summary>
               {audit.map((ev) => (
                 <div className="list-item" key={ev.id}>
