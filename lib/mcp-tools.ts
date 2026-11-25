@@ -1,3 +1,4 @@
+import pluginManifest from "../plugins/mcp-logger/plugin.json";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { AuthDatabase } from "./auth";
@@ -12,7 +13,21 @@ import { getDatabase } from "./runtime";
 import { trackerData } from "./tracker-data";
 
 export function fitnessMcp(userId: string, permissions: string[], db: AuthDatabase = getDatabase()) {
-  const server = new McpServer({ name: "mcp-logger", version: "1.2.0" }, { instructions: "For sleep schedules, recovery, vitals or workouts, call get_health_history for the user's requested local dates. These records remain accessible with fitness:read even when hidden on Home or manual tracking mode is selected. Use get_health_history sleepSessions for main sleep, naps, timestamps and deep/REM/awake stages. Exclude ongoing, unprocessed or overlapping sessions from totals; unknown stage data is not zero. Sleep goals are user preferences, and stages are wearable estimates rather than clinical measurements. Use returned timezone, sources and syncedAt; missing data is unknown, not inactivity. Discuss trends as wearable estimates, not diagnoses. Do not assume a Bevel recovery score is supplied. Never change targets or health settings without explicit consent." });
+  const listing = pluginManifest.extensions["com.openai"].interface;
+  const icon = new URL("/icon-512.png", listing.websiteURL);
+  icon.searchParams.set("v", pluginManifest.version);
+  const server = new McpServer({
+    name: "mcp-logger", title: listing.displayName, version: pluginManifest.version,
+    description: pluginManifest.description, websiteUrl: listing.websiteURL,
+    icons: [{ src: icon.toString(), mimeType: "image/png", sizes: ["512x512"] }],
+  }, { instructions: [
+    "Use only this authenticated user's database records and timezone. For a usual food, search saved/frequent foods first; today's portion may differ.",
+    "Log food only when requested, reuse an intent-specific idempotency key on retries, and append to the exact existing meal rather than duplicating it. Pass an explicit date/time for yesterday or another specified time. Confirm a plausible duplicate as an additional serving or correction only when unclear.",
+    "Report saved meal IDs and totals only after successful tool confirmation. Queued Google sync is not proof of a remote upload. Never silently change targets or settings; settings writes need explicit approval and their own permission.",
+    "For sleep schedules, recovery, vitals or workouts, call get_health_history for the requested local dates. Sleep sessions include naps and stages; request includeStageIntervals=true for detailed timings for at most 31 days. Exclude ongoing, unprocessed or overlapping sessions from completed totals; missing data is unknown, not inactivity.",
+    "Use returned timezone, sources, processing state and syncedAt. Historical sleep goals are preferences, not measured biological need. Food, wearable and calculated values are estimates, not diagnoses; never invent a Bevel score or muscle-repair percentage.",
+    "Health reads remain accessible with fitness:read regardless of Home visibility or manual nutrition mode. Screen features do not imply MCP access to private physique photos, profile edits or detailed Hevy sets. Phone reminders are opt-in FitnessTrackr PWA notifications, not ChatGPT app notifications. Ordinary backend updates do not require new consent on every call.",
+  ].join(" ") });
   const data = nutritionData(db, userId);
 
   const format = (payload: unknown, isError = false) => ({
@@ -213,7 +228,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
 
   register(
     "get_health_history",
-    "Read this user's stored Google Health/imported sleep sessions (including naps and split sleep), stage totals (use includeStageIntervals:true for timestamped stage intervals where supplied; maximum31 days), historical user sleep goals, recovery/vitals (resting HR, HRV, SpO2, respiration, temperature, VO2/body fat where available), and workouts (type, start/end, duration, calories, distance, heart rate, active-zone minutes where available) for inclusive local dates. Works independently of Home visibility or manual tracking mode. Returns sources, sync timestamps and missing-data indicators; no new Google permission or live refresh is performed.",
+    "Read this user's stored Google Health/imported sleep sessions (including naps and split sleep), stage totals (use includeStageIntervals:true for timestamped stage intervals where supplied; maximum 31 days), historical user sleep goals, recovery/vitals (resting HR, HRV, SpO2, respiration, temperature, VO2/body fat where available), and workouts (type, start/end, duration, calories, distance, heart rate, active-zone minutes where available) for inclusive local dates. Works independently of Home visibility or manual tracking mode. Returns sources, sync timestamps and missing-data indicators; no new Google permission or live refresh is performed.",
     historyInput.extend({ includeStageIntervals: z.boolean().optional().default(false) }),
     ({ from, to, includeStageIntervals }) => data.healthHistory(from, to, { includeStageIntervals }),
     { summarize: ({ from, to }) => `${from}..${to}` },

@@ -11,7 +11,9 @@
               "mode": "dcr"
             },
             "baseScopes": [
-              "fitness:read"
+              "fitness:read",
+              "fitness:write",
+              "offline_access"
             ],
             "defaultScopes": [
               "fitness:read",

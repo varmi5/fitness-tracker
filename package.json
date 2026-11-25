@@ -8,7 +8,9 @@
     "test": "tsx --test tests/*.test.ts",
     "db:migrate": "node scripts/migrate.mjs",
     "test:smoke": "node tests/smoke.mjs",
-    "test:ui": "node tests/mobile-smoke.mjs"
+    "test:ui": "node tests/mobile-smoke.mjs",
+    "plugin:build": "python3 scripts/build-plugin.py",
+    "plugin:check": "python3 scripts/build-plugin.py --check"
   },
   "dependencies": {
     "@better-auth/oauth-provider": "^1.7.23",
