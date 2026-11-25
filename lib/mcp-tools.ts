@@ -184,7 +184,7 @@ export function fitnessMcp(userId: string, permissions: string[], db: AuthDataba
     "Update an existing meal by ID, move its date/time, replace items, or append additional food items via appendItems without creating duplicate meals. Pass idempotencyKey on retries.",
     updateMealInput,
     (input) => data.update(input),
-    { write: true, summarize: (input) => input.id },
+    { write: true, destructive: true, summarize: (input) => input.id },
   );
 
   register(
