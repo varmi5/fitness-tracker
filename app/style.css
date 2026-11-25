@@ -2672,6 +2672,9 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   gap: .55rem;
   min-width: 0;
 }
+.ow-regenerate {
+  justify-self: start;
+}
 .ow-steps-list {
   font-size: .78rem;
   margin: 0;
