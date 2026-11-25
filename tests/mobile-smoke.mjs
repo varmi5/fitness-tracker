@@ -67,7 +67,35 @@ try {
     assert.ok((await context.request.post(`${origin}/api/auth/sign-in/email`, { headers: { Origin: origin }, data: { email, password } })).ok());
     const page = await context.newPage();
     await page.route(/\/api\/foods\?.*products=1/, (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ products: [], providerMessage: null }) }));
+    const requestedDiaryDays = [];
+    const loadedStrainDays = new Set();
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/nutrition" && url.searchParams.has("day")) {
+        requestedDiaryDays.push(url.searchParams.get("day"));
+      }
+    });
+    page.on("response", (response) => {
+      const url = new URL(response.url());
+      if (response.ok() && url.pathname === "/api/strain" && url.searchParams.has("day")) {
+        loadedStrainDays.add(url.searchParams.get("day"));
+      }
+    });
+    const bootstrapped = page.waitForResponse((response) => response.url().endsWith("/api/bootstrap") && response.ok());
     await page.goto(origin);
+    const { calendarToday } = await (await bootstrapped).json();
+    const pastWeek = Array.from({ length: 7 }, (_, i) => {
+      const date = new Date(calendarToday + "T00:00:00Z");
+      date.setUTCDate(date.getUTCDate() - i - 1);
+      return date.toISOString().slice(0, 10);
+    });
+    if (!loadedStrainDays.has(pastWeek.at(-1))) {
+      const oldestMetric = await page.waitForResponse((response) =>
+        response.url().endsWith(`/api/strain?day=${pastWeek.at(-1)}`) && response.ok());
+      await oldestMetric.finished();
+    }
+    assert.ok(pastWeek.every((day) => requestedDiaryDays.includes(day) && loadedStrainDays.has(day)));
+    const prefetchCounts = requestedDiaryDays.length;
     const prevDayBtn = page.getByRole("button", { name: "Previous day", exact: true });
     const nextDayBtn = page.getByRole("button", { name: "Next day", exact: true });
     await prevDayBtn.waitFor();
@@ -98,6 +126,12 @@ try {
     await nextDayBtn.click();
     assert.equal((await page.locator("h1").innerText()).trim(), "Today");
     assert.equal(await nextDayBtn.isDisabled(), true);
+    await prevDayBtn.click();
+    await page.getByRole("heading", { name: "Yesterday", exact: true }).waitFor();
+    await nextDayBtn.click();
+    await page.getByRole("heading", { name: "Today", exact: true }).waitFor();
+    assert.equal(requestedDiaryDays.length, prefetchCounts, "Fresh dates should not fetch nutrition again");
+    assert.equal(await page.locator(".cache-status").count(), 0, "Warm navigation should not show a refresh banner");
 
     const nav = page.getByRole("navigation");
     const fab = page.getByRole("button", { name: "Quick log", exact: true });

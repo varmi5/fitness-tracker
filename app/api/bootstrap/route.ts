@@ -1,3 +1,4 @@
+import { logDiaryLoadFailure } from "../../../lib/diary-load-diagnostics";
 import { getAppBootstrap } from "../../../lib/app-bootstrap";
 import { authConfigured } from "../../../lib/runtime";
 export const dynamic = "force-dynamic";
@@ -7,7 +8,8 @@ export async function GET(request: Request) {
   try {
     const data = await getAppBootstrap(request.headers);
     return data ? json(data) : json({ message: "Please sign in." }, 401);
-  } catch {
+  } catch (error) {
+    logDiaryLoadFailure("bootstrap", error);
     return json({ message: "Could not refresh your data. Please try again." }, 503);
   }
 }
