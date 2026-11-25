@@ -177,12 +177,32 @@ export function PhysiqueCheckinView({
 
   useEffect(() => {
     if (!playing || timelapseFrames.length < 2) return;
+    const lastIndex = timelapseFrames.length - 1;
+    if (frameIndex >= lastIndex) {
+      setPlaying(false);
+      return;
+    }
     const ms = SPEED_INTERVAL_MS[speed];
-    const id = window.setInterval(() => {
-      setFrameIndex((i) => (i + 1) % timelapseFrames.length);
+    const id = window.setTimeout(() => {
+      const nextIndex = frameIndex + 1;
+      setFrameIndex(nextIndex);
+      if (nextIndex >= lastIndex) {
+        setPlaying(false);
+      }
     }, ms);
-    return () => window.clearInterval(id);
-  }, [playing, speed, timelapseFrames.length]);
+    return () => window.clearTimeout(id);
+  }, [playing, speed, frameIndex, timelapseFrames.length]);
+
+  function handleTogglePlay() {
+    if (playing) {
+      setPlaying(false);
+      return;
+    }
+    if (safeFrameIndex >= timelapseFrames.length - 1) {
+      setFrameIndex(0);
+    }
+    setPlaying(true);
+  }
 
   function handleToggleAdd() {
     if (!showUpload) {
@@ -592,7 +612,7 @@ export function PhysiqueCheckinView({
                 type="button"
                 className="secondary icon-btn"
                 aria-label={playing ? "Pause timelapse" : "Play timelapse"}
-                onClick={() => setPlaying((p) => !p)}
+                onClick={handleTogglePlay}
               >
                 {playing ? <Pause size={16} /> : <Play size={16} />}
               </button>
