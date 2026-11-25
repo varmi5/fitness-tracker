@@ -5,8 +5,8 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "FitnessTrackr", short_name: "FitnessTrackr", description: "Personal nutrition, energy balance, and measurement tracker",
     start_url: "/", display: "standalone", background_color: "#E8EAF0", theme_color: "#E8EAF0",
     icons: [
-      { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
-      { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+      { src: "/icon-192.png?v=2", sizes: "192x192", type: "image/png" },
+      { src: "/icon-512.png?v=2", sizes: "512x512", type: "image/png", purpose: "maskable" },
     ],
   };
 }
