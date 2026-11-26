@@ -2233,20 +2233,6 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 }
 
 /* Silk Home Bevel-style Energy Bank, Health Monitor & Sleep Needed */
-.energy-bank-bar {
-  height: 7px;
-  width: 100%;
-  border-radius: 999px;
-  background: var(--track);
-  overflow: hidden;
-  margin: .3rem 0 .25rem;
-}
-.energy-bank-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--teal), var(--accent-2));
-  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1);
-}
 .health-monitor-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -2288,6 +2274,25 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 .health-vital-dot.is-in_range { background: var(--recovery-color); }
 .health-vital-dot.is-high,
 .health-vital-dot.is-low { background: var(--status-bad); }
+.energy-summary { display: grid; gap: .55rem; }
+.energy-summary h3 { margin: 0; }
+.energy-summary .pill { font-size: .68rem; color: var(--text); }
+.energy-metric-button {
+  min-height: 58px;
+  color: var(--muted);
+}
+.energy-metric-button:hover,
+.energy-metric-button[aria-expanded="true"] { background: var(--track); }
+.energy-metric-button[aria-expanded="true"] svg { transform: rotate(180deg); }
+.metric-detail {
+  border-top: 1px solid var(--border);
+  margin-top: .15rem;
+  padding-top: .45rem;
+}
+.metric-detail dl { display: grid; gap: .3rem; margin: .35rem 0; }
+.metric-detail dl > div { display: flex; justify-content: space-between; gap: .6rem; font-size: .78rem; }
+.metric-detail dt { color: var(--muted); }
+.metric-detail dd { margin: 0; text-align: right; font-weight: 600; flex-shrink: 0; }
 .sleep-need-formula {
   display: flex;
   align-items: center;
@@ -2397,6 +2402,78 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: .7rem;
 }
+.physique-share-trigger { justify-self: start; }
+.physique-share-sheet .quick-sheet-header p { color: var(--muted); margin: 0; font-size: .86rem; }
+.physique-share-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; }
+.physique-share-photo {
+  position: relative;
+  display: grid;
+  align-content: start;
+  padding: .25rem;
+  border: 2px solid transparent;
+  color: var(--text);
+  background: var(--surface-soft);
+  gap: .25rem;
+  white-space: normal;
+  font-size: .71rem;
+}
+.physique-share-photo[aria-pressed="true"] { border-color: var(--accent); }
+.physique-share-photo img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: contain;
+  background: var(--track);
+  border-radius: 8px;
+}
+.physique-share-check {
+  position: absolute;
+  top: .45rem;
+  right: .45rem;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--accent-ink);
+  background: var(--surface);
+  border: 1px solid var(--muted);
+  border-radius: 999px;
+}
+.physique-share-photo[aria-pressed="true"] .physique-share-check { background: var(--accent); border-color: var(--accent); }
+.physique-share-footer {
+  display: grid;
+  gap: .46rem;
+  padding: .75rem 1rem max(.75rem, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  font-size: .83rem;
+}
+.physique-share-footer > button { justify-self: start; }
+.physique-share-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .55rem; }
+.physique-share-link input { width: 100%; min-width: 0; font-size: 1rem; }
+.physique-share-notice { margin: 0; }
+.shared-physique { width: min(100% - 2rem, 840px); margin: 0 auto; padding: max(2rem, env(safe-area-inset-top)) 0 2rem; }
+.shared-physique header { margin-bottom: 1.35rem; }
+.shared-physique header p { color: var(--muted); font-size: .86rem; margin: 0 0 .25rem; }
+.shared-physique h1 { margin: 0; font-size: clamp(1.6rem, 5vw, 2.3rem); }
+.shared-physique-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: .85rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.shared-physique-gallery figure { margin: 0; }
+.shared-physique-gallery img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  max-height: 62dvh;
+  object-fit: contain;
+  background: var(--surface-soft);
+  border-radius: 14px;
+}
+.shared-physique-gallery figcaption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .25rem .55rem; margin-top: .4rem; font-size: .8rem; }
+.shared-physique-gallery figcaption span { text-transform: capitalize; color: var(--muted); }
 .physique-card {
   padding: .65rem;
   display: grid;

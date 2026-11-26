@@ -19,7 +19,10 @@ export function proxy(request: NextRequest) {
   response.headers.set("Referrer-Policy", "no-referrer");
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Cache-Control", "private, no-store");
+  if (request.nextUrl.pathname.startsWith("/share/physique/")) {
+    response.headers.set("X-Robots-Tag", "noindex, nofollow");
+  }
   return response;
 }
 
-export const config = { matcher: ["/", "/support", "/setup", "/reset-password", "/api/:path*", "/oauth/:path*", "/mcp"] };
+export const config = { matcher: ["/", "/support", "/setup", "/reset-password", "/share/physique/:path*", "/api/:path*", "/oauth/:path*", "/mcp"] };
