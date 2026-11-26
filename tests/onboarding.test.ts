@@ -5,6 +5,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { nutritionData } from "../lib/nutrition-data";
 import { ACTIVITY_LEVELS, buildChatGptTdeePrompt, estimateMifflinTdee } from "../lib/onboarding";
+import { linkedWearableProviders } from "../lib/source-priority";
 import * as schema from "../lib/schema";
 
 const pg = new PGlite();
@@ -113,4 +114,11 @@ test("onboarding flag starts true for new users, persists completion per user, a
   const resetU1 = await u1.setPreferences({ onboardingCompleted: false });
   assert.equal(resetU1.onboardingCompletedAt, null);
   assert.equal(resetU1.needsOnboarding, true);
+});
+
+test("onboarding reports only linked providers, even when the Open Wearables account is connected", () => {
+  assert.deepEqual(linkedWearableProviders({ connected: true, providers: ["apple", "google"] }), { apple: true, other: [] });
+  assert.deepEqual(linkedWearableProviders({ connected: true, providers: ["oura", "oura", "unknown"] }), { apple: false, other: ["oura"] });
+  assert.deepEqual(linkedWearableProviders({ connected: true, providers: [] }), { apple: false, other: [] });
+  assert.deepEqual(linkedWearableProviders({ connected: false, providers: ["apple", "garmin"] }), { apple: false, other: [] });
 });

@@ -45,9 +45,8 @@ export function openWearablesConfigured(): boolean {
   return Boolean(apiBaseUrl() && apiKey());
 }
 
-export function normalizeOwSource(provider?: string | null): EnergySource {
+function namedOwSource(provider?: string | null): EnergySource | null {
   const raw = (provider ?? "").trim().toLowerCase();
-  if (!raw) return "apple";
   if (raw.includes("apple")) return "apple";
   if (raw.includes("health_connect") || raw === "android" || raw.includes("google_health_connect")) {
     return "health_connect";
@@ -60,8 +59,12 @@ export function normalizeOwSource(provider?: string | null): EnergySource {
   if (raw.includes("suunto")) return "suunto";
   if (raw.includes("strava")) return "strava";
   if (raw.includes("withings")) return "withings";
-  if (raw.includes("fitbit") || raw === "google" || raw.includes("google_fit")) return "google";
-  return "apple";
+  if (raw.includes("fitbit") || raw === "google" || raw === "google_health" || raw.includes("google_fit")) return "google";
+  return null;
+}
+
+export function normalizeOwSource(provider?: string | null): EnergySource {
+  return namedOwSource(provider) ?? "apple";
 }
 
 let developerSession: { token: string; usableUntil: number } | null = null;
@@ -414,12 +417,13 @@ export async function syncOpenWearables(
 
     const connectionItems = unwrapItems<Record<string, unknown>>(connRes.data);
     const activeProviders = new Set<string>();
-    for (const c of connectionItems) {
-      const status = typeof c.status === "string" ? c.status.toLowerCase() : "active";
-      if (status !== "disconnected" && status !== "revoked") {
-        const norm = normalizeOwSource(typeof c.provider === "string" ? c.provider : null);
-        activeProviders.add(norm);
-      }
+    const inactiveProviders = new Set<string>();
+    for (const connection of connectionItems) {
+      const provider = namedOwSource(typeof connection.provider === "string" ? connection.provider : null);
+      if (!provider) continue;
+      const status = typeof connection.status === "string" ? connection.status.toLowerCase() : "active";
+      if (status === "active" || status === "connected") activeProviders.add(provider);
+      else inactiveProviders.add(provider);
     }
 
     const touchedDays = new Set<string>();
@@ -430,6 +434,16 @@ export async function syncOpenWearables(
     const sleepEventItems = unwrapItems<Record<string, unknown>>(sleepEventsRes.data);
     const hrItems = unwrapItems<Record<string, unknown>>(hrRes.data);
     const stepItems = unwrapItems<Record<string, unknown>>(stepsTsRes.data);
+
+    // Phone health sources can upload through the paired SDK without a cloud OAuth connection.
+    for (const item of [...activityItems, ...sleepSummaryItems, ...sleepEventItems, ...workoutItems, ...recoveryItems, ...hrItems, ...stepItems]) {
+      const metadata = item.source;
+      const rawProvider = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).provider : item.provider;
+      const provider = namedOwSource(typeof rawProvider === "string" ? rawProvider : null);
+      if ((provider === "apple" || provider === "health_connect" || provider === "samsung") && !inactiveProviders.has(provider)) {
+        activeProviders.add(provider);
+      }
+    }
 
     // Body summary is either a single BodySummary object or wrapped
     const bodyObj =
