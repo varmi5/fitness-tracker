@@ -1805,7 +1805,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         'sleep', (SELECT json_build_object('n', count(*)::int, 'd', max(day)::text, 'm', max(synced_at)::text) FROM daily_sleep WHERE user_id = ${userId}),
         'recovery', (SELECT json_build_object('n', count(*)::int, 'd', max(day)::text, 'm', max(synced_at)::text) FROM daily_recovery WHERE user_id = ${userId}),
         'workouts', (SELECT json_build_object('n', count(*)::int, 'd', max(day)::text, 'm', max(synced_at)::text) FROM daily_workout WHERE user_id = ${userId}),
-        'health', (SELECT json_build_object('s', status, 'a', account_label, 'm', last_sync::text, 'e', last_error) FROM health_integration WHERE user_id = ${userId} AND provider = 'google' LIMIT 1),
+        'health', (SELECT json_object_agg(provider, json_build_object('s', status, 'a', account_label, 'm', last_sync::text, 'e', last_error) ORDER BY provider) FROM health_integration WHERE user_id = ${userId}),
+        'hevy', (SELECT json_build_object('n', count(*)::int, 'm', max(synced_at)::text) FROM hevy_workout WHERE user_id = ${userId}),
         'audit', (SELECT json_build_object('n', count(*)::int, 'm', max(created_at)::text) FROM mcp_audit WHERE user_id = ${userId}),
         'measurements', (SELECT json_build_object('n', count(*)::int, 's', coalesce(sum(value), 0)::text) FROM measurement WHERE user_id = ${userId}),
         'reminders', (SELECT json_build_object('e', enabled, 't', times, 'm', updated_at::text) FROM reminder_preference WHERE user_id = ${userId} LIMIT 1)
