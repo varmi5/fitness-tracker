@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, date, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { boolean, date, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 export const user = pgTable("user", {
   id: text().primaryKey(),
@@ -463,4 +463,21 @@ export const physiqueCheckin = pgTable("physique_checkin", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   index("physique_checkin_user_day_idx").on(t.userId, t.day, t.createdAt),
+]);
+
+export const feedbackReport = pgTable("feedback_report", {
+  id: uuid().primaryKey(),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  kind: text({ enum: ["bug", "feature"] }).notNull(),
+  title: text().notNull(),
+  description: text().notNull(),
+  area: text(),
+  context: text(),
+  status: text({ enum: ["new", "reviewing", "resolved"] }).notNull().default("new"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  cannyLink: text("canny_link"),
+  githubLink: text("github_link"),
+}, (t) => [
+  index("feedback_report_user_created_idx").on(t.userId, t.createdAt),
+  index("feedback_report_created_idx").on(t.createdAt, t.id),
 ]);

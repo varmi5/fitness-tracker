@@ -22,4 +22,4 @@ export function proxy(request: NextRequest) {
   return response;
 }
 
-export const config = { matcher: ["/", "/setup", "/reset-password", "/api/:path*", "/oauth/:path*", "/mcp"] };
+export const config = { matcher: ["/", "/support", "/setup", "/reset-password", "/api/:path*", "/oauth/:path*", "/mcp"] };

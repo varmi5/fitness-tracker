@@ -5,7 +5,7 @@ import { clearBrowserCache } from "../lib/browser-cache";
 import { ReminderSettings } from "./reminder-settings";
 import { MacroTargetEditor } from "./macro-target-editor";
 import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
-import { AlertTriangle, ArrowDownToLine, ChevronDown, Copy, Fingerprint, RefreshCw, Upload } from "lucide-react";
+import { AlertTriangle, ArrowDownToLine, Bug, ChevronDown, ChevronRight, Copy, Fingerprint, RefreshCw, Upload } from "lucide-react";
 import { TwoWaySyncIcon } from "../components/icons";
 import { Button } from "../components/ui/button";
 import { authClient } from "../lib/auth-client";
@@ -350,6 +350,12 @@ export function SettingsView({
           <span className="pill accent-soft">Pro</span>
         </div>
       </section>
+
+      <a className="settings-support-link card" href="/support">
+        <Bug size={18} aria-hidden="true" />
+        <span><strong>Report a bug</strong><small>Send feedback or suggest a feature</small></span>
+        <ChevronRight size={17} aria-hidden="true" />
+      </a>
 
       {/* Nutrition Targets */}
       <SettingsDropdown
