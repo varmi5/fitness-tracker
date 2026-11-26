@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -127,6 +127,8 @@ try {
     ...env, SIGNUP_MODE: "open", RESEND_API_KEY: "local-test", EMAIL_FROM: "fitness@example.test",
     TURNSTILE_SECRET_KEY: "local-test", NEXT_PUBLIC_TURNSTILE_SITE_KEY: "local-test",
     FITNESS_TEST_EMAIL: verificationFile, INVITE_CODE: "",
+    CANNY_API_KEY: "test-canny", CANNY_FEEDBACK_BOARD_ID: "test-board", CANNY_FEEDBACK_AUTHOR_ID: "test-author",
+    FEEDBACK_GITHUB_TOKEN: "test-github",
   } });
   const signupPage = await waitForSetup();
   assert.equal(signupPage.status, 200);
@@ -166,6 +168,51 @@ try {
   const memberCookie = memberSignIn.headers.getSetCookie().map((header) => header.split(";")[0]).join("; ");
   assert.ok(memberCookie);
   console.log("Public signup, bot challenge rejection and replay protection, and verified member sign-in passed with simulated providers.");
+  const feedback = {
+    action: "submit", id: randomUUID(), kind: "bug", title: "My workout won’t save",
+    description: "A private example for the owner to review.", area: "Training", includeContext: true,
+  };
+  const support = (cookie) => fetch(url("/support"), { headers: cookie ? { Cookie: cookie } : {} });
+  const publicSupport = await support();
+  assert.match(await publicSupport.text(), /Email support/);
+  assert.match(publicSupport.headers.get("cache-control"), /private.*no-store/);
+  assert.equal((await post("/api/feedback", feedback)).status, 401);
+  assert.equal((await post("/api/feedback", feedback, { Cookie: memberCookie, Origin: "https://elsewhere.example.test" })).status, 403);
+  const memberHeaders = { Cookie: memberCookie, "User-Agent": "Mozilla/5.0 (iPhone) Safari/605.1" };
+  const postReport = () => post("/api/feedback", feedback, memberHeaders);
+  for (const response of await Promise.all([postReport(), postReport()])) {
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).id, feedback.id);
+  }
+  assert.deepEqual((await db.query("SELECT context, area FROM feedback_report WHERE id = $1", [feedback.id])).rows,
+    [{ context: "iOS / iPadOS · Safari", area: "Training" }]);
+  const statusChange = { action: "status", id: feedback.id, status: "reviewing" };
+  assert.equal((await post("/api/feedback", statusChange, memberHeaders)).status, 403);
+  const edit = { id: feedback.id, title: "Workout save issue", summary: "Reproduce with a synthetic workout." };
+  assert.equal((await post("/api/feedback", { ...edit, action: "github" }, memberHeaders)).status, 403);
+  const ownerHeaders = { Cookie: cookie };
+  assert.equal((await post("/api/feedback", statusChange, ownerHeaders)).status, 200);
+  const signedInMember = await (await support(memberCookie)).text();
+  assert.match(signedInMember, /My workout won’t save/);
+  assert.match(signedInMember, /In review/);
+  assert.doesNotMatch(signedInMember, /Feedback inbox|A private example|Ask AI/);
+  assert.doesNotMatch(await (await support()).text(), /My workout won’t save/);
+  assert.match(await (await support(cookie)).text(), /A private example for the owner to review/);
+  const canny = await post("/api/feedback", { ...edit, action: "canny" }, ownerHeaders);
+  assert.equal(canny.status, 200);
+  assert.match((await canny.json()).link, /fitness-test\.canny\.io/);
+  const github = await post("/api/feedback", { ...edit, action: "github" }, ownerHeaders);
+  assert.equal(github.status, 200);
+  assert.deepEqual(await github.json(), { link: "https://github.com/varmi5/fitness-tracker/issues/123", assigned: true });
+  const retryHandoff = await post("/api/feedback", { ...edit, action: "github", title: "Would fail if resent" }, ownerHeaders);
+  assert.equal(retryHandoff.status, 200);
+  assert.equal((await retryHandoff.json()).link, "https://github.com/varmi5/fitness-tracker/issues/123");
+  const idea = { ...feedback, id: randomUUID(), kind: "feature" };
+  assert.equal((await post("/api/feedback", idea, memberHeaders)).status, 201);
+  assert.equal((await post("/api/feedback", { ...edit, id: idea.id, action: "github" }, ownerHeaders)).status, 400);
+  assert.deepEqual((await db.query("SELECT context, area FROM feedback_report WHERE id = $1", [idea.id])).rows,
+    [{ context: null, area: null }]);
+  console.log("Private feedback, report deduplication, owner-only triage and mocked Canny/Copilot handoffs passed.");
   await stopApp();
 
   // Simulate the old production resource policy; startup must merge the fixed scopes.
