@@ -465,6 +465,12 @@ export const physiqueCheckin = pgTable("physique_checkin", {
   index("physique_checkin_user_day_idx").on(t.userId, t.day, t.createdAt),
 ]);
 
+export const physiqueShare = pgTable("physique_share", {
+  userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
+  token: text().notNull().unique(),
+  checkinIds: text("checkin_ids").array().notNull(),
+});
+
 export const feedbackReport = pgTable("feedback_report", {
   id: uuid().primaryKey(),
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),

@@ -378,6 +378,10 @@ export interface SleepNightRecord {
 
 export interface PulseSleepResult {
   score: number | null;
+  mainSleepMinutes: number | null;
+  napMinutes: number;
+  napCount: number;
+  totalSleepMinutes: number | null;
   durationPct: number | null;
   efficiencyPct: number | null;
   restorativePct: number | null;
@@ -390,7 +394,7 @@ export interface PulseSleepResult {
   observedDays: number;
   debtCoverage: "complete" | "partial" | "unavailable";
   scoreCoverage: string[];
-  algorithmVersion: "sleep-v2-experimental";
+  algorithmVersion: "sleep-v3-experimental";
   recommendedBedtime: string | null;
   recommendedWakeTime: string | null;
 }
@@ -438,7 +442,13 @@ export function computeSleepInsights(
     return Number.isFinite(g) && g >= 4 && g <= 12 ? g : 8;
   };
   const sleepNeedHours = goalForDay(anchorDay);
-  const last7 = selectNonOverlappingSleepSessions(recentNights, options.now).filter((n) => n.day >= addDays(anchorDay, -6) && n.day <= anchorDay);
+  const main = todaySleep?.day === anchorDay && todaySleep.isMainSleep !== false ? todaySleep : null;
+  const last7 = selectNonOverlappingSleepSessions(main ? [main, ...recentNights] : recentNights, options.now)
+    .filter((n) => n.day >= addDays(anchorDay, -6) && n.day <= anchorDay);
+  const mainSleep = main && last7.includes(main) ? main : null;
+  const naps = last7.filter((n) => n.day === anchorDay && n.isMainSleep === false);
+  const napMinutes = naps.reduce((sum, n) => sum + n.minutesAsleep, 0);
+  const totalSleepMinutes = mainSleep || naps.length ? (mainSleep?.minutesAsleep ?? 0) + napMinutes : null;
   const days = new Map<string, { minutes: number; complete: boolean }>();
   // A nap does not establish that the main night was observed. Never treat that missing night as zero sleep.
   const observedMainDays = new Set(last7.filter((n) => n.isMainSleep !== false).map((n) => n.day));
@@ -456,20 +466,19 @@ export function computeSleepInsights(
   const scheduleVariabilityMinutes = wakeMins.length >= 3 && medianWake != null ? Math.round(wakeMins.reduce((s, m) => s + circularDistance(m, medianWake), 0) / wakeMins.length) : null;
   const common = {
     sri: null, scheduleVariabilityMinutes, sleepNeedHours, sleepDebtHours: debt, observedDays, debtCoverage,
-    algorithmVersion: "sleep-v2-experimental" as const,
+    mainSleepMinutes: mainSleep?.minutesAsleep ?? null, napMinutes, napCount: naps.length, totalSleepMinutes,
+    algorithmVersion: "sleep-v3-experimental" as const,
     recommendedWakeTime: medianWake == null ? null : fmtMinutesHHMM(medianWake),
     recommendedBedtime: medianWake == null ? null : fmtMinutesHHMM(medianWake - sleepNeedHours * 60),
   };
-  const validToday = todaySleep && todaySleep.day === anchorDay && todaySleep.isMainSleep !== false && selectNonOverlappingSleepSessions([todaySleep], options.now).length > 0;
-  if (!validToday) return { ...common, score: null, durationPct: null, efficiencyPct: null, restorativePct: null, deepPct: null, remPct: null, scoreCoverage: [] };
-  const asleepMin = todaySleep.minutesAsleep;
-  const durationPct = Math.round(clamp(asleepMin / (sleepNeedHours * 60) * 100, 0, 100));
-  const awake = todaySleep.minutesAwake;
-  const intervalMinutes = (todaySleep.sleepEnd!.getTime() - todaySleep.sleepStart!.getTime()) / 60000;
-  const efficiencyPct = computeSleepEfficiencyPct(asleepMin, awake, intervalMinutes);
+  if (!mainSleep) return { ...common, score: null, durationPct: null, efficiencyPct: null, restorativePct: null, deepPct: null, remPct: null, scoreCoverage: [] };
+  const asleepMin = mainSleep.minutesAsleep;
+  const durationPct = Math.round(clamp((asleepMin + napMinutes) / (sleepNeedHours * 60) * 100, 0, 100));
+  const intervalMinutes = (mainSleep.sleepEnd!.getTime() - mainSleep.sleepStart!.getTime()) / 60000;
+  const efficiencyPct = computeSleepEfficiencyPct(asleepMin, mainSleep.minutesAwake, intervalMinutes);
   const stagePct = (minutes: number | null) => minutes != null && Number.isFinite(minutes) && minutes >= 0 && minutes <= asleepMin ? round1(minutes / asleepMin * 100) : null;
-  let deepPct = stagePct(todaySleep.deepMinutes), remPct = stagePct(todaySleep.remMinutes);
-  const reportedStages = [todaySleep.deepMinutes, todaySleep.remMinutes, todaySleep.lightMinutes].filter((m): m is number => m != null);
+  let deepPct = stagePct(mainSleep.deepMinutes), remPct = stagePct(mainSleep.remMinutes);
+  const reportedStages = [mainSleep.deepMinutes, mainSleep.remMinutes, mainSleep.lightMinutes].filter((m): m is number => m != null);
   if (reportedStages.some((m) => !Number.isFinite(m) || m < 0) || reportedStages.reduce((sum, m) => sum + m, 0) > asleepMin + 1) { deepPct = null; remPct = null; }
   const restorativePct = deepPct != null && remPct != null ? round1(deepPct + remPct) : null;
   // Stages are reported as wearable estimates; no universal ideal deep/REM ratio is assumed.
@@ -861,11 +870,14 @@ export interface EnergyBankResult {
   currentPct: number | null;
   peakPct: number | null;
   drainedPct: number;
+  observedMinutes: number;
   status: "charged" | "steady" | "low" | "unavailable";
 }
 
 export interface DaytimeStressResult {
   avgStress: number | null;
+  restingHrBpm: number | null;
+  observedAvgHrBpm: number | null;
   lowMinutes: number;
   mediumMinutes: number;
   highMinutes: number;
@@ -889,19 +901,21 @@ export function computeEnergyBankAndStress(
       ? Math.round(0.6 * recoveryScore + 0.4 * sleepScore)
       : recoveryScore ?? sleepScore;
 
-  if (hrSamples.length === 0 || restingHrBpm == null || !Number.isFinite(restingHrBpm) || restingHrBpm <= 0) {
+  const rhr = restingHrBpm != null && Number.isFinite(restingHrBpm) && restingHrBpm > 0
+    ? clamp(restingHrBpm, 35, 110) : null;
+  if (hrSamples.length === 0 || rhr == null) {
     return {
       energyBank: {
         currentPct: seed,
         peakPct: seed,
         drainedPct: 0,
+        observedMinutes: 0,
         status: seed == null ? "unavailable" : seed >= 65 ? "charged" : seed >= 35 ? "steady" : "low",
       },
-      stress: { avgStress: null, lowMinutes: 0, mediumMinutes: 0, highMinutes: 0, band: "unavailable", observedMinutes: 0 },
+      stress: { avgStress: null, restingHrBpm: rhr, observedAvgHrBpm: null, lowMinutes: 0, mediumMinutes: 0, highMinutes: 0, band: "unavailable", observedMinutes: 0 },
     };
   }
 
-  const rhr = Math.max(35, Math.min(110, restingHrBpm));
   const maxHr = Math.max(rhr + 40, maxHrBpm || 190);
   const reserve = maxHr - rhr;
   const sorted = [...new Map(hrSamples.map((s) => [s.recordedAt, s])).values()]
@@ -911,10 +925,12 @@ export function computeEnergyBankAndStress(
 
   // Minute-level drain & non-workout daytime stress
   let totalDrain = 0;
+  let energyMinutes = 0;
   let lowMinutes = 0;
   let mediumMinutes = 0;
   let highMinutes = 0;
   let stressSum = 0;
+  let hrBpmMinutes = 0;
   let stressCount = 0;
 
   for (let i = 1; i < sorted.length; i++) {
@@ -923,12 +939,14 @@ export function computeEnergyBankAndStress(
     if (sleepIntervals.some((w) => sorted[i - 1].ms < w.endMs && sorted[i].ms > w.startMs)) continue;
     const hrrFrac = Math.max(0, (sorted[i].bpm - rhr) / reserve);
     totalDrain += (0.015 + 0.14 * hrrFrac * hrrFrac + 0.04 * hrrFrac) * dtMin;
+    energyMinutes += dtMin;
 
     const inWorkout = workoutIntervals.some((w) => sorted[i - 1].ms < w.endMs && sorted[i].ms > w.startMs);
     if (!inWorkout) {
       const z = (sorted[i].bpm - (rhr + 6)) / 10;
       const lvl = clamp(3 / (1 + Math.exp(-1.1 * (z - 0.5))), 0, 3);
       stressSum += lvl * dtMin;
+      hrBpmMinutes += sorted[i].bpm * dtMin;
       stressCount += dtMin;
       if (lvl < 1.0) lowMinutes += dtMin;
       else if (lvl < 2.0) mediumMinutes += dtMin;
@@ -949,10 +967,13 @@ export function computeEnergyBankAndStress(
       currentPct,
       peakPct,
       drainedPct,
+      observedMinutes: round1(energyMinutes),
       status: currentPct == null ? "unavailable" : currentPct >= 65 ? "charged" : currentPct >= 35 ? "steady" : "low",
     },
     stress: {
       avgStress,
+      restingHrBpm: rhr,
+      observedAvgHrBpm: stressCount > 0 ? Math.round(hrBpmMinutes / stressCount) : null,
       observedMinutes: round1(stressCount),
       lowMinutes: Math.round(lowMinutes),
       mediumMinutes: Math.round(mediumMinutes),

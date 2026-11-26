@@ -14,6 +14,8 @@ export interface BevelScoreRingProps {
   strokeWidth?: number;
   sublabel?: string;
   onClick?: () => void;
+  expanded?: boolean;
+  controls?: string;
 }
 
 export function BevelScoreRing({
@@ -28,6 +30,8 @@ export function BevelScoreRing({
   strokeWidth = 8.5,
   sublabel,
   onClick,
+  expanded,
+  controls,
 }: BevelScoreRingProps) {
   const clampedPct = Math.max(0, Math.min(100, Number.isFinite(pct) ? pct : 0));
   const r = (size - strokeWidth) / 2;
@@ -109,7 +113,7 @@ export function BevelScoreRing({
 
   if (onClick) {
     return (
-      <button type="button" className="bevel-ring-btn" onClick={onClick} aria-label={`${label}: ${displayText ?? value ?? "no data"}`}>
+      <button type="button" className="bevel-ring-btn" onClick={onClick} aria-label={`${label}: ${displayText ?? value ?? "no data"}`} aria-expanded={expanded} aria-controls={controls}>
         {content}
       </button>
     );

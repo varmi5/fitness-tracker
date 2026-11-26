@@ -5,9 +5,10 @@ import { ChevronLeft, ChevronRight, RefreshCw, TrendingUp } from "lucide-react";
 import { BevelScoreRing, CalorieSlider } from "../components/bevel-widgets";
 import { MealCategoryIcon } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
-import { addDays, isCalorieGoalMet } from "../lib/nutrition-model";
+import { addDays, isCalorieGoalMet, newestMealsFirst } from "../lib/nutrition-model";
 import { computeTargetStrain } from "../lib/strain-engine";
 import { metrics, summary, weightReadingsThrough } from "../lib/metrics";
+import { EnergyCard } from "./energy-card";
 import type { TrendMetricKind } from "./metric-trends-modal";
 import {
   CATEGORY_LABELS,
@@ -187,8 +188,13 @@ export function HomeView({
   const strainTarget = dayPulse?.strainTarget ?? computeTargetStrain(effectiveRecoveryScore);
   const overallStrain = dayStrain?.overallStrain ?? null;
   const recoveryScore = effectiveRecoveryScore;
-  const sleepMinutes = daySleep?.minutesAsleep ?? dayRecovery?.metrics.sleepMinutes ?? null;
-  const sleepScore = dayPulse?.sleep.score ?? null;
+  const pulseSleep = dayPulse?.sleep;
+  const sleepMinutes = pulseSleep?.totalSleepMinutes ?? daySleep?.minutesAsleep ?? dayRecovery?.metrics.sleepMinutes ?? null;
+  const mainSleepMinutes = pulseSleep?.mainSleepMinutes === undefined ? daySleep?.minutesAsleep ?? null : pulseSleep.mainSleepMinutes;
+  const napMinutes = pulseSleep?.napMinutes ?? 0;
+  const napCount = pulseSleep?.napCount ?? 0;
+  const napLabel = napCount > 1 ? `${napCount} naps` : "Nap";
+  const sleepScore = pulseSleep?.score ?? null;
   const sleepPct = sleepScore;
   const recoveryStateLabel = recoveryAvailabilityLabel(dayPulse?.recovery.availability);
   const vitalsPending = isFitbitMode && recoveryScore == null && sleepMinutes == null;
@@ -196,7 +202,7 @@ export function HomeView({
   const sameDayWorkouts = (dayStrain?.activities ?? [])
     .filter((a) => a.kind === "strength" || a.kind === "cardio")
     .slice(0, 2);
-  const cappedMeals = daily.meals.slice(0, 3);
+  const cappedMeals = newestMealsFirst(daily.meals).slice(0, 3);
 
   const openTrainingView = () => (onOpenTraining ? onOpenTraining(viewDay) : onNavigate("Training"));
 
@@ -300,6 +306,8 @@ export function HomeView({
                   : `${formatDurationMinutes(sleepMinutes)} · ${sleepScore == null ? "Duration only" : "Estimate"}`
               }
               onClick={() => setSleepDetailOpen((v) => !v)}
+              expanded={sleepDetailOpen}
+              controls="home-sleep-details"
             />
           </div>
         ) : (
@@ -361,30 +369,37 @@ export function HomeView({
           </div>
         )}
 
-        {isFitbitMode && <p className="metric-provenance">{sleepAttribution(daySleep, daily.timezone, calendarToday)}. Scores are estimates.</p>}
+        {isFitbitMode && (
+          <p className="metric-provenance">
+            {daySleep || !napMinutes ? sleepAttribution(daySleep, daily.timezone, calendarToday) : "Nap recorded"}
+            {napMinutes > 0 && ` · ${formatDurationMinutes(napMinutes)} ${napCount > 1 ? `across ${napLabel}` : "nap"}`}.
+            {sleepScore != null && " Scores are estimates."}
+          </p>
+        )}
 
-        {isFitbitMode && sleepDetailOpen && daySleep && (
-          <div className="muscle-detail-bar" style={{ marginTop: ".1rem" }}>
-            <div className="split-row" style={{ fontSize: ".8rem" }}>
-              <strong>{sleepScore != null ? `Sleep estimate ${sleepScore}%` : "Sleep duration"}</strong>
-              <span className="num">{formatDurationMinutes(daySleep.minutesAsleep)}</span>
-            </div>
-            <div className="split-row" style={{ fontSize: ".75rem", color: "var(--muted)" }}>
-              <span>Deep {daySleep.deepMinutes != null ? formatDurationMinutes(daySleep.deepMinutes) : "—"}</span>
-              <span>REM {daySleep.remMinutes != null ? formatDurationMinutes(daySleep.remMinutes) : "—"}</span>
-              <span>Light {daySleep.lightMinutes != null ? formatDurationMinutes(daySleep.lightMinutes) : "—"}</span>
-            </div>
-            {dayPulse?.sleep && <p className="metric-provenance">Score uses {dayPulse.sleep.scoreCoverage.join(" and ") || "no available components"}. Deep/REM are wearable estimates. {dayPulse.sleep.scheduleVariabilityMinutes != null ? `Wake-time variability ${dayPulse.sleep.scheduleVariabilityMinutes} min.` : "Schedule variability needs more sleep sessions."}</p>}
-            {dayPulse?.sleep && (
-              <div className="split-row" style={{ fontSize: ".73rem", color: "var(--muted)" }}>
-                <span>Efficiency {dayPulse.sleep.efficiencyPct != null ? `${dayPulse.sleep.efficiencyPct}%` : "unknown"} · Debt {dayPulse.sleep.sleepDebtHours != null ? `${dayPulse.sleep.sleepDebtHours}h` : "unknown"}</span>
-                <span>
-                  {dayPulse.sleep.recommendedBedtime
-                    ? `Bedtime ~${dayPulse.sleep.recommendedBedtime}`
-                    : `Need ${dayPulse.sleep.sleepNeedHours}h`}
-                </span>
-              </div>
-            )}
+        {isFitbitMode && (
+          <div className="metric-detail" id="home-sleep-details" hidden={!sleepDetailOpen}>
+            {sleepDetailOpen && <>
+              <dl>
+                <div><dt>Total sleep</dt><dd className="num">{sleepMinutes == null ? "—" : formatDurationMinutes(sleepMinutes)}</dd></div>
+                <div><dt>Main sleep</dt><dd className="num">{mainSleepMinutes == null ? "—" : formatDurationMinutes(mainSleepMinutes)}</dd></div>
+                {napMinutes > 0 && <div><dt>{napLabel}</dt><dd className="num">{formatDurationMinutes(napMinutes)}</dd></div>}
+                {pulseSleep && <div><dt>Sleep goal</dt><dd className="num">{pulseSleep.sleepNeedHours}h</dd></div>}
+                {pulseSleep?.durationPct != null && <div><dt>Duration score</dt><dd className="num">{pulseSleep.durationPct}%</dd></div>}
+                {pulseSleep?.efficiencyPct != null && <div><dt>Main sleep efficiency</dt><dd className="num">{pulseSleep.efficiencyPct}%</dd></div>}
+                {pulseSleep?.scheduleVariabilityMinutes != null && <div><dt>Wake-time variability</dt><dd className="num">{pulseSleep.scheduleVariabilityMinutes} min</dd></div>}
+                {pulseSleep?.recommendedBedtime && <div><dt>Suggested bedtime</dt><dd className="num">{pulseSleep.recommendedBedtime}</dd></div>}
+              </dl>
+              {daySleep && (
+                <p className="metric-provenance">Main sleep stages · Deep {daySleep.deepMinutes != null ? formatDurationMinutes(daySleep.deepMinutes) : "—"} · REM {daySleep.remMinutes != null ? formatDurationMinutes(daySleep.remMinutes) : "—"} · Light {daySleep.lightMinutes != null ? formatDurationMinutes(daySleep.lightMinutes) : "—"}</p>
+              )}
+              <p className="metric-provenance">
+                {sleepScore == null ? "A completed main sleep is needed for a daily score."
+                  : pulseSleep?.napMinutes === undefined ? "This saved estimate uses main sleep. Refresh to include completed naps."
+                    : pulseSleep.efficiencyPct == null ? "The score uses total sleep against your goal, including completed naps."
+                      : "The score weights duration (including completed naps) at 80% and main sleep efficiency at 20%."}
+              </p>
+            </>}
           </div>
         )}
       </section>
@@ -402,73 +417,7 @@ export function HomeView({
         onClick={() => onNavigate("Nutrition")}
       />
 
-      {/* Compact Energy, HR & Sleep Debt Card (matching Health Monitor compactness) */}
-      {isFitbitMode && dayPulse && (
-        <button
-          type="button"
-          className="card card-interactive"
-          onClick={openTrainingView}
-          style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: ".5rem" }}
-          aria-label="Daily Energy and Heart Rate summary"
-        >
-          <div className="split-row">
-            <span className="eyebrow">Energy &amp; Autonomic Load</span>
-            <span
-              className={`pill ${
-                dayPulse.stress.band === "high"
-                  ? "danger-soft"
-                  : dayPulse.stress.band === "moderate"
-                    ? "amber-soft"
-                    : "teal-soft"
-              }`}
-              style={{ fontSize: ".68rem" }}
-            >
-              {dayPulse.stress.avgStress != null
-                ? `${dayPulse.stress.band === "high" ? "High" : dayPulse.stress.band === "moderate" ? "Moderate" : "Calm"} HR`
-                : "Pending sync"}
-            </span>
-          </div>
-          <div className="compact-telemetry-grid">
-            <div className="health-vital-cell">
-              <span className="health-vital-label">Energy</span>
-              <span className="health-vital-val num" style={{ color: "var(--recovery-color)" }}>
-                {dayPulse.energyBank.currentPct != null ? `${dayPulse.energyBank.currentPct}%` : "—"}
-              </span>
-              <div className="energy-bank-bar" style={{ margin: ".1rem 0 0", width: "78%" }} aria-hidden="true">
-                <div
-                  className="energy-bank-fill"
-                  style={{ width: `${Math.max(0, Math.min(100, dayPulse.energyBank.currentPct ?? 0))}%` }}
-                />
-              </div>
-            </div>
-            <div className="health-vital-cell">
-              <span className="health-vital-label">HR Index</span>
-              <span className="health-vital-val num">
-                {dayPulse.stress.avgStress != null ? dayPulse.stress.avgStress.toFixed(1) : "—"}
-              </span>
-              <span
-                className={`health-vital-dot ${
-                  dayPulse.stress.band === "high"
-                    ? "is-high"
-                    : dayPulse.stress.band === "low" || dayPulse.stress.band === "moderate"
-                      ? "is-in_range"
-                      : ""
-                }`}
-                aria-hidden="true"
-              />
-            </div>
-            <div className="health-vital-cell">
-              <span className="health-vital-label">Sleep Debt</span>
-              <span className="health-vital-val num">
-                {dayPulse.sleep.sleepDebtHours != null ? `${dayPulse.sleep.sleepDebtHours}h` : "—"}
-              </span>
-              <span className="health-vital-label" style={{ fontSize: ".6rem" }}>
-                {dayPulse.sleep.observedDays}/7d
-              </span>
-            </div>
-          </div>
-        </button>
-      )}
+      {isFitbitMode && dayPulse && <EnergyCard key={viewDay} pulse={dayPulse} />}
 
       {/* Silk Health Monitor 5-Vital Baseline Strip */}
       {isFitbitMode && dayPulse && dayPulse.healthMonitor.availableCount > 0 && (
