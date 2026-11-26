@@ -62,6 +62,15 @@ export function formatSourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+export function linkedWearableProviders(connection?: { connected: boolean; providers: readonly string[] }) {
+  const providers = connection?.connected ? new Set(connection.providers) : new Set<string>();
+  return {
+    apple: providers.has("apple"),
+    other: [...providers].filter((provider) =>
+      provider !== "apple" && provider !== "google" && provider !== "manual" && Object.hasOwn(SOURCE_LABELS, provider)),
+  };
+}
+
 export function rankSources(preferred: string | null | undefined, defaults: readonly string[]): string[] {
   const cleanPref = preferred && preferred !== "auto" ? preferred.trim().toLowerCase() : null;
   const order: string[] = [];

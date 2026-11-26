@@ -85,7 +85,7 @@ export interface InitialAppData {
   google: GoogleIntegrationStatus;
   hevy: HevyIntegrationStatus;
   openWearables?: OpenWearablesIntegrationStatus;
-  strain: DailyStrainView;
+  strain?: DailyStrainView;
   strainSettings: StrainSettings;
   recoveryInsights?: RecoveryInsightView;
   pulseInsights?: PulseInsightsView | null;

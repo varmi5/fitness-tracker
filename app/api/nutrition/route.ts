@@ -11,6 +11,8 @@ import { NutritionError, nutritionData, preferencesInput, targetInput } from "..
 import { energyInput, historyInput, logMealInput, templateInput, updateMealInput } from "../../../lib/nutrition-model";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
 import { mcpRevocation, oauthAccessToken, oauthConsent, oauthRefreshToken } from "../../../lib/schema";
+import { hevyStatus } from "../../../lib/hevy";
+import { openWearablesStatus } from "../../../lib/open-wearables";
 import { trackerData } from "../../../lib/tracker-data";
 
 export const dynamic = "force-dynamic";
@@ -72,13 +74,15 @@ export async function GET(request: Request) {
       const range = historyInput.parse({ from: query.get("from"), to: query.get("to") });
       return json(await data.history(range.from, range.to));
     }
-    const [settings, google, audit] = await Promise.all([
+    const [settings, google, hevy, openWearables, audit] = await Promise.all([
       data.settings(),
       googleStatus(db, user.id),
+      hevyStatus(db, user.id),
+      openWearablesStatus(db, user.id),
       data.recentAudit(15),
     ]);
     const homeState = await data.homeState({ canReadSleep: google.canReadSleep, timezone: settings.timezone });
-    return json({ settings, google, audit, homeState, mcpEnabled: getAuthConfig().mcpEnabled });
+    return json({ settings, google, hevy, openWearables, audit, homeState, mcpEnabled: getAuthConfig().mcpEnabled });
   } catch (error) {
     if (!(error instanceof z.ZodError) && !(error instanceof NutritionError)) logDiaryLoadFailure("nutrition", error);
     return handleError(error);
