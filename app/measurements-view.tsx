@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, Camera, ChevronRight, Plus, TrendingUp } from "lucide-react";
 import { Button } from "../components/ui/button";
 import {
@@ -9,6 +9,7 @@ import {
   displayValue,
   metrics,
   readingsFor,
+  weightReadingsThrough,
   recomp,
   summary,
   type Metric,
@@ -97,27 +98,18 @@ export function MeasurementsView({
     : null;
 
   const weightMetric = metrics.find((m) => m.key === "weight")!;
-  const weightSummary = summary(readingsFor(readings, weightMetric), today);
-  const latestWeightKg = daily?.energy?.weightKg ?? weightSummary.latest?.value ?? null;
-
-  const weightSparkPoints = useMemo(() => {
-    const from14 = addDays(today, -13);
-    const byDay = new Map<string, number>();
-    for (const d of history30?.days ?? []) {
-      if (d.day >= from14 && d.day <= today && d.energy?.weightKg != null) byDay.set(d.day, d.energy.weightKg);
-    }
-    for (const r of readingsFor(readings, weightMetric)) {
-      if (r.date >= from14 && r.date <= today) byDay.set(r.date, r.value);
-    }
-    const vals = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);
-    if (vals.length < 2) return "";
-    const min = Math.min(...vals);
-    const max = Math.max(...vals);
-    const span = max - min || 1;
-    return vals
-      .map((v, i) => `${((i / (vals.length - 1)) * 124 + 3).toFixed(1)},${(30 - ((v - min) / span) * 24).toFixed(1)}`)
-      .join(" ");
-  }, [history30?.days, readings, today, weightMetric]);
+  const weightReadings = weightReadingsThrough(readings, [...(history30?.days ?? []), ...(daily ? [daily] : [])], today);
+  const weightSummary = summary(weightReadings, today);
+  const latestWeightKg = weightSummary.latest?.value ?? null;
+  const recentWeights = weightReadings
+    .filter((reading) => reading.date >= addDays(today, -13))
+    .map((reading) => reading.value);
+  const minWeight = Math.min(...recentWeights);
+  const weightSpan = Math.max(...recentWeights) - minWeight || 1;
+  const weightSparkPoints = recentWeights.length < 2 ? "" : recentWeights
+    .map((weight, index) =>
+      `${((index / (recentWeights.length - 1)) * 124 + 3).toFixed(1)},${(30 - ((weight - minWeight) / weightSpan) * 24).toFixed(1)}`)
+    .join(" ");
 
   const selected = readings.filter((r) => r.date === date);
   const [waistMetric, leftMetric, rightMetric] = metrics;

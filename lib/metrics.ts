@@ -18,6 +18,26 @@ export function readingsFor(readings: Reading[], metric: Metric) {
   return readings.filter((r) => r.metric === metric.metric && r.side === metric.side);
 }
 
+// The measurement log owns same-day weights. Older imports can exist only in energy history.
+export function weightReadingsThrough(
+  readings: Reading[],
+  energyDays: readonly { day: string; energy?: { weightKg?: number | null } | null }[],
+  through: string,
+) {
+  const byDay = new Map<string, Reading>();
+  for (const { day, energy } of energyDays) {
+    if (day <= through && energy?.weightKg != null) {
+      byDay.set(day, { id: day, date: day, metric: "weight", side: "none", value: energy.weightKg, note: "" });
+    }
+  }
+  for (const reading of readings) {
+    if (reading.metric === "weight" && reading.side === "none" && reading.date <= through) {
+      byDay.set(reading.date, reading);
+    }
+  }
+  return [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
 export function shiftDate(day: string, offset: number) {
   const date = new Date(day + "T00:00:00Z");
   date.setUTCDate(date.getUTCDate() + offset);

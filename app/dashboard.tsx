@@ -10,6 +10,7 @@ import {
   McpBrandMark,
   NutritionBowlIcon,
 } from "../components/icons";
+import type { StartupCacheUpdate } from "../lib/startup-cache";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
 import { addDays, localDay, localTime } from "../lib/nutrition-model";
 import { HomeView } from "./home-view";
@@ -76,12 +77,17 @@ const tabs: { title: AppTab; icon: typeof HomeRingIcon | typeof Scale }[] = [
   { title: "Body", icon: Scale },
 ];
 
-export function Dashboard({ initial, savedAt }: { initial: InitialAppData; savedAt: number }) {
+export function Dashboard({ initial, savedAt, updateStartupCache }: {
+  initial: InitialAppData;
+  savedAt: number;
+  updateStartupCache: (update: StartupCacheUpdate) => Promise<void>;
+}) {
   const initialCalendarToday = initial.calendarToday ?? initial.today;
   const initialActiveDay = initial.activeDay ?? initial.daily.day ?? initialCalendarToday;
 
   const [tab, setTab] = useState<AppTab>("Today");
   const [tracker, setTracker] = useState(initial.tracker);
+  const trackerRevision = useRef(0);
   const [settings, setSettings] = useState(initial.settings);
   const [today, setToday] = useState(initialCalendarToday);
   const todayRef = useRef(initialCalendarToday);
@@ -133,11 +139,20 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
     if (cache.size > 180) cache.delete(cache.keys().next().value!);
   }
 
-  function cacheDay(day: string, result: DayCacheEntry) {
+  async function cacheDay(day: string, result: DayCacheEntry, updateStartup = true) {
     const previous = dayCacheRef.current.get(day);
     const entry = { ...previous, ...result, fetchedAt: { ...previous?.fetchedAt, ...result.fetchedAt } };
     rememberDay(day, entry);
     if (initial.userId) void writeBrowserCache(initial.userId, `day:${day}`, entry);
+    if (!updateStartup || day !== activeHomeDayRef.current) return;
+    await updateStartupCache((snapshot) => {
+      if (snapshot.activeDay !== day) return null;
+      return {
+        ...(result.daily ? { daily: result.daily } : {}),
+        ...(result.strain ? { strain: result.strain, recoveryInsights: result.recovery } : {}),
+        ...("pulse" in result ? { pulseInsights: result.pulse } : {}),
+      };
+    });
   }
 
   async function readSavedDay(day: string) {
@@ -198,9 +213,9 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
       const payload = await response.json();
       if (controller.signal.aborted) return;
       const fetchedAt = { [part]: Date.now() };
-      if (part === "daily" && payload?.day === day) cacheDay(day, { daily: payload, fetchedAt });
-      else if (part === "strain") cacheDay(day, { strain: payload.strain, recovery: payload.recoveryInsights, fetchedAt });
-      else if (part === "pulse") cacheDay(day, { pulse: payload, fetchedAt });
+      if (part === "daily" && payload?.day === day) await cacheDay(day, { daily: payload, fetchedAt });
+      else if (part === "strain") await cacheDay(day, { strain: payload.strain, recovery: payload.recoveryInsights, fetchedAt });
+      else if (part === "pulse") await cacheDay(day, { pulse: payload, fetchedAt });
       else throw new Error("The diary returned a different date.");
     })().catch((error: unknown) => {
       if (!controller.signal.aborted) throw error;
@@ -273,11 +288,11 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
     if (selectedDayRef.current === previousActive) { selectedDayRef.current = initial.activeDay; setSelectedDay(initial.activeDay); }
     const existing = dayCacheRef.current.get(initial.daily.day);
     if ((existing?.fetchedAt?.daily ?? 0) <= savedAt) {
-      cacheDay(initial.daily.day, {
+      void cacheDay(initial.daily.day, {
         daily: initial.daily, strain: initial.strain, recovery: initial.recoveryInsights,
         pulse: initial.pulseInsights ?? undefined,
         fetchedAt: { daily: savedAt, strain: savedAt, ...(initial.pulseInsights ? { pulse: savedAt } : {}) },
-      });
+      }, false);
     }
     const entry = dayCacheRef.current.get(initial.daily.day);
     if (homeDayRef.current === initial.daily.day) showHomeDay(initial.daily.day, entry);
@@ -434,6 +449,7 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
           await Promise.all([
             refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
             selectTrainingDay(trainingDayRef.current),
+            refreshTracker(),
           ]).catch(() => undefined);
           if (showInitialProgress && active) {
             setGoogleSyncPct(100);
@@ -595,13 +611,21 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
     window.scrollTo({ top: 0, behavior: "instant" });
   }
 
+  async function saveTrackerSnapshot(data: InitialAppData["tracker"], revision: number) {
+    if (trackerRevision.current !== revision) return;
+    await updateStartupCache(() => ({ tracker: data }));
+    if (trackerRevision.current === revision) setTracker(data);
+  }
+
   async function refreshTracker() {
+    const revision = ++trackerRevision.current;
     const res = await fetch("/api/tracker", { cache: "no-store" });
     if (res.status === 401) {
       void clearBrowserCache().finally(() => window.location.reload());
       return;
     }
-    if (res.ok) setTracker(await res.json());
+    if (!res.ok) throw new Error("Could not refresh saved measurements.");
+    await saveTrackerSnapshot(await res.json(), revision);
   }
 
   async function refreshAccountAndMeta() {
@@ -612,6 +636,11 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
     }
     if (!res.ok) return;
     const payload = await res.json();
+    await updateStartupCache(() => ({
+      ...(payload.settings ? { settings: payload.settings } : {}),
+      ...(payload.google ? { google: payload.google } : {}),
+      ...(Array.isArray(payload.audit) ? { audit: payload.audit } : {}),
+    }));
     if (payload.settings) setSettings(payload.settings);
     if (payload.google) setGoogle(payload.google);
     if (Array.isArray(payload.audit)) setAudit(payload.audit);
@@ -694,7 +723,9 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
       return;
     }
     if (!history.ok) throw new Error("Could not refresh the diary.");
-    setHistory30(await history.json());
+    const recent = await history.json();
+    await updateStartupCache(() => ({ history30: recent }));
+    setHistory30(recent);
     if (homeDayRef.current === focusHomeDay) {
       showHomeDay(focusHomeDay, dayCacheRef.current.get(focusHomeDay));
       void refreshHomeMetrics(focusHomeDay);
@@ -775,7 +806,7 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
       if (!res.ok) throw new Error(json.message ?? "Could not recompute strain.");
       if (json?.strain) {
         invalidateDayCache(day);
-        cacheDay(day, { strain: json.strain, recovery: json.recoveryInsights, fetchedAt: { strain: Date.now() } });
+        await cacheDay(day, { strain: json.strain, recovery: json.recoveryInsights, fetchedAt: { strain: Date.now() } });
         if (trainingDayRef.current === day) setTrainingStrain(json.strain);
         if (homeDayRef.current === day) setHomeStrain(json.strain);
       }
@@ -806,9 +837,13 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Could not save strain settings.");
-      if (json?.settings) setStrainSettings(json.settings);
+      if (json?.settings) {
+        await updateStartupCache(() => ({ strainSettings: json.settings }));
+        setStrainSettings(json.settings);
+      }
       invalidateDayCache();
       if (json?.strain) {
+        await cacheDay(todayRef.current, { strain: json.strain, recovery: json.recoveryInsights, fetchedAt: { strain: Date.now() } });
         if (homeDayRef.current === todayRef.current) setHomeStrain(json.strain);
         if (trainingDayRef.current === todayRef.current) setTrainingStrain(json.strain);
       } else {
@@ -931,7 +966,7 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
         location.reload();
         return;
       }
-      setTracker(payload);
+      await saveTrackerSnapshot(payload, ++trackerRevision.current);
       await refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current);
       void refreshSyncToken().catch(() => null);
       showToast(successMessage, "success");
@@ -962,7 +997,7 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
       }
       const savedDay = typeof payload.day === "object" ? payload.day : payload.meals ? payload : null;
       if (savedDay) {
-        cacheDay(savedDay.day, { daily: savedDay, fetchedAt: { daily: Date.now() } });
+        await cacheDay(savedDay.day, { daily: savedDay, fetchedAt: { daily: Date.now() } });
         if (savedDay.day === homeDayRef.current) showHomeDay(savedDay.day, dayCacheRef.current.get(savedDay.day));
         if (savedDay.day === selectedDayRef.current) {
           setSelectedDay(savedDay.day);
@@ -970,11 +1005,13 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
         }
       }
       if (action.action === "target" || action.action === "macro-targets" || action.action === "preferences") {
+        await updateStartupCache(() => ({ settings: payload }));
         setSettings(payload);
         if (action.action === "preferences") {
           await refreshAccountAndMeta().catch(() => null);
         }
       } else if (action.action === "revoke-mcp") {
+        await updateStartupCache(() => ({ audit: [] }));
         setAudit([]);
       }
       let refreshed = true;
@@ -1075,8 +1112,9 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
           body: JSON.stringify({ action: "recompute", day: today }),
         })
           .then((r) => (r.ok ? r.json() : null))
-          .then((j) => {
+          .then(async (j) => {
             if (j?.strain) {
+              await cacheDay(today, { strain: j.strain, recovery: j.recoveryInsights, fetchedAt: { strain: Date.now() } });
               if (homeDayRef.current === today) setHomeStrain(j.strain);
               if (trainingDayRef.current === today) setTrainingStrain(j.strain);
             }
@@ -1565,6 +1603,7 @@ export function Dashboard({ initial, savedAt }: { initial: InitialAppData; saved
           initialMetric={trendsMetric}
           today={today}
           history30={history30}
+          daily={homeDaily}
           tracker={tracker}
           settings={settings}
           recoveryInsights={homeRecovery}

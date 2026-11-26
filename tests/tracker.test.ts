@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
-import { average, movingAverage, recomp, summary, type Reading } from "../lib/metrics";
+import { average, movingAverage, recomp, summary, weightReadingsThrough, type Reading } from "../lib/metrics";
 import { createAuth } from "../lib/auth";
 import { signupMode } from "../lib/signup-config";
 import { logInput, trackerData } from "../lib/tracker-data";
@@ -63,6 +63,20 @@ test("averages use calendar days, skip absent dates and report missing history",
   assert.equal(summary(readings, "2026-11-08").weekly, 83.5);
   assert.equal(summary(readings.slice(0, 1), "2026-11-08").change, null);
   assert.equal(average([]), null);
+});
+
+test("weight cards and charts use the logged same-day weight and exclude future measurements", () => {
+  const readings = [row("2026-11-25", 72.4, "weight"), row("2026-11-26", 71.9, "weight")];
+  const energy = [
+    { day: "2026-11-24", energy: { weightKg: 73.2 } },
+    { day: "2026-11-25", energy: { weightKg: 73.0 } },
+  ];
+  const weights = weightReadingsThrough(readings, energy, "2026-11-25");
+  assert.deepEqual(weights.map(({ date, value }) => [date, value]), [
+    ["2026-11-24", 73.2], ["2026-11-25", 72.4],
+  ]);
+  assert.equal(summary(weights, "2026-11-25").latest.value, 72.4);
+  assert.equal(summary(weightReadingsThrough(readings, energy, "2026-11-24"), "2026-11-24").latest.value, 73.2);
 });
 
 test("recomp compares adjacent 28-day periods", () => {
