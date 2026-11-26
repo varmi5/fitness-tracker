@@ -12,7 +12,7 @@ import {
   SparklePhotoIcon,
 } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
-import { addDays, isCalorieGoalMet } from "../lib/nutrition-model";
+import { addDays, isCalorieGoalMet, newestMealsFirst } from "../lib/nutrition-model";
 import {
   CATEGORY_LABELS,
   fmtGram,
@@ -212,7 +212,7 @@ export function NutritionView({
       {/* Chronological Meal Diary */}
       <section style={{ display: "grid", gap: ".65rem" }} aria-label="Meal diary">
         <div className="split-row">
-          <h2 className="section-title">Chronological Diary</h2>
+            <h2 className="section-title">Food Log</h2>
           <span style={{ fontSize: ".8rem", color: "var(--muted)" }}>
             {dayView.meals.length} {dayView.meals.length === 1 ? "meal" : "meals"}
           </span>
@@ -225,7 +225,7 @@ export function NutritionView({
             </p>
           </div>
         ) : (
-          dayView.meals.map((meal) => {
+          newestMealsFirst(dayView.meals).map((meal) => {
             const isOpen = Boolean(expanded[meal.id]);
             const method = mealMethodSummary(meal);
             return (

@@ -158,10 +158,10 @@ export async function getPulseInsightsForUser(
   const primaryWorkoutSource = nutritionPrefRows[0]?.primaryWorkoutSource ?? "auto";
   const goalForDay = (d: string) => (goalRows.find((g) => g.effectiveFrom <= d)?.goalMinutes ?? 480) / 60;
   const recByDay = pickRecoveryRowForDay(recoveryRows, primaryRecoverySource);
-  const sessionDays = new Set(sessionRows.map((r) => r.day));
+  const mainSessionKeys = new Set(sessionRows.filter((r) => r.isMainSleep).map((r) => `${r.source}:${r.day}`));
   const sleepRecords: SleepNightRecord[] = selectNonOverlappingSleepSessions([
     ...sessionRows.filter((r) => r.processed !== false).map((r) => ({ ...r, coverageComplete: false })),
-    ...sleepRows.filter((r) => !sessionDays.has(r.day)).map((r) => ({ ...r, isMainSleep: true, coverageComplete: false })),
+    ...sleepRows.filter((r) => !mainSessionKeys.has(`${r.source}:${r.day}`)).map((r) => ({ ...r, isMainSleep: true, coverageComplete: false })),
   ]);
   const sleepByDay = new Map<string, SleepNightRecord>();
   for (const s of sleepRecords) {

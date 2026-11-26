@@ -28,6 +28,11 @@ export type TrackingMode = (typeof TRACKING_MODES)[number];
 export const DEFAULT_CALORIE_TARGET = 1900;
 export const DEFAULT_TIMEZONE = "Europe/London";
 
+export function newestMealsFirst<T extends { consumedAt: string }>(meals: readonly T[]): T[] {
+  // Diary responses supply creation order as the tie-breaker for identical meal times.
+  return [...meals].reverse().sort((a, b) => b.consumedAt.localeCompare(a.consumedAt));
+}
+
 export function isValidTimezone(tz: string): boolean {
   try {
     Intl.DateTimeFormat("en-GB", { timeZone: tz });
