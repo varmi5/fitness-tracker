@@ -191,6 +191,8 @@ test("syncOpenWearables ingests Apple Health + Garmin safely, isolates users, sk
   });
 
   const owUserUuid = "11111111-1111-4111-8111-111111111111";
+  let sdkConnected = true;
+  let inventoryUnavailable = false;
 
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -211,7 +213,9 @@ test("syncOpenWearables ingests Apple Health + Garmin safely, isolates users, sk
       return Response.json({ id: "inv-1", code: "ABCD1234", expires_at: "2026-11-26T00:00:00Z" });
     }
     if (url.includes(`/api/v1/users/${owUserUuid}/connections`)) {
+      if (inventoryUnavailable) return Response.json({}, { status: 503 });
       return Response.json([
+        ...(sdkConnected ? [{ provider: "apple_health_sdk", status: "active" }] : []),
         { provider: "garmin", status: "expired" },
         { provider: "unknown", status: "active" },
       ]);
@@ -233,6 +237,15 @@ test("syncOpenWearables ingests Apple Health + Garmin safely, isolates users, sk
             steps: 9000,
             total_calories_kcal: 2300,
           },
+          ...(!sdkConnected ? [{
+            date: "2026-11-24",
+            source: { provider: "garmin" },
+            steps: 8000,
+          }, {
+            date: "2026-11-24",
+            source: { provider: "unmapped_source" },
+            steps: 10000,
+          }] : []),
         ],
       });
     }
@@ -354,6 +367,17 @@ test("syncOpenWearables ingests Apple Health + Garmin safely, isolates users, sk
     // Strain computation succeeds against synced Open Wearables workout
     const dayStrain = await strainData(typedDb, "OW-1").computeDay("2026-11-24");
     assert.ok((dayStrain.overallStrain ?? 0) > 0);
+
+    inventoryUnavailable = true;
+    const syncDay = { from: "2026-11-24", to: "2026-11-24" };
+    assert.deepEqual((await syncOpenWearables(typedDb, "OW-1", syncDay)).providers, ["apple"]);
+
+    inventoryUnavailable = false;
+    sdkConnected = false;
+    assert.deepEqual((await syncOpenWearables(typedDb, "OW-1", syncDay)).providers, []);
+    assert.deepEqual((await openWearablesStatus(typedDb, "OW-1")).providers, []);
+    const savedDays = await db.select().from(schema.dailyEnergy).where(eq(schema.dailyEnergy.userId, "OW-1"));
+    assert.ok(savedDays.some((row) => row.source === "garmin" && row.steps === 8000));
 
     await disconnectOpenWearables(typedDb, "OW-1");
     const afterDisconnect = await openWearablesStatus(typedDb, "OW-1");
