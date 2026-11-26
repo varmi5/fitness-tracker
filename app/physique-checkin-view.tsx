@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "
 import { ArrowLeft, Pause, Pencil, Play, Plus, Trash2, X } from "lucide-react";
 import { extractPhotoDate, orderPhysiqueFrames } from "../lib/photo-date";
 import { PHYSIQUE_POSES, type PhysiqueCadence, type PhysiqueCheckinRecord, type PhysiquePose } from "../lib/physique-data";
+import { PHYSIQUE_FRAME_INTERVALS, PhysiquePlaybackSpeed, type PhysiqueSpeed } from "./physique-playback-speed";
 import { PhysiqueShareDialog } from "./physique-share-dialog";
 
 interface PhysiqueCheckinViewProps {
@@ -91,12 +92,6 @@ async function compressPhoto(file: File): Promise<string> {
   }
 }
 
-const SPEED_INTERVAL_MS: Record<0.5 | 1 | 2, number> = {
-  0.5: 1600,
-  1: 800,
-  2: 350,
-};
-
 function parseOptionalWeight(raw: string): number | null | "invalid" {
   const trimmed = raw.trim();
   if (!trimmed) return null;
@@ -132,7 +127,7 @@ export function PhysiqueCheckinView({
 
   // Timelapse player state
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState<0.5 | 1 | 2>(1);
+  const [speed, setSpeed] = useState<PhysiqueSpeed>(1);
   const [frameIndex, setFrameIndex] = useState(0);
 
   useEffect(() => {
@@ -183,7 +178,7 @@ export function PhysiqueCheckinView({
       setPlaying(false);
       return;
     }
-    const ms = SPEED_INTERVAL_MS[speed];
+    const ms = PHYSIQUE_FRAME_INTERVALS[speed];
     const id = window.setTimeout(() => {
       const nextIndex = frameIndex + 1;
       setFrameIndex(nextIndex);
@@ -588,19 +583,7 @@ export function PhysiqueCheckinView({
                 </button>
               ))}
             </div>
-            <div className="physique-pill-toggle" role="group" aria-label="Playback speed">
-              {([0.5, 1, 2] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  aria-pressed={speed === s}
-                  className={speed === s ? "is-active" : ""}
-                  onClick={() => setSpeed(s)}
-                >
-                  {s}x
-                </button>
-              ))}
-            </div>
+            <PhysiquePlaybackSpeed speed={speed} onChange={setSpeed} />
           </div>
           <div className="physique-stage">
             <img src={activeFrame.photoData} alt={`Physique ${activeFrame.day}`} />

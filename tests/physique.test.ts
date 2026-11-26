@@ -44,21 +44,24 @@ test("physique links expose selected owner photos only and stop serving images w
   const owner = physiqueData(db, userId);
   const other = physiqueData(db, "other-owner");
   const sharing = physiqueSharing(db, userId);
-  const create = (store: typeof owner, day: string) => store.create({
-    day, pose: "front", cadence: "weekly", photoData: SAMPLE_DATA_URL, weightKg: 80, note: "Private note",
+  const create = (store: typeof owner, day: string, pose: "front" | "side" | "back" = "front") => store.create({
+    day, pose, cadence: "weekly", photoData: SAMPLE_DATA_URL, weightKg: 80, note: "Private note",
   });
   const later = await create(owner, "2026-11-20");
-  const earlier = await create(owner, "2026-11-02");
-  const hidden = await create(owner, "2026-11-13");
+  const earlier = await create(owner, "2026-11-18");
+  const side = await create(owner, "2026-11-19", "side");
+  const hidden = await create(owner, "2026-11-13", "back");
   const unrelated = await create(other, "2026-11-24");
   assert.equal(await sharing.get(), null);
   assert.equal((await sharing.save([earlier.id, unrelated.id], null)).status, "invalid_photos");
-  const saved = await sharing.save([later.id, earlier.id, earlier.id], null);
+  const saved = await sharing.save([later.id, side.id, earlier.id, earlier.id], null);
   assert.equal(saved.status, "saved");
   const { token } = saved.link;
   assert.match(token, /^[A-Za-z0-9_-]{43}$/);
   assert.deepEqual((await sharedPhysiquePhotos(db, token)), [
-    { id: earlier.id, day: earlier.day, pose: earlier.pose }, { id: later.id, day: later.day, pose: later.pose },
+    { id: earlier.id, day: earlier.day, pose: "front" },
+    { id: side.id, day: side.day, pose: "side" },
+    { id: later.id, day: later.day, pose: "front" },
   ]);
   assert.equal(await sharedPhysiquePhoto(db, token, earlier.id), SAMPLE_DATA_URL);
   assert.equal(await sharedPhysiquePhoto(db, token, hidden.id), null);
