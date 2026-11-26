@@ -5,7 +5,10 @@ private, no-store `/api/bootstrap` endpoint. On reopening, the client first chec
 the Better Auth session, then displays that account's saved snapshot while
 refreshing it. A network connection is still needed to verify identity on a cold
 launch: this is not unrestricted offline sign-in. Transient bootstrap failures
-leave saved data visible with a retry action.
+leave saved data visible with a retry action. Confirmed measurements, diary
+changes and active-day health results also update the startup snapshot. A
+startup request already in flight preserves newer confirmed changes for the
+same account and date.
 
 IndexedDB holds up to 180 visited dates plus the startup snapshot, with a 12 MiB
 JSON content budget. Dates can be arbitrarily old; the 180-entry limit is not a

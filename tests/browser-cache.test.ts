@@ -27,8 +27,9 @@ test("persistent cache survives reopening, isolates accounts, and clears device 
   assert.equal(await readBrowserCache("b", "day:2020-01-01"), null);
   await activateBrowserCache("b");
   assert.equal(await readBrowserCache("a", "day:2020-01-01"), null);
-  await writeBrowserCache("b", "bootstrap", { userId: "b" });
-  assert.ok(await readBrowserCache("b", "bootstrap"));
+  const fullSnapshotTime = Date.now() - 5000;
+  await writeBrowserCache("b", "bootstrap", { userId: "b" }, fullSnapshotTime);
+  assert.equal((await readBrowserCache("b", "bootstrap"))?.savedAt, fullSnapshotTime);
   await clearBrowserCache();
   assert.equal(await readBrowserCache("b", "bootstrap"), null);
 });
@@ -58,4 +59,30 @@ test("the previous browser cache schema retains saved diary data on upgrade", as
   } finally {
     globalThis.indexedDB = original;
   }
+});
+
+test("a late startup response keeps confirmed changes without carrying metrics across dates or accounts", async () => {
+  const { createStartupCache } = await import("../lib/startup-cache");
+  const create = (userId: string, day: string, weight: number) => ({
+    userId, activeDay: day, daily: { day, target: 1900 },
+    tracker: { readings: [{ value: weight }] }, google: { lastSync: null },
+  }) as import("../app/types").InitialAppData;
+  const date = "2026-11-25", nextDate = "2026-11-26";
+  const cache = createStartupCache();
+  const old = create("a", date, 73);
+  const synced = create("a", date, 72.4);
+  cache.seed(old);
+  const requestStarted = cache.revision;
+  cache.update(() => ({ tracker: synced.tracker, daily: { ...synced.daily, target: 2000 } }));
+  const current = cache.refresh(old, requestStarted);
+  assert.equal(current.tracker.readings[0].value, 72.4);
+  assert.equal(current.daily.target, 2000);
+
+  const tomorrow = cache.refresh(create("a", nextDate, 73), requestStarted);
+  assert.equal(tomorrow.tracker.readings[0].value, 72.4);
+  assert.equal(tomorrow.daily.day, nextDate);
+  assert.equal(tomorrow.daily.target, 1900);
+
+  const otherAccount = cache.refresh(create("b", date, 80), requestStarted);
+  assert.equal(otherAccount.tracker.readings[0].value, 80);
 });
