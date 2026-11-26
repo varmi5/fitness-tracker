@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "
 import { ArrowLeft, Pause, Pencil, Play, Plus, Trash2, X } from "lucide-react";
 import { extractPhotoDate, orderPhysiqueFrames } from "../lib/photo-date";
 import { PHYSIQUE_POSES, type PhysiqueCadence, type PhysiqueCheckinRecord, type PhysiquePose } from "../lib/physique-data";
+import { PhysiqueShareDialog } from "./physique-share-dialog";
 
 interface PhysiqueCheckinViewProps {
   today: string;
@@ -434,6 +435,8 @@ export function PhysiqueCheckinView({
           </button>
         </div>
       </div>
+
+      {!loading && <PhysiqueShareDialog checkins={checkins} />}
 
       {showUpload && (
         <form className="card" onSubmit={(e) => void handleSubmit(e)}>

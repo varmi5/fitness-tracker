@@ -4,6 +4,7 @@ import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { createPhysiqueInput, physiqueData } from "../lib/physique-data";
+import { physiqueSharing, sharedPhysiquePhoto, sharedPhysiquePhotos } from "../lib/physique-share";
 import { extractExifDateFromBuffer, isoWeekKey, orderPhysiqueFrames } from "../lib/photo-date";
 import * as schema from "../lib/schema";
 
@@ -21,11 +22,12 @@ before(async () => {
     "011-sleep-and-active-day.sql",
     "012-tracking-mode-and-fitbit-metrics.sql",
     "019-physique-checkins.sql",
+    "025-physique-sharing.sql",
   ]) {
     await pg.exec(await readFile(`migrations/${migration}`, "utf8"));
   }
   await db.insert(schema.user).values(
-    ["A", "B"].map((id) => ({
+    ["A", "B", "share-owner", "other-owner"].map((id) => ({
       id,
       name: id,
       email: `${id}@example.test`,
@@ -36,6 +38,46 @@ before(async () => {
 });
 
 after(async () => pg.close());
+
+test("physique links expose selected owner photos only and stop serving images when replaced or revoked", async () => {
+  const userId = "share-owner";
+  const owner = physiqueData(db, userId);
+  const other = physiqueData(db, "other-owner");
+  const sharing = physiqueSharing(db, userId);
+  const create = (store: typeof owner, day: string) => store.create({
+    day, pose: "front", cadence: "weekly", photoData: SAMPLE_DATA_URL, weightKg: 80, note: "Private note",
+  });
+  const later = await create(owner, "2026-11-20");
+  const earlier = await create(owner, "2026-11-02");
+  const hidden = await create(owner, "2026-11-13");
+  const unrelated = await create(other, "2026-11-24");
+  assert.equal(await sharing.get(), null);
+  assert.equal((await sharing.save([earlier.id, unrelated.id], null)).status, "invalid_photos");
+  const saved = await sharing.save([later.id, earlier.id, earlier.id], null);
+  assert.equal(saved.status, "saved");
+  const { token } = saved.link;
+  assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+  assert.deepEqual((await sharedPhysiquePhotos(db, token)), [
+    { id: earlier.id, day: earlier.day, pose: earlier.pose }, { id: later.id, day: later.day, pose: later.pose },
+  ]);
+  assert.equal(await sharedPhysiquePhoto(db, token, earlier.id), SAMPLE_DATA_URL);
+  assert.equal(await sharedPhysiquePhoto(db, token, hidden.id), null);
+  assert.equal(await sharedPhysiquePhoto(db, token, unrelated.id), null);
+  assert.deepEqual(await sharedPhysiquePhotos(db, "invalid-token"), []);
+  assert.equal(await physiqueSharing(db, "other-owner").revoke(token), false);
+  assert.equal((await sharing.save([hidden.id], null)).status, "conflict");
+
+  await owner.remove(later.id);
+  assert.equal(await sharedPhysiquePhoto(db, token, later.id), null);
+  const replacement = await sharing.save([hidden.id], token);
+  assert.equal(replacement.status, "saved");
+  assert.notEqual(replacement.link.token, token);
+  assert.deepEqual(await sharedPhysiquePhotos(db, token), []);
+  assert.equal(await sharedPhysiquePhoto(db, token, earlier.id), null);
+  assert.equal(await sharing.revoke(token), false);
+  assert.equal(await sharing.revoke(replacement.link.token), true);
+  assert.equal(await sharedPhysiquePhoto(db, replacement.link.token, hidden.id), null);
+});
 
 test("physique check-ins allow multiple per pose, keep weight optional & omit BF%, and support user-isolated edits", async () => {
   const a = physiqueData(db, "A");

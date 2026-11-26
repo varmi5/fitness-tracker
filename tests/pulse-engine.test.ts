@@ -232,13 +232,34 @@ test("naps credit once, historical goals apply and today's debt never raises tod
   const day = "2026-11-24";
   const main = session(day, { minutesAsleep: 420 });
   const nap = { ...session(day), sleepStart: new Date(`${day}T14:00:00Z`), sleepEnd: new Date(`${day}T15:00:00Z`), minutesAsleep: 60, isMainSleep: false };
-  const result = computeSleepInsights(main, [main, main, nap], day, 100, { goalForDay: () => 8 });
+  const result = computeSleepInsights(main, [main, main, nap, nap], day, 100, { goalForDay: () => 8 });
   assert.equal(result.sleepDebtHours, 0);
   assert.equal(result.sleepNeedHours, 8);
-  assert.equal(result.durationPct, 88);
+  assert.equal(result.durationPct, 100);
+  assert.equal(result.mainSleepMinutes, 420);
+  assert.equal(result.napCount, 1);
+  assert.equal(result.napMinutes, 60);
+  assert.equal(result.totalSleepMinutes, 480);
   const yesterday = session(addDays(day, -1), { minutesAsleep: 420 });
   const goals = computeSleepInsights(main, [yesterday, main], day, null, { goalForDay: (d) => d < day ? 7 : 8 });
   assert.equal(goals.sleepDebtHours, 1);
+});
+
+test("completed naps increase duration without changing main sleep efficiency or stage percentages", () => {
+  const day = "2026-11-24";
+  const main = session(day, { sleepStart: new Date(`${day}T00:40:00Z`), minutesAsleep: 360, minutesAwake: 20, deepMinutes: 76, remMinutes: 67 });
+  const nap = session(day, { sleepStart: new Date(`${day}T13:00:00Z`), sleepEnd: new Date(`${day}T14:05:00Z`), minutesAsleep: 60, minutesAwake: 5, isMainSleep: false });
+  const overlapping = session(day, { sleepStart: new Date(`${day}T06:00:00Z`), sleepEnd: new Date(`${day}T07:00:00Z`), minutesAsleep: 60, isMainSleep: false });
+  const later = { ...nap, sleepStart: new Date(`${day}T15:00:00Z`), sleepEnd: new Date(`${day}T17:00:00Z`) };
+  const options = { now: new Date(`${day}T16:00:00Z`) };
+  const before = computeSleepInsights(main, [], day, null, options);
+  const after = computeSleepInsights(main, [nap, overlapping, later], day, null, options);
+  assert.equal(before.score, 79);
+  assert.equal(after.score, 89);
+  assert.equal(after.totalSleepMinutes, 420);
+  assert.equal(after.efficiencyPct, 95);
+  assert.equal(after.deepPct, before.deepPct);
+  assert.equal(after.remPct, before.remPct);
 });
 
 test("planner handles London summer time, DST and circular wake medians", () => {
@@ -258,13 +279,21 @@ test("health monitor cannot call an uncalibrated personal reading in range", () 
 
 test("sparse, duplicate, sleeping and workout HR do not invent coverage or energy", () => {
   const t = Date.parse("2026-11-24T08:00:00Z");
-  const samples = [0, 0, 60_000, 600_000].map((delta) => ({ recordedAt: new Date(t + delta).toISOString(), bpm: 95 }));
+  const samples = [0, 0, 60_000, 600_000].map((delta, i) => ({ recordedAt: new Date(t + delta).toISOString(), bpm: [60, 70, 95, 200][i] }));
   const result = computeEnergyBankAndStress(samples, 58, 190, null, null, []);
   assert.equal(result.energyBank.currentPct, null);
   assert.equal(result.stress.observedMinutes, 1);
+  assert.equal(result.stress.observedAvgHrBpm, 95);
+  assert.equal(result.stress.restingHrBpm, 58);
+  assert.equal(result.energyBank.observedMinutes, 1);
   const asleep = computeEnergyBankAndStress(samples, 58, 190, 70, 80, [], [{ startMs: t, endMs: t + 120_000 }]);
   assert.equal(asleep.stress.avgStress, null);
   assert.equal(asleep.stress.observedMinutes, 0);
+  assert.equal(asleep.stress.observedAvgHrBpm, null);
+  assert.equal(asleep.energyBank.observedMinutes, 0);
+  const workout = computeEnergyBankAndStress(samples, 58, 190, 70, 80, [{ startMs: t, endMs: t + 60_000 }]);
+  assert.equal(workout.stress.observedMinutes, 0);
+  assert.equal(workout.energyBank.observedMinutes, 1);
   assert.equal(computeEnergyBankAndStress([samples[0]], 58, 190, null, null, []).stress.avgStress, null);
 });
 
@@ -323,6 +352,7 @@ test("database Pulse reads user session history/goals and excludes unprocessed, 
       await db.insert(schema.dailyRecovery).values({ userId: "pulse-a", source: "google", day, hrvRmssdMs: 60, restingHrBpm: 58 });
     }
     await db.transaction((tx) => saveSleepSession(tx, "pulse-a", { day: "2026-11-24", source: "google", sessionId: "nap", sleepStart: "2026-11-24T14:00:00Z", sleepEnd: "2026-11-24T15:00:00Z", minutesAsleep: 60, isMainSleep: false }));
+    await db.transaction((tx) => saveSleepSession(tx, "pulse-a", { day: "2026-11-24", source: "google", sessionId: "pending-nap", sleepStart: "2026-11-24T16:00:00Z", sleepEnd: "2026-11-24T17:00:00Z", minutesAsleep: 60, isMainSleep: false, processed: false }));
     await db.transaction((tx) => saveSleepSession(tx, "pulse-a", { day: "2026-11-25", source: "manual", sessionId: "unknown-end", minutesAsleep: 480, isMainSleep: true }));
     await db.transaction((tx) => saveSleepSession(tx, "pulse-a", { day: "2099-11-25", source: "manual", sessionId: "future", sleepStart: "2099-11-24T23:00:00Z", sleepEnd: "2099-11-25T07:00:00Z", minutesAsleep: 480, isMainSleep: true }));
     // PGlite and node-postgres expose the same Drizzle query contract used by the service.
@@ -334,6 +364,9 @@ test("database Pulse reads user session history/goals and excludes unprocessed, 
     assert.equal(current.sleep.debtCoverage, "partial");
     assert.equal(current.sleep.efficiencyPct, null);
     assert.equal(current.sleep.deepPct, 16.7);
+    assert.equal(current.sleep.napMinutes, 60);
+    assert.equal(current.sleep.totalSleepMinutes, 480);
+    assert.equal(current.sleep.score, 100);
     assert.equal(current.recovery.availability, "available");
     assert.equal((await getPulseInsightsForUser(serviceDb, "pulse-a", "2026-11-23")).sleep.sleepNeedHours, 7);
     assert.equal((await getPulseInsightsForUser(serviceDb, "pulse-a", "2026-11-22")).recovery.availability, "waiting_for_sleep");
@@ -369,6 +402,9 @@ test("nap-only dates do not imply a missing main night had zero sleep", () => {
   const onlyNap = computeSleepInsights(null, [nap], day, null);
   assert.equal(onlyNap.sleepDebtHours, null);
   assert.equal(onlyNap.observedDays, 0);
+  assert.equal(onlyNap.score, null);
+  assert.equal(onlyNap.mainSleepMinutes, null);
+  assert.equal(onlyNap.totalSleepMinutes, 60);
   assert.equal(onlyNap.debtCoverage, "unavailable");
   const previous = session(addDays(day, -1), { minutesAsleep: 420 });
   const partial = computeSleepInsights(null, [previous, nap], day, null);
