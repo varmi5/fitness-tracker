@@ -59,8 +59,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: .5rem;
-  gap: .4rem;
+  padding: .5rem .35rem;
+  gap: .35rem;
   cursor: pointer;
   border: 1px solid transparent;
   border-radius: 10px;
@@ -136,7 +136,7 @@
 .support-report-meta dt { color: var(--muted); }
 .support-report-meta dd { margin: 0; min-width: 0; }
 .support-report-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.support-status-control { max-width: 15rem; }
+.support-status-control { display: grid; gap: .42rem; max-width: 15rem; }
 .support-handoff { border-top: 1px solid var(--border-strong); padding-top: 1rem; }
 .support-footer { padding-inline: .25rem; }
 
