@@ -189,11 +189,16 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     }
   }
 
-  function loadDayPart(day: string, part: DayPart): Promise<void> {
+  function loadDayPart(day: string, part: DayPart, force = false): Promise<void> {
     if (expiredSession.current) return Promise.resolve();
-    const timestamp = dayCacheRef.current.get(day)?.fetchedAt?.[part] ?? 0;
+    const cached = dayCacheRef.current.get(day);
+    const timestamp = cached?.fetchedAt?.[part] ?? 0;
     const ttl = day === todayRef.current ? CURRENT_DAY_TTL : PAST_DAY_TTL;
-    if (timestamp >= Math.max(invalidatedAt.current, invalidatedDays.current.get(day) ?? 0) && Date.now() - timestamp < ttl) return Promise.resolve();
+    const invalidated = Math.max(invalidatedAt.current, invalidatedDays.current.get(day) ?? 0);
+    const hasValue = part === "pulse" ? cached?.pulse !== undefined : cached?.[part] != null;
+    if (!force && hasValue && timestamp >= invalidated && Date.now() - timestamp < ttl) {
+      return Promise.resolve();
+    }
 
     const key = `${day}:${part}`;
     const pending = dayRequests.current.get(key);
@@ -302,9 +307,11 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     const existing = dayCacheRef.current.get(initial.daily.day);
     if ((existing?.fetchedAt?.daily ?? 0) <= savedAt) {
       void cacheDay(initial.daily.day, {
-        daily: initial.daily, strain: initial.strain, recovery: initial.recoveryInsights,
+        daily: initial.daily,
+        ...(initial.strain ? { strain: initial.strain } : {}),
+        ...(initial.recoveryInsights ? { recovery: initial.recoveryInsights } : {}),
         pulse: initial.pulseInsights ?? undefined,
-        fetchedAt: { daily: savedAt, strain: savedAt, ...(initial.pulseInsights ? { pulse: savedAt } : {}) },
+        fetchedAt: { daily: savedAt, ...(initial.strain ? { strain: savedAt } : {}), ...(initial.pulseInsights ? { pulse: savedAt } : {}) },
       }, false);
     }
     const entry = dayCacheRef.current.get(initial.daily.day);
@@ -667,7 +674,16 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
         setActiveHomeDay(hs.activeDay);
         if (homeDayRef.current === prevActive) homeDayRef.current = hs.activeDay;
         if (selectedDayRef.current === prevActive) selectedDayRef.current = hs.activeDay;
-        if (trainingDayRef.current === prevActive) trainingDayRef.current = hs.activeDay;
+        if (trainingDayRef.current === prevActive && hs.activeDay !== prevActive) {
+          ++trainingSelection.current;
+          trainingDayRef.current = hs.activeDay;
+          const cached = dayCacheRef.current.get(hs.activeDay);
+          setTrainingDay(hs.activeDay);
+          setTrainingStrain(cached?.strain);
+          setTrainingRecovery(cached?.recovery);
+          setTrainingPulse(cached?.pulse ?? null);
+          setTrainingLoading(false);
+        }
       }
       showSleepRef.current = Boolean(hs.showSleep);
       waitingForSleepRef.current = Boolean(hs.waitingForSleep);
@@ -810,20 +826,23 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     }
   }
 
-  async function selectTrainingDay(day: string) {
+  async function selectTrainingDay(day: string, force = false) {
     const target = day > todayRef.current ? todayRef.current : day;
     const selection = ++trainingSelection.current;
+    const dateChanged = trainingDayRef.current !== target;
     trainingDayRef.current = target;
     setTrainingDay(target);
     const cached = dayCacheRef.current.get(target);
-    if (cached?.strain) {
-      setTrainingStrain(cached.strain);
-      setTrainingRecovery(cached.recovery);
+    if (dateChanged || cached?.strain) {
+      setTrainingStrain(cached?.strain);
+      setTrainingRecovery(cached?.recovery);
     }
+    if (dateChanged) setTrainingPulse(cached?.pulse ?? null);
     setTrainingLoading(!cached?.strain);
     try {
       await readSavedDay(target);
-      await loadDayPart(target, "strain");
+      if (trainingSelection.current !== selection) return;
+      await loadDayPart(target, "strain", force);
       if (trainingSelection.current === selection && trainingDayRef.current === target) {
         const entry = dayCacheRef.current.get(target);
         if (entry?.strain) setTrainingStrain(entry.strain);
@@ -1044,6 +1063,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
           setSelectedDaily(savedDay);
         }
       }
+      const previousTrainingDay = trainingDayRef.current;
       if (action.action === "target" || action.action === "macro-targets" || action.action === "preferences") {
         await updateStartupCache(() => ({ settings: payload }));
         setSettings(payload);
@@ -1058,6 +1078,9 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       await refreshHistoryAndToday().catch(() => {
         refreshed = false;
       });
+      if (action.action === "preferences" && trainingDayRef.current !== previousTrainingDay) {
+        void selectTrainingDay(trainingDayRef.current);
+      }
       if (action.action === "energy" || action.action === "energy-import" || action.action === "import-health-file") {
         if (action.action === "import-health-file") await refreshAccountAndMeta().catch(() => null);
         await refreshTracker().catch(() => null);
@@ -1442,7 +1465,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
         {tab === "Training" && !trainingStrain && (
           <div className="card">
             {trainingLoading ? <p role="status">Loading training…</p> : (
-              <button type="button" className="secondary" onClick={() => void selectTrainingDay(trainingDayRef.current)}>
+              <button type="button" className="secondary" onClick={() => void selectTrainingDay(trainingDayRef.current, true)}>
                 Refresh training data
               </button>
             )}
