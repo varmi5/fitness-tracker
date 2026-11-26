@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { ChevronLeft, ChevronRight, RefreshCw, TrendingUp } from "lucide-react";
 import { BevelScoreRing, CalorieSlider } from "../components/bevel-widgets";
 import { MealCategoryIcon } from "../components/icons";
 import type { DailyNutritionView, MealRecord } from "../lib/nutrition-data";
 import { addDays, isCalorieGoalMet } from "../lib/nutrition-model";
 import { computeTargetStrain } from "../lib/strain-engine";
-import { metrics, readingsFor, summary } from "../lib/metrics";
+import { metrics, summary, weightReadingsThrough } from "../lib/metrics";
 import type { TrendMetricKind } from "./metric-trends-modal";
 import {
   CATEGORY_LABELS,
@@ -154,32 +154,14 @@ export function HomeView({
     },
   ];
 
-  // Weight resolution & 14-day sparkline scoped strictly to viewDay
   const weightMetric = metrics.find((m) => m.key === "weight")!;
-  const weightReadings = readingsFor(tracker.readings, weightMetric);
+  const weightReadings = weightReadingsThrough(tracker.readings, [...history30.days, daily], viewDay);
   const weightSummary = summary(weightReadings, viewDay);
-  const latestEnergyWeightUpToViewDay =
-    [...history30.days]
-      .filter((d) => d.day <= viewDay && d.energy?.weightKg != null)
-      .pop()?.energy?.weightKg ?? null;
-  const displayWeight =
-    daily.energy?.weightKg ?? weightSummary.latest?.value ?? latestEnergyWeightUpToViewDay;
+  const displayWeight = weightSummary.latest?.value ?? null;
   const weightChange7d = weightSummary.change;
-
-  const weightSparkPoints = useMemo(() => {
-    const from14 = addDays(viewDay, -13);
-    const byDay = new Map<string, number>();
-    for (const d of history30.days) {
-      if (d.day >= from14 && d.day <= viewDay && d.energy?.weightKg != null) {
-        byDay.set(d.day, d.energy.weightKg);
-      }
-    }
-    for (const r of weightReadings) {
-      if (r.date >= from14 && r.date <= viewDay) byDay.set(r.date, r.value);
-    }
-    const vals = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);
-    return buildSparklinePoints(vals);
-  }, [history30.days, weightReadings, viewDay]);
+  const weightSparkPoints = buildSparklinePoints(
+    weightReadings.filter((reading) => reading.date >= addDays(viewDay, -13)).map((reading) => reading.value),
+  );
 
   const viewDateDisplay = new Date(`${viewDay}T12:00:00Z`).toLocaleDateString("en-GB", {
     timeZone: "UTC",

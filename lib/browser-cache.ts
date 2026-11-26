@@ -119,14 +119,14 @@ export async function readBrowserCache<T>(owner: string, key: string): Promise<{
   } catch { return null; }
 }
 
-export async function writeBrowserCache(owner: string, key: string, value: unknown) {
+export async function writeBrowserCache(owner: string, key: string, value: unknown, savedAt = Date.now()) {
   try {
     const bytes = JSON.stringify(value).length * 2;
     if (bytes > CACHE_MAX_BYTES / 2) return;
     const db = await database(), now = Date.now();
     const tx = db.transaction([STORE, METADATA], "readwrite");
     const meta = tx.objectStore(METADATA);
-    const row = { id: `${owner}:${key}`, owner, key, savedAt: now, accessedAt: now, bytes };
+    const row = { id: `${owner}:${key}`, owner, key, savedAt, accessedAt: now, bytes };
     tx.objectStore(STORE).put({ ...row, value } satisfies CacheRecord);
     meta.put(row);
     // Enforce the cache limits without pulling every saved diary into JavaScript.

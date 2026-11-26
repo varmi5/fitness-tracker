@@ -14,7 +14,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { readingsFor, metrics as bodyMetrics } from "../lib/metrics";
+import { weightReadingsThrough } from "../lib/metrics";
+import type { DailyNutritionView } from "../lib/nutrition-data";
 import { addDays } from "../lib/nutrition-model";
 import type { DailyStrainView, NutritionHistory, NutritionSettings, RecoveryInsightView, TrackerSnapshot } from "./types";
 
@@ -26,6 +27,7 @@ interface MetricTrendsModalProps {
   initialMetric: TrendMetricKind;
   today: string;
   history30: NutritionHistory;
+  daily?: DailyNutritionView;
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
   recoveryInsights?: RecoveryInsightView;
@@ -45,6 +47,7 @@ export function MetricTrendsModal({
   initialMetric,
   today,
   history30,
+  daily,
   tracker,
   settings,
   onClose,
@@ -132,28 +135,15 @@ export function MetricTrendsModal({
 
   const weightChartData = useMemo(() => {
     const from = addDays(today, -(days - 1));
-    const weightMetric = bodyMetrics.find((m) => m.key === "weight")!;
-    const byDay = new Map<string, number>();
-
-    const nutritionSource = days === 90 && nutrition90 ? nutrition90 : history30;
-    for (const d of nutritionSource.days) {
-      if (d.day >= from && d.day <= today && d.energy?.weightKg != null) {
-        byDay.set(d.day, d.energy.weightKg);
-      }
-    }
-    for (const r of readingsFor(tracker.readings, weightMetric)) {
-      if (r.date >= from && r.date <= today) {
-        byDay.set(r.date, r.value);
-      }
-    }
-    return [...byDay.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([day, kg]) => ({
-        day,
-        label: shortDay(day),
-        weightKg: Number(kg.toFixed(1)),
+    const nutrition = days === 90 && nutrition90 ? nutrition90 : history30;
+    return weightReadingsThrough(tracker.readings, [...nutrition.days, ...(daily ? [daily] : [])], today)
+      .filter((reading) => reading.date >= from)
+      .map(({ date, value }) => ({
+        day: date,
+        label: shortDay(date),
+        weightKg: Number(value.toFixed(1)),
       }));
-  }, [days, today, tracker.readings, history30, nutrition90]);
+  }, [days, today, tracker.readings, history30, nutrition90, daily]);
 
   const strainStats = useMemo(() => {
     const valid = strainChartData.filter((d) => d.overall != null);
