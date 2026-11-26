@@ -415,16 +415,21 @@ export async function syncOpenWearables(
       throw new NutritionError("Open Wearables user not found. Regenerate connection code.", 404);
     }
 
-    const connectionItems = unwrapItems<Record<string, unknown>>(connRes.data);
-    const activeProviders = new Set<string>();
-    const inactiveProviders = new Set<string>();
-    for (const connection of connectionItems) {
-      const provider = namedOwSource(typeof connection.provider === "string" ? connection.provider : null);
-      if (!provider) continue;
-      const status = typeof connection.status === "string" ? connection.status.toLowerCase() : "active";
-      if (status === "active" || status === "connected") activeProviders.add(provider);
-      else inactiveProviders.add(provider);
+    // This inventory includes both OAuth and SDK connections. Imported records
+    // can outlive a connection and never identify a currently linked provider.
+    const confirmedProviders = new Set<EnergySource>();
+    if (connRes.ok) {
+      for (const connection of unwrapItems<Record<string, unknown>>(connRes.data)) {
+        const status = typeof connection.status === "string" ? connection.status.toLowerCase() : null;
+        if (status !== "active" && status !== "connected") continue;
+        const provider = namedOwSource(typeof connection.provider === "string" ? connection.provider : null);
+        if (provider) confirmedProviders.add(provider);
+      }
     }
+    const previousDiagnostics = linked.diagnosticsJson as { providers?: string[]; confirmedProviderInventory?: boolean } | null;
+    const providersList = !connRes.ok && previousDiagnostics?.confirmedProviderInventory && Array.isArray(previousDiagnostics.providers)
+      ? previousDiagnostics.providers
+      : [...confirmedProviders];
 
     const touchedDays = new Set<string>();
     const activityItems = unwrapItems<Record<string, unknown>>(activityRes.data);
@@ -434,16 +439,6 @@ export async function syncOpenWearables(
     const sleepEventItems = unwrapItems<Record<string, unknown>>(sleepEventsRes.data);
     const hrItems = unwrapItems<Record<string, unknown>>(hrRes.data);
     const stepItems = unwrapItems<Record<string, unknown>>(stepsTsRes.data);
-
-    // Phone health sources can upload through the paired SDK without a cloud OAuth connection.
-    for (const item of [...activityItems, ...sleepSummaryItems, ...sleepEventItems, ...workoutItems, ...recoveryItems, ...hrItems, ...stepItems]) {
-      const metadata = item.source;
-      const rawProvider = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).provider : item.provider;
-      const provider = namedOwSource(typeof rawProvider === "string" ? rawProvider : null);
-      if ((provider === "apple" || provider === "health_connect" || provider === "samsung") && !inactiveProviders.has(provider)) {
-        activeProviders.add(provider);
-      }
-    }
 
     // Body summary is either a single BodySummary object or wrapped
     const bodyObj =
@@ -473,7 +468,6 @@ export async function syncOpenWearables(
         if (!day || day < from || day > to) continue;
         const source = extractSource(item);
         if (hasDirectGoogle && source === "google") continue;
-        activeProviders.add(source);
 
         const intensity =
           item.intensity_minutes && typeof item.intensity_minutes === "object"
@@ -526,7 +520,6 @@ export async function syncOpenWearables(
 
       // If body weight arrived for a source without an activity row today, still log weight safely
       if (bodyWeightKg != null && bodySource && !(hasDirectGoogle && bodySource === "google")) {
-        activeProviders.add(bodySource);
         await upsertSyncedWeight(tx, userId, to, bodyWeightKg, `Synced from ${formatSourceLabel(bodySource)}`);
       }
 
@@ -563,7 +556,6 @@ export async function syncOpenWearables(
         if (deepMinutes != null) stagesJson.push({ stage: "DEEP", minutes: deepMinutes });
         if (remMinutes != null) stagesJson.push({ stage: "REM", minutes: remMinutes });
 
-        activeProviders.add(source);
         await saveSleepSession(tx, userId, {
           day,
           source,
@@ -591,7 +583,6 @@ export async function syncOpenWearables(
         if (!day || day < from || day > to) continue;
         const source = extractSource(sm);
         if (hasDirectGoogle && source === "google") continue;
-        activeProviders.add(source);
 
         const hrv = num(sm.avg_hrv_sdnn_ms);
         const spo2 = num(sm.avg_spo2_percent);
@@ -640,7 +631,6 @@ export async function syncOpenWearables(
         if (!day || day < from || day > to) continue;
         const source = extractSource(rec);
         if (hasDirectGoogle && source === "google") continue;
-        activeProviders.add(source);
 
         const vitals = extraSleepVitals.get(`${source}:${day}`);
         const valid = recoveryInput.parse({
@@ -695,7 +685,6 @@ export async function syncOpenWearables(
         const exType = typeof w.type === "string" ? w.type : "";
         const title = (typeof w.name === "string" && w.name.trim()) ? w.name.trim() : exType || "Workout";
 
-        activeProviders.add(source);
         const valid = workoutInput.parse({
           day,
           source,
@@ -767,7 +756,6 @@ export async function syncOpenWearables(
         if (Number.isNaN(recordedAt.getTime())) continue;
         const day = localDay(recordedAt, tz);
         if (day < from || day > to) continue;
-        activeProviders.add(source);
         hrBatch.push({
           userId,
           source,
@@ -811,7 +799,6 @@ export async function syncOpenWearables(
         if (Number.isNaN(end.getTime()) || end <= start) continue;
         const day = localDay(start, tz);
         if (day < from || day > to) continue;
-        activeProviders.add(source);
         stepBatch.push({
           userId,
           source,
@@ -828,7 +815,6 @@ export async function syncOpenWearables(
       }
       syncedStepIntervals = stepBatch.length;
 
-      const providersList = [...activeProviders];
       const isConnected = linked.status === "connected" || providersList.length > 0 || syncedDays > 0 || syncedWorkouts > 0 || syncedSleepDays > 0 || syncedStepIntervals > 0 || hrItems.length > 0;
       const label = providersList.length > 0 ? providersList.map(formatSourceLabel).join(", ") : isConnected ? "Open Wearables linked" : "Awaiting device link";
 
@@ -839,7 +825,7 @@ export async function syncOpenWearables(
           accountLabel: label,
           lastSync: new Date(),
           lastError: null,
-          diagnosticsJson: sql`${healthIntegration.diagnosticsJson} || ${JSON.stringify({ providers: providersList, syncedAt: new Date().toISOString(), from, to })}::jsonb`,
+          diagnosticsJson: sql`${healthIntegration.diagnosticsJson} || ${JSON.stringify({ providers: providersList, confirmedProviderInventory: connRes.ok || previousDiagnostics?.confirmedProviderInventory === true, syncedAt: new Date().toISOString(), from, to })}::jsonb`,
         })
         .where(ownOw(userId));
 
@@ -875,7 +861,7 @@ export async function syncOpenWearables(
       syncedWorkouts,
       syncedHeartRateSamples,
       syncedStepIntervals,
-      providers: [...activeProviders],
+      providers: providersList,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Open Wearables sync failed.";
