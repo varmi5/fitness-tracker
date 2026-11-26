@@ -2,7 +2,7 @@
 
 import { Bug, CheckCircle2, Lightbulb } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { FeedbackStatus } from "../../lib/feedback";
 
 const statusLabels: Record<FeedbackStatus, string> = {
@@ -134,6 +134,7 @@ export function TriageActions({ id, status, cannyLink, githubLink, canSendCanny,
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
+  const statusId = useId();
   const showHandoff = (canSendCanny && !cannyLink) || (canRequestFix && !githubLink);
 
   async function run(payload: object, success: string) {
@@ -163,12 +164,12 @@ export function TriageActions({ id, status, cannyLink, githubLink, canSendCanny,
 
   return (
     <div className="support-triage">
-      <label className="support-status-control">
-        Status
-        <select value={status} disabled={pending} onChange={(event) => void run({ action: "status", status: event.target.value }, "Status updated.")}>
+      <div className="support-status-control">
+        <label htmlFor={statusId}>Status</label>
+        <select id={statusId} value={status} disabled={pending} onChange={(event) => void run({ action: "status", status: event.target.value }, "Status updated.")}>
           {Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
-      </label>
+      </div>
       {cannyLink && (cannyLink === "pending"
         ? <p>Canny delivery is pending or unconfirmed. Check Canny using the report reference.</p>
         : <a href={cannyLink} target="_blank" rel="noreferrer">View Canny post</a>)}
