@@ -83,6 +83,13 @@ test("a late startup response keeps confirmed changes without carrying metrics a
   assert.equal(tomorrow.daily.day, nextDate);
   assert.equal(tomorrow.daily.target, 1900);
 
+  const rolloverStarted = cache.revision;
+  cache.update(() => ({ today: date, calendarToday: date, activeDay: date, daily: old.daily, strain: undefined }));
+  const afterLateResponse = cache.refresh(create("a", nextDate, 73), rolloverStarted);
+  assert.equal(afterLateResponse.activeDay, date);
+  assert.equal(afterLateResponse.daily.day, date);
+  assert.equal(afterLateResponse.strain, undefined);
+
   const otherAccount = cache.refresh(create("b", date, 80), requestStarted);
   assert.equal(otherAccount.tracker.readings[0].value, 80);
 });

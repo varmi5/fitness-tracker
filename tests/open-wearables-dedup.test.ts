@@ -211,7 +211,10 @@ test("syncOpenWearables ingests Apple Health + Garmin safely, isolates users, sk
       return Response.json({ id: "inv-1", code: "ABCD1234", expires_at: "2026-11-26T00:00:00Z" });
     }
     if (url.includes(`/api/v1/users/${owUserUuid}/connections`)) {
-      return Response.json([{ provider: "apple_health_sdk", status: "active" }]);
+      return Response.json([
+        { provider: "garmin", status: "expired" },
+        { provider: "unknown", status: "active" },
+      ]);
     }
     if (url.includes("/summaries/activity")) {
       return Response.json({
@@ -329,7 +332,7 @@ test("syncOpenWearables ingests Apple Health + Garmin safely, isolates users, sk
 
     const status1 = await openWearablesStatus(typedDb, "OW-1");
     assert.equal(status1.connected, true);
-    assert.ok(status1.providers.includes("apple"));
+    assert.deepEqual(status1.providers, ["apple"]);
 
     // User OW-2 stays completely isolated
     const status2 = await openWearablesStatus(typedDb, "OW-2");

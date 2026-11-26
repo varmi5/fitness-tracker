@@ -96,6 +96,8 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
   const [activeHomeDay, setActiveHomeDay] = useState(initialActiveDay);
   const activeHomeDayRef = useRef(initialActiveDay);
   const [showSleep, setShowSleep] = useState(Boolean(initial.showSleep));
+  const showSleepRef = useRef(Boolean(initial.showSleep));
+  const waitingForSleepRef = useRef(Boolean(initial.waitingForSleep));
 
   const [homeDay, setHomeDay] = useState(initialActiveDay);
   const homeDayRef = useRef(initialActiveDay);
@@ -107,6 +109,8 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
   const actionLock = useRef(false);
   const syncTokenRef = useRef(initial.syncToken);
   const syncInFlight = useRef(false);
+  const incomingRefreshQueue = useRef(Promise.resolve());
+  const diaryRefreshQueue = useRef(Promise.resolve());
   const lastSyncCheckRef = useRef(Date.now());
 
   const lastToday = useRef(initialCalendarToday);
@@ -238,6 +242,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
   const [history30, setHistory30] = useState(initial.history30);
   const [google, setGoogle] = useState(initial.google);
   const [openWearables, setOpenWearables] = useState<OpenWearablesIntegrationStatus | undefined>(initial.openWearables);
+  const wearableMode = useRef(false);
   const lastAutoSyncRef = useRef(0);
   const lastRolloverSyncDayRef = useRef(initialCalendarToday);
 
@@ -283,9 +288,17 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     const previousActive = activeHomeDayRef.current;
     todayRef.current = initial.calendarToday; setToday(initial.calendarToday);
     activeHomeDayRef.current = initial.activeDay; setActiveHomeDay(initial.activeDay);
+    showSleepRef.current = initial.showSleep;
+    waitingForSleepRef.current = Boolean(initial.waitingForSleep);
     setShowSleep(initial.showSleep);
     if (homeDayRef.current === previousActive) homeDayRef.current = initial.activeDay;
     if (selectedDayRef.current === previousActive) { selectedDayRef.current = initial.activeDay; setSelectedDay(initial.activeDay); }
+    if (trainingDayRef.current === previousActive) {
+      trainingDayRef.current = initial.activeDay;
+      setTrainingDay(initial.activeDay);
+      setTrainingStrain(initial.strain);
+      setTrainingRecovery(initial.recoveryInsights);
+    }
     const existing = dayCacheRef.current.get(initial.daily.day);
     if ((existing?.fetchedAt?.daily ?? 0) <= savedAt) {
       void cacheDay(initial.daily.day, {
@@ -328,7 +341,10 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       try {
         const res = await fetch("/api/integrations/open-wearables/status", { signal: controller.signal, cache: "no-store" });
         const payload = await res.json();
-        if (res.ok && !controller.signal.aborted && payload.status) setOpenWearables(payload.status);
+        if (res.ok && !controller.signal.aborted && payload.status) {
+          await updateStartupCache(() => ({ openWearables: payload.status }));
+          if (!controller.signal.aborted) setOpenWearables(payload.status);
+        }
       } catch { /* Retry quietly on the next check; never restart pairing automatically. */ }
       finally { running = false; }
     };
@@ -445,12 +461,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
           ticker = null;
         }
         if (active && results.some(Boolean)) {
-          invalidateDayCache();
-          await Promise.all([
-            refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
-            selectTrainingDay(trainingDayRef.current),
-            refreshTracker(),
-          ]).catch(() => undefined);
+          await refreshIncomingData().catch(() => undefined);
           if (showInitialProgress && active) {
             setGoogleSyncPct(100);
             await new Promise((resolve) => window.setTimeout(resolve, 350));
@@ -554,16 +565,6 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     const syncDayAndData = (forceSync = false) => {
       const currentDay = localDay(new Date(), tzRef.current);
       if (currentDay !== todayRef.current) {
-        if (selectedDayRef.current === todayRef.current) {
-          selectedDayRef.current = currentDay;
-          setSelectedDay(currentDay);
-        }
-        if (homeDayRef.current === todayRef.current) {
-          homeDayRef.current = currentDay;
-
-        }
-        activeHomeDayRef.current = currentDay;
-        setActiveHomeDay(currentDay);
         todayRef.current = currentDay;
         setToday(currentDay);
       }
@@ -592,10 +593,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     if (lastToday.current === today) return;
     lastToday.current = today;
     todayRef.current = today;
-    void (async () => {
-      await refreshAccountAndMeta();
-      await refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current);
-    })().catch(() => showToast("Could not refresh the diary. Try again.", "error"));
+    void refreshIncomingData().catch(() => showToast("Could not refresh the diary. Try again.", "error"));
   }, [today]);
 
   useEffect(() => () => {
@@ -608,6 +606,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     setSettingsOpen(false);
     if (next !== "Body") setBodySubPage(null);
     setTab(next);
+    if (next === "Training" && !trainingStrain) void selectTrainingDay(trainingDayRef.current);
     window.scrollTo({ top: 0, behavior: "instant" });
   }
 
@@ -639,16 +638,24 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     await updateStartupCache(() => ({
       ...(payload.settings ? { settings: payload.settings } : {}),
       ...(payload.google ? { google: payload.google } : {}),
+      ...(payload.hevy ? { hevy: payload.hevy } : {}),
+      ...(payload.openWearables ? { openWearables: payload.openWearables } : {}),
       ...(Array.isArray(payload.audit) ? { audit: payload.audit } : {}),
     }));
     if (payload.settings) setSettings(payload.settings);
     if (payload.google) setGoogle(payload.google);
+    if (payload.hevy) setHevy(payload.hevy);
+    if (payload.openWearables) setOpenWearables(payload.openWearables);
+    if (payload.settings && payload.openWearables) {
+      wearableMode.current = payload.settings.trackingMode === "fitbit" || Boolean(payload.openWearables.connected);
+    }
     if (Array.isArray(payload.audit)) setAudit(payload.audit);
     if (payload.homeState) {
       const hs = payload.homeState as {
         calendarToday?: string;
         activeDay?: string;
         showSleep?: boolean;
+        waitingForSleep?: boolean;
       };
       if (hs.calendarToday && hs.calendarToday !== todayRef.current) {
         todayRef.current = hs.calendarToday;
@@ -658,12 +665,13 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
         const prevActive = activeHomeDayRef.current;
         activeHomeDayRef.current = hs.activeDay;
         setActiveHomeDay(hs.activeDay);
-        if (homeDayRef.current === prevActive && hs.activeDay !== prevActive) {
-          homeDayRef.current = hs.activeDay;
-
-        }
+        if (homeDayRef.current === prevActive) homeDayRef.current = hs.activeDay;
+        if (selectedDayRef.current === prevActive) selectedDayRef.current = hs.activeDay;
+        if (trainingDayRef.current === prevActive) trainingDayRef.current = hs.activeDay;
       }
-      setShowSleep(Boolean(hs.showSleep));
+      showSleepRef.current = Boolean(hs.showSleep);
+      waitingForSleepRef.current = Boolean(hs.waitingForSleep);
+      setShowSleep(showSleepRef.current);
     }
   }
 
@@ -677,6 +685,18 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       const data = (await res.json()) as { token?: string };
       if (data.token) syncTokenRef.current = data.token;
     }
+  }
+
+  function refreshIncomingData() {
+    // Google Health and Open Wearables can finish together. Re-read after each
+    // committed sync without aborting another provider's refresh.
+    const task = incomingRefreshQueue.current.then(async () => {
+      await refreshAccountAndMeta();
+      await Promise.all([refreshHistoryAndToday(true), refreshTracker()]);
+      await selectTrainingDay(trainingDayRef.current);
+    });
+    incomingRefreshQueue.current = task.catch(() => undefined);
+    return task;
   }
 
   async function checkForRemoteUpdates(force = false) {
@@ -695,11 +715,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       if (!res.ok) return;
       const { token } = (await res.json()) as { token?: string };
       if (!token || token === syncTokenRef.current) return;
-      await refreshAccountAndMeta();
-      await Promise.all([
-        refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
-        refreshTracker(),
-      ]);
+      await refreshIncomingData();
       syncTokenRef.current = token;
       window.dispatchEvent(new Event("fitnesstrackr:sync"));
     } catch {
@@ -709,13 +725,22 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     }
   }
 
-  async function refreshHistoryAndToday(focusDay = selectedDayRef.current, focusHomeDay = homeDayRef.current) {
+  function refreshHistoryAndToday(waitForHealth = false) {
+    const task = diaryRefreshQueue.current.then(() => refreshDiaryData(waitForHealth));
+    diaryRefreshQueue.current = task.catch(() => undefined);
+    return task;
+  }
+
+  async function refreshDiaryData(waitForHealth: boolean) {
+    const focusDay = selectedDayRef.current;
+    const focusHomeDay = homeDayRef.current;
     invalidateDayCache();
     const calendarToday = todayRef.current;
+    const activeDay = activeHomeDayRef.current;
+    const days = new Set([focusHomeDay, focusDay, activeDay]);
     const [history] = await Promise.all([
       fetch(`/api/nutrition?from=${addDays(calendarToday, -29)}&to=${calendarToday}`, { cache: "no-store" }),
-      loadDayPart(focusHomeDay, "daily"),
-      focusDay === focusHomeDay ? undefined : loadDayPart(focusDay, "daily"),
+      ...[...days].map((day) => loadDayPart(day, "daily")),
     ]);
     if (history.status === 401) {
       invalidateDayCache(undefined, true);
@@ -728,19 +753,36 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     setHistory30(recent);
     if (homeDayRef.current === focusHomeDay) {
       showHomeDay(focusHomeDay, dayCacheRef.current.get(focusHomeDay));
-      void refreshHomeMetrics(focusHomeDay);
+      if (focusHomeDay !== activeDay) void refreshHomeMetrics(focusHomeDay);
     }
     const diary = dayCacheRef.current.get(focusDay)?.daily;
     if (selectedDayRef.current === focusDay && diary) {
       setSelectedDay(focusDay);
       setSelectedDaily(diary);
     }
+    const refreshActiveHealth = async () => {
+      await refreshHomeMetrics(activeDay);
+      const active = dayCacheRef.current.get(activeDay);
+      if (active?.daily && calendarToday === todayRef.current && activeDay === activeHomeDayRef.current) {
+        await updateStartupCache(() => ({
+          today: calendarToday,
+          calendarToday,
+          activeDay,
+          showSleep: showSleepRef.current,
+          waitingForSleep: waitingForSleepRef.current,
+          daily: active.daily,
+          strain: active.strain,
+          recoveryInsights: active.recovery,
+          pulseInsights: wearableMode.current ? active.pulse ?? null : null,
+        }));
+      }
+    };
+    if (waitForHealth) await refreshActiveHealth();
+    else void refreshActiveHealth();
   }
 
   async function refreshHomeMetrics(day: string) {
-    const wearable = openWearables?.connected ||
-      (settings.trackingMode ?? (settings.preferredEnergySource === "google" ? "fitbit" : "manual")) === "fitbit";
-    await Promise.allSettled([loadDayPart(day, "strain"), wearable ? loadDayPart(day, "pulse") : undefined]);
+    await Promise.allSettled([loadDayPart(day, "strain"), wearableMode.current ? loadDayPart(day, "pulse") : undefined]);
     if (homeDayRef.current === day) showHomeDay(day, dayCacheRef.current.get(day));
   }
 
@@ -873,8 +915,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Could not import Hevy data.");
       if (json?.status) setHevy(json.status);
-      invalidateDayCache();
-      await Promise.all([selectTrainingDay(trainingDayRef.current), selectHomeDay(homeDayRef.current)]);
+      await refreshIncomingData();
       showToast(`Imported ${json.imported ?? 0} Hevy workout(s).`, "success");
       return true;
     } catch (error) {
@@ -892,8 +933,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Hevy sync failed.");
       if (json?.status) setHevy(json.status);
-      invalidateDayCache();
-      await Promise.all([selectTrainingDay(trainingDayRef.current), selectHomeDay(homeDayRef.current)]);
+      await refreshIncomingData();
       showToast(`Synced ${json.synced ?? 0} Hevy workout(s).`, "success");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Hevy sync failed.", "error");
@@ -967,7 +1007,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
         return;
       }
       await saveTrackerSnapshot(payload, ++trackerRevision.current);
-      await refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current);
+      await refreshHistoryAndToday();
       void refreshSyncToken().catch(() => null);
       showToast(successMessage, "success");
     } catch (error) {
@@ -1015,7 +1055,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
         setAudit([]);
       }
       let refreshed = true;
-      await refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current).catch(() => {
+      await refreshHistoryAndToday().catch(() => {
         refreshed = false;
       });
       if (action.action === "energy" || action.action === "energy-import" || action.action === "import-health-file") {
@@ -1101,30 +1141,13 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       if (!res.ok) throw new Error(payload.message ?? "Google sync failed.");
       if (payload.status) setGoogle(payload.status);
       setGoogleSyncPct(78);
-      await refreshAccountAndMeta();
+      await fetch("/api/strain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "recompute", day: today }),
+      }).catch(() => null);
       setGoogleSyncPct(88);
-      await Promise.all([
-        refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
-        refreshTracker(),
-        fetch("/api/strain", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "recompute", day: today }),
-        })
-          .then((r) => (r.ok ? r.json() : null))
-          .then(async (j) => {
-            if (j?.strain) {
-              await cacheDay(today, { strain: j.strain, recovery: j.recoveryInsights, fetchedAt: { strain: Date.now() } });
-              if (homeDayRef.current === today) setHomeStrain(j.strain);
-              if (trainingDayRef.current === today) setTrainingStrain(j.strain);
-            }
-            if (j?.recoveryInsights) {
-              if (homeDayRef.current === today) setHomeRecovery(j.recoveryInsights);
-              if (trainingDayRef.current === today) setTrainingRecovery(j.recoveryInsights);
-            }
-          })
-          .catch(() => undefined),
-      ]);
+      await refreshIncomingData();
       void refreshSyncToken().catch(() => null);
       setGoogleSyncPct(100);
       await new Promise((resolve) => window.setTimeout(resolve, 450));
@@ -1178,8 +1201,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       if (payload.status) setGoogle(payload.status);
       invalidateDayCache(undefined, true);
       await clearBrowserCache();
-      await refreshAccountAndMeta();
-      await Promise.all([refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current), refreshTracker()]);
+      await refreshIncomingData();
       void refreshSyncToken().catch(() => null);
       showToast("Google Health disconnected and synced data removed.", "success");
     } catch (error) {
@@ -1222,13 +1244,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Open Wearables sync failed.");
       if (payload.status) setOpenWearables(payload.status);
-      invalidateDayCache();
-      await refreshAccountAndMeta();
-      await Promise.all([
-        refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
-        selectTrainingDay(trainingDayRef.current),
-        refreshTracker(),
-      ]);
+      await refreshIncomingData();
       void refreshSyncToken().catch(() => null);
       showToast("Open Wearables data synced.", "success");
     } catch (error) {
@@ -1249,12 +1265,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       if (payload.status) setOpenWearables(payload.status);
       invalidateDayCache(undefined, true);
       await clearBrowserCache();
-      await refreshAccountAndMeta();
-      await Promise.all([
-        refreshHistoryAndToday(selectedDayRef.current, homeDayRef.current),
-        selectTrainingDay(trainingDayRef.current),
-        refreshTracker(),
-      ]);
+      await refreshIncomingData();
       void refreshSyncToken().catch(() => null);
       showToast("Open Wearables disconnected.", "success");
     } catch (error) {
@@ -1296,6 +1307,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
   }
 
   useEffect(() => {
+    wearableMode.current = isFitbitMode;
     if (isFitbitMode) void refreshHomeMetrics(homeDayRef.current);
     else setPulseInsights(null);
   }, [isFitbitMode]);
@@ -1425,6 +1437,16 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
             onSyncGoogle={() => void syncGoogle(google.lastSync ? 3 : 14)}
             onNavigate={navigate}
           />
+        )}
+
+        {tab === "Training" && !trainingStrain && (
+          <div className="card">
+            {trainingLoading ? <p role="status">Loading training…</p> : (
+              <button type="button" className="secondary" onClick={() => void selectTrainingDay(trainingDayRef.current)}>
+                Refresh training data
+              </button>
+            )}
+          </div>
         )}
 
         {tab === "Training" && trainingStrain && strainSettings && hevy && (

@@ -54,6 +54,7 @@ export async function getAppBootstrap(requestHeaders: Headers): Promise<InitialA
         calendarToday: home.calendarToday,
         activeDay: home.activeDay,
         showSleep: home.showSleep,
+        waitingForSleep: home.waitingForSleep,
         daily: home.daily,
         history30: home.history30,
         google,

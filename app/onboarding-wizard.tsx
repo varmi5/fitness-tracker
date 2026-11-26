@@ -24,6 +24,7 @@ import {
   CHATGPT_MCP_INSTRUCTIONS,
   estimateMifflinTdee,
 } from "../lib/onboarding";
+import { formatSourceLabel, linkedWearableProviders } from "../lib/source-priority";
 import { type TrackingMode } from "../lib/nutrition-model";
 import { OpenWearablesGuide } from "./open-wearables-guide";
 import type {
@@ -86,15 +87,12 @@ export function OnboardingWizard({
   const [saving, setSaving] = useState(false);
 
   // Step 1: Source & TDEE
-  const [sourceChoice, setSourceChoice] = useState<"apple" | "fitbit" | "other_wearable" | "manual">(
-    openWearables?.connected && !google.connected
-      ? openWearables.providers.some((p) => p !== "apple")
-        ? "other_wearable"
-        : "apple"
-      : google.connected || settings.trackingMode === "fitbit"
-        ? "fitbit"
-        : "manual",
-  );
+  const linked = linkedWearableProviders(openWearables);
+  const defaultSource = google.connected ? "fitbit"
+    : linked.apple ? "apple"
+    : linked.other.length ? "other_wearable"
+    : settings.trackingMode === "fitbit" ? "fitbit" : "manual";
+  const [sourceChoice, setSourceChoice] = useState<"apple" | "fitbit" | "other_wearable" | "manual">(defaultSource);
   const trackingMode: TrackingMode = sourceChoice === "manual" ? "manual" : "fitbit";
   const [owInvite, setOwInvite] = useState<{ code: string; expiresAt: string | null; apiUrl: string | null } | null>(null);
   const [manualTdee, setManualTdee] = useState("");
@@ -138,15 +136,7 @@ export function OnboardingWizard({
   useEffect(() => {
     if (!open) return;
     setStep(1);
-    setSourceChoice(
-      openWearables?.connected && !google.connected
-        ? openWearables.providers.some((p) => p !== "apple")
-          ? "other_wearable"
-          : "apple"
-        : google.connected || settings.trackingMode === "fitbit"
-          ? "fitbit"
-          : "manual",
-    );
+    setSourceChoice(defaultSource);
     setBulkMode(Boolean(settings.bulkMode));
     setTargetCalories(String(settings.targetToday || 2200));
     setSleepGoalHours(String((settings.sleepGoalMinutes ?? 480) / 60));
@@ -159,7 +149,7 @@ export function OnboardingWizard({
     setBirthDate(tracker.settings.birthDate ?? "");
     setBiologicalSex(tracker.settings.biologicalSex ?? "");
     setUnits(tracker.settings.units === "imperial" ? "imperial" : "metric");
-  }, [open, google.connected, openWearables?.connected, settings.trackingMode, settings.bulkMode, settings.targetToday, settings.sleepGoalMinutes, settings.timezone, settings.targets.length, settings.onboardingCompletedAt, tracker.settings.heightCm, tracker.settings.birthDate, tracker.settings.biologicalSex, tracker.settings.units]);
+  }, [open, defaultSource, settings.bulkMode, settings.targetToday, settings.sleepGoalMinutes, settings.timezone, settings.targets.length, settings.onboardingCompletedAt, tracker.settings.heightCm, tracker.settings.birthDate, tracker.settings.biologicalSex, tracker.settings.units]);
 
   const selectedActivity = useMemo(
     () => ACTIVITY_LEVELS.find((a) => a.id === estActivityId) ?? ACTIVITY_LEVELS[2],
@@ -407,7 +397,7 @@ export function OnboardingWizard({
                     </span>
                     Apple Watch / Health
                   </span>
-                  {openWearables?.connected && <span className="pill teal-soft">Connected</span>}
+                  {linked.apple && <span className="pill teal-soft">Connected</span>}
                 </div>
                 <p>Sleep, HRV, workouts &amp; steps</p>
               </button>
@@ -441,7 +431,11 @@ export function OnboardingWizard({
                     </span>
                     Garmin, Oura &amp; Android
                   </span>
-                  {openWearables?.connected && <span className="pill teal-soft">Connected</span>}
+                  {linked.other.length > 0 && (
+                    <span className="pill teal-soft" aria-label={linked.other.map(formatSourceLabel).join(", ") + " connected"}>
+                      {linked.other.length === 1 ? formatSourceLabel(linked.other[0]) + " connected" : `${linked.other.length} connected`}
+                    </span>
+                  )}
                 </div>
                 <p>Health Connect, Whoop &amp; Strava</p>
               </button>
@@ -502,7 +496,14 @@ export function OnboardingWizard({
 
             {(sourceChoice === "apple" || sourceChoice === "other_wearable") && (
               <div className="card" style={{ background: "var(--surface-soft)", display: "grid", gap: ".6rem", minWidth: 0 }}>
-                {openWearables?.connected && <p className="ow-detail" role="status">Open Wearables is connected. Your linked devices use this account; no new pairing code is needed.</p>}
+                {openWearables?.connected && (sourceChoice === "apple" ? linked.apple : linked.other.length > 0) && (
+                  <p className="ow-detail" role="status">
+                    {sourceChoice === "apple" ? "Apple Health is connected." : `Connected through Open Wearables: ${linked.other.map(formatSourceLabel).join(", ")}.`}
+                  </p>
+                )}
+                {openWearables?.connected && (sourceChoice === "apple" ? !linked.apple : linked.other.length === 0) && (
+                  <p className="ow-detail" role="status">Add {sourceChoice === "apple" ? "Apple Health" : "a device"} from your existing Open Wearables setup. Your pairing code is already in use.</p>
+                )}
                 <OpenWearablesGuide
                   openWearables={openWearables}
                   invite={owInvite}
