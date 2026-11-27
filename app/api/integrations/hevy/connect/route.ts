@@ -1,8 +1,7 @@
-import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
-import { seal } from "../../../../../lib/google-health";
 import { hevyConsentUrl, hevyOAuthConfigured } from "../../../../../lib/hevy";
-import { authConfigured, getAuth, getAuthConfig } from "../../../../../lib/runtime";
+import { createOAuthState, parseOAuthReturnTo } from "../../../../../lib/oauth-state";
+import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
 
@@ -20,17 +19,18 @@ export async function GET(request: Request) {
   }
 
   const config = getAuthConfig();
-  const state = randomBytes(24).toString("base64url");
+  const returnTo = parseOAuthReturnTo(new URL(request.url).searchParams.get("returnTo"));
+  const { state, sealed, maxAge } = await createOAuthState(getDatabase(), "hevy", session.user.id, { returnTo });
   const callback = `${new URL(config.baseURL).origin}/api/integrations/hevy/callback`;
   const consent = hevyConsentUrl(callback, state);
 
   const response = NextResponse.redirect(consent);
-  response.cookies.set(OAUTH_COOKIE, seal({ state, userId: session.user.id }, session.user.id), {
+  response.cookies.set(OAUTH_COOKIE, sealed, {
     httpOnly: true,
     sameSite: "lax",
     secure: new URL(config.baseURL).protocol === "https:",
     path: "/",
-    maxAge: 600,
+    maxAge,
   });
   return response;
 }

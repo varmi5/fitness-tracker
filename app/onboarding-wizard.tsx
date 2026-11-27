@@ -46,6 +46,7 @@ interface OnboardingWizardProps {
   hevy?: HevyIntegrationStatus;
   mcpEnabled: boolean;
   busy: boolean;
+  initialStep?: number;
   onClose: () => void;
   onSaveTracker: (action: object, successMessage: string) => Promise<boolean | void>;
   onNutritionAction: (action: object, successMessage: string) => Promise<boolean>;
@@ -76,6 +77,7 @@ export function OnboardingWizard({
   hevy,
   mcpEnabled,
   busy,
+  initialStep = 1,
   onClose,
   onSaveTracker,
   onNutritionAction,
@@ -132,6 +134,7 @@ export function OnboardingWizard({
     tracker.settings.units === "imperial" ? "imperial" : "metric",
   );
 
+  const safeInitialStep = Math.min(TOTAL_STEPS, Math.max(1, initialStep));
   const wasOpenRef = useRef(false);
 
   // Sync estimator weight/height into Step 2 when user opens/edits Step 1
@@ -139,7 +142,7 @@ export function OnboardingWizard({
     const opened = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!opened) return;
-    setStep(1);
+    setStep(safeInitialStep);
     setSourceChoice(defaultSource);
     setBulkMode(Boolean(settings.bulkMode));
     setTargetCalories(String(settings.targetToday || 2200));
@@ -156,7 +159,11 @@ export function OnboardingWizard({
     setBirthDate(tracker.settings.birthDate ?? "");
     setBiologicalSex(tracker.settings.biologicalSex ?? "");
     setUnits(tracker.settings.units === "imperial" ? "imperial" : "metric");
-  }, [open, defaultSource, settings.bulkMode, settings.targetToday, settings.sleepGoalMinutes, settings.timezone, settings.targets.length, settings.onboardingCompletedAt, tracker.settings.heightCm, tracker.settings.birthDate, tracker.settings.biologicalSex, tracker.settings.units]);
+  }, [open, safeInitialStep, defaultSource, settings.bulkMode, settings.targetToday, settings.sleepGoalMinutes, settings.timezone, settings.targets.length, settings.onboardingCompletedAt, tracker.settings.heightCm, tracker.settings.birthDate, tracker.settings.biologicalSex, tracker.settings.units]);
+
+  useEffect(() => {
+    if (open) setStep(safeInitialStep);
+  }, [open, safeInitialStep]);
 
   const selectedActivity = useMemo(
     () => ACTIVITY_LEVELS.find((a) => a.id === estActivityId) ?? ACTIVITY_LEVELS[2],
@@ -502,7 +509,7 @@ export function OnboardingWizard({
                     type="button"
                     className="unlock-btn"
                     disabled={saving || busy}
-                    onClick={() => void handleConnectGoogleBeforeRedirect("/api/integrations/google/connect?write=1")}
+                    onClick={() => void handleConnectGoogleBeforeRedirect("/api/integrations/google/connect?write=1&returnTo=onboarding-1")}
                   >
                     Connect Google Health
                   </button>
@@ -873,8 +880,13 @@ export function OnboardingWizard({
               </div>
             ) : (
               <div style={{ display: "grid", gap: ".65rem" }}>
+                {(hevy?.workoutCount ?? 0) > 0 && (
+                  <div className="pill" style={{ justifySelf: "start" }}>
+                    {hevy!.workoutCount} workouts stored · Connect Hevy to sync new sessions
+                  </div>
+                )}
                 {hevy?.oauthAvailable && (
-                  <a className="unlock-btn" href="/api/integrations/hevy/connect">
+                  <a className="unlock-btn" href="/api/integrations/hevy/connect?returnTo=onboarding-3">
                     Connect Hevy Account
                   </a>
                 )}

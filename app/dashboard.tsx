@@ -284,6 +284,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
   const [dataSourcesOpen, setDataSourcesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(Boolean(initial.settings.needsOnboarding));
+  const [onboardingInitialStep, setOnboardingInitialStep] = useState(1);
   const [bodySubPage, setBodySubPage] = useState<"physique" | null>(null);
 
   // A fresh bootstrap updates current views without resetting the user's open tab/date.
@@ -527,6 +528,33 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     if (meta) meta.setAttribute("content", "#E8EAF0");
 
     const params = new URLSearchParams(window.location.search);
+    const formatOAuthError = (reason: string | null) => {
+      switch (reason) {
+        case "expired":
+          return "Connection session expired — please tap Connect again.";
+        case "signed-out":
+          return "Please sign in again before connecting.";
+        case "denied":
+        case "cancelled":
+          return "Connection was cancelled.";
+        case "state-mismatch":
+        case "invalid-state":
+          return "Security check did not match — please try connecting again.";
+        case "missing-code":
+          return "No authorization code was returned — please try again.";
+        case "not-configured":
+          return "This integration is not configured on the server.";
+        default:
+          return reason || "connection failed";
+      }
+    };
+
+    const reqOnboarding = Number(params.get("onboarding"));
+    if (Number.isInteger(reqOnboarding) && reqOnboarding >= 1 && reqOnboarding <= 5) {
+      setOnboardingInitialStep(reqOnboarding);
+      setOnboardingOpen(true);
+    }
+
     const reqTab = params.get("tab");
     if (reqTab === "Settings") {
       setSettingsOpen(true);
@@ -540,6 +568,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
 
     const googleState = params.get("google");
     if (googleState === "connected") {
+      void updateStartupCache(() => ({ google: initial.google }));
       showToast(
         initial.google.status === "sync_failed"
           ? "Google Health connected. The first sync failed; try Sync again in Settings."
@@ -548,12 +577,12 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       );
       window.history.replaceState({}, "", "/");
     } else if (googleState === "error") {
-      const reason = params.get("reason") ?? "connection failed";
-      showToast(`Google Health: ${reason}`, "error");
+      showToast(`Google Health: ${formatOAuthError(params.get("reason"))}`, "error");
       window.history.replaceState({}, "", "/");
     }
     const hevyState = params.get("hevy");
     if (hevyState === "connected") {
+      void updateStartupCache(() => ({ hevy: initial.hevy }));
       showToast(
         initial.hevy.status === "sync_failed"
           ? "Hevy connected. Tap Sync Hevy to refresh your workout history."
@@ -562,8 +591,9 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       );
       window.history.replaceState({}, "", "/");
     } else if (hevyState === "error") {
-      const reason = params.get("reason") ?? "connection failed";
-      showToast(`Hevy: ${reason}`, "error");
+      showToast(`Hevy: ${formatOAuthError(params.get("reason"))}`, "error");
+      window.history.replaceState({}, "", "/");
+    } else if (Number.isInteger(reqOnboarding) && reqOnboarding >= 1 && reqOnboarding <= 5) {
       window.history.replaceState({}, "", "/");
     }
   }, []);
@@ -1608,6 +1638,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
               onSyncOpenWearables={syncOpenWearables}
               onDisconnectOpenWearables={disconnectOpenWearables}
               onOpenOnboarding={() => {
+                setOnboardingInitialStep(1);
                 setSettingsOpen(false);
                 setOnboardingOpen(true);
               }}
@@ -1619,6 +1650,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
 
       <OnboardingWizard
         open={onboardingOpen}
+        initialStep={onboardingInitialStep}
         userName={initial.userName}
         today={today}
         tracker={tracker}

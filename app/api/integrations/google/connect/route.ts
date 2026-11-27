@@ -1,7 +1,7 @@
-import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
-import { googleConfigured, googleConsent, pkcePair, seal } from "../../../../../lib/google-health";
-import { authConfigured, getAuth, getAuthConfig } from "../../../../../lib/runtime";
+import { googleConfigured, googleConsent, pkcePair } from "../../../../../lib/google-health";
+import { createOAuthState, parseOAuthReturnTo } from "../../../../../lib/oauth-state";
+import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
 
@@ -13,18 +13,23 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ message: "Please sign in." }, { status: 401 });
 
   const config = getAuthConfig();
+  const reqUrl = new URL(request.url);
+  const returnTo = parseOAuthReturnTo(reqUrl.searchParams.get("returnTo"));
   const callback = new URL("/api/integrations/google/callback", config.baseURL).href;
-  const state = randomBytes(24).toString("base64url");
   const { verifier, challenge } = pkcePair();
-  const consentUrl = googleConsent(callback, state, challenge, new URL(request.url).searchParams.get("write") === "1");
+  const { state, sealed, maxAge } = await createOAuthState(getDatabase(), "google", session.user.id, {
+    returnTo,
+    verifier,
+  });
+  const consentUrl = googleConsent(callback, state, challenge, reqUrl.searchParams.get("write") === "1");
 
   const response = NextResponse.redirect(consentUrl);
-  response.cookies.set("fitness_google_oauth", seal({ state, verifier, userId: session.user.id }, session.user.id), {
+  response.cookies.set("fitness_google_oauth", sealed, {
     httpOnly: true,
     sameSite: "lax",
     secure: new URL(config.baseURL).protocol === "https:",
     path: "/api/integrations/google/callback",
-    maxAge: 600,
+    maxAge,
   });
   return response;
 }
