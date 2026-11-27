@@ -61,9 +61,12 @@ export function resolveRequestOrigin(
   const headerOrigin = parseOrigin(request.headers.get("origin"));
   if (headerOrigin && allowedOrigins.includes(headerOrigin)) return headerOrigin;
 
-  const rawHost = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
-  const host = rawHost?.split(",")[0]?.trim();
-  if (host) {
+  const candidateHosts = [
+    request.headers.get("x-forwarded-host")?.split(",")[0]?.trim().toLowerCase(),
+    request.headers.get("host")?.split(",")[0]?.trim().toLowerCase(),
+  ].filter((h): h is string => Boolean(h));
+
+  if (candidateHosts.length > 0) {
     const rawProto = request.headers.get("x-forwarded-proto");
     let proto = rawProto?.split(",")[0]?.trim().toLowerCase();
     if (proto !== "http" && proto !== "https") {
@@ -74,8 +77,19 @@ export function resolveRequestOrigin(
         proto = "https";
       }
     }
-    const hostOrigin = parseOrigin(`${proto}://${host}`);
-    if (hostOrigin && allowedOrigins.includes(hostOrigin)) return hostOrigin;
+    for (const host of candidateHosts) {
+      const hostOrigin = parseOrigin(`${proto}://${host}`);
+      if (hostOrigin && allowedOrigins.includes(hostOrigin)) return hostOrigin;
+
+      const canonicalMatch = allowedOrigins.find((allowed) => {
+        try {
+          return new URL(allowed).host.toLowerCase() === host;
+        } catch {
+          return false;
+        }
+      });
+      if (canonicalMatch) return canonicalMatch;
+    }
   }
 
   const urlOrigin = parseOrigin(request.url);

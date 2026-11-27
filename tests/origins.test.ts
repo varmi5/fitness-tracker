@@ -56,6 +56,17 @@ test("isAllowedOrigin, isSameAllowedOrigin, and resolveRequestOrigin enforce all
     "https://fitnesstrackr.co.uk",
   );
 
+  const forwardedHttpProxyReq = new Request("http://127.0.0.1:3000/api/integrations/google/connect", {
+    headers: {
+      "x-forwarded-host": "fitnesstrackr.co.uk",
+      "x-forwarded-proto": "http",
+    },
+  });
+  assert.equal(
+    getValidatedRequestOrigin(forwardedHttpProxyReq, { baseURL: allowed[0], allowedOrigins: allowed }),
+    "https://fitnesstrackr.co.uk",
+  );
+
   const spoofedReq = new Request("http://127.0.0.1:3000/api/integrations/google/connect", {
     headers: {
       "x-forwarded-host": "evil.example",
