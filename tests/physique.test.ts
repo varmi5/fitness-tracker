@@ -4,7 +4,8 @@ import { after, before, test } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { createPhysiqueInput, physiqueData } from "../lib/physique-data";
-import { physiqueSharing, sharedPhysiquePhoto, sharedPhysiquePhotos } from "../lib/physique-share";
+import { physiqueSharing, sharedPhysiquePhoto, sharedPhysiquePhotos, sharedProtectedPhysiquePhoto } from "../lib/physique-share";
+import { makeVault, openVault, protectCheckin, protectShare, readProtectedCheckin, readSharedPhoto } from "../app/physique-crypto";
 import { extractExifDateFromBuffer, isoWeekKey, orderPhysiqueFrames } from "../lib/photo-date";
 import * as schema from "../lib/schema";
 
@@ -23,11 +24,12 @@ before(async () => {
     "012-tracking-mode-and-fitbit-metrics.sql",
     "019-physique-checkins.sql",
     "025-physique-sharing.sql",
+    "027-physique-protection.sql",
   ]) {
     await pg.exec(await readFile(`migrations/${migration}`, "utf8"));
   }
   await db.insert(schema.user).values(
-    ["A", "B", "share-owner", "other-owner"].map((id) => ({
+    ["A", "B", "share-owner", "other-owner", "protected-owner"].map((id) => ({
       id,
       name: id,
       email: `${id}@example.test`,
@@ -80,6 +82,44 @@ test("physique links expose selected owner photos only and stop serving images w
   assert.equal(await sharing.revoke(token), false);
   assert.equal(await sharing.revoke(replacement.link.token), true);
   assert.equal(await sharedPhysiquePhoto(db, replacement.link.token, hidden.id), null);
+});
+
+test("Physique protection keeps plaintext out of stored photos and limits a share key to the selected images", async () => {
+  const userId = "protected-owner";
+  const data = physiqueData(db, userId);
+  const share = physiqueSharing(db, userId);
+  const passphrase = "synthetic vault passphrase";
+  const vault = await data.setupVault(await makeVault(passphrase));
+  await assert.rejects(() => openVault("different synthetic passphrase", vault));
+  const key = await openVault(passphrase, vault);
+  const inputs = { day: "2026-11-24", pose: "front" as const, cadence: "weekly" as const };
+  const privateDetails = { photoData: SAMPLE_DATA_URL, note: "sensitive test note", weightKg: 65, bodyFatPct: null };
+  const legacy = await data.create({ ...inputs, ...privateDetails });
+  const legacyShare = await share.save([legacy.id], null);
+  assert.equal(legacyShare.status, "saved");
+  const migrated = await data.migrate(legacy.id, await protectCheckin(key, privateDetails));
+  assert.ok(migrated);
+  assert.equal(await data.hasUnprotected(), false);
+  assert.equal(migrated.photoData, "");
+  assert.equal(migrated.note, "");
+  assert.equal(migrated.weightKg, null);
+  assert.equal(await sharedPhysiquePhoto(db, legacyShare.link.token, legacy.id), null);
+  const unlocked = await readProtectedCheckin(key, migrated);
+  assert.equal(unlocked.photoData, SAMPLE_DATA_URL);
+  assert.equal(unlocked.note, privateDetails.note);
+  const unshared = await data.createProtected({ ...inputs, protection: await protectCheckin(key, privateDetails) });
+  const encryptedShare = await protectShare(key, [unlocked]);
+  const saved = await share.save([unlocked.id], null, encryptedShare.protection);
+  assert.equal(saved.status, "saved");
+  const { token } = saved.link;
+  assert.equal(await sharedProtectedPhysiquePhoto(db, token, unshared.id), null);
+  const image = await sharedProtectedPhysiquePhoto(db, token, unlocked.id);
+  assert.ok(image);
+  const wrappedPhoto = encryptedShare.protection.photos[unlocked.id];
+  assert.equal(await readSharedPhoto(encryptedShare.secret, wrappedPhoto, unlocked.id, image), SAMPLE_DATA_URL);
+  await assert.rejects(() => readSharedPhoto(encryptedShare.secret, wrappedPhoto, unshared.id, image));
+  assert.equal(await share.revoke(token), true);
+  assert.equal(await sharedProtectedPhysiquePhoto(db, token, unlocked.id), null);
 });
 
 test("physique check-ins allow multiple per pose, keep weight optional & omit BF%, and support user-isolated edits", async () => {

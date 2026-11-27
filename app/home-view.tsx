@@ -156,7 +156,7 @@ export function HomeView({
   ];
 
   const weightMetric = metrics.find((m) => m.key === "weight")!;
-  const weightReadings = weightReadingsThrough(tracker.readings, [...history30.days, daily], viewDay);
+  const weightReadings = weightReadingsThrough(tracker.readings, [...history30.days, daily], viewDay, settings.sourceSettings?.weight);
   const weightSummary = summary(weightReadings, viewDay);
   const displayWeight = weightSummary.latest?.value ?? null;
   const weightChange7d = weightSummary.change;

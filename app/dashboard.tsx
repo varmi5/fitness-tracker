@@ -281,6 +281,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
   }, [quickLogOpen]);
   const [trendsMetric, setTrendsMetric] = useState<TrendMetricKind | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [dataSourcesOpen, setDataSourcesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(Boolean(initial.settings.needsOnboarding));
   const [bodySubPage, setBodySubPage] = useState<"physique" | null>(null);
@@ -1050,7 +1051,8 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message ?? "Could not save.");
 
-      if (action.action === "delete") {
+      const sourceRulesChanged = action.action === "preferences" && Boolean((action.data as { sourceSettings?: object })?.sourceSettings);
+      if (action.action === "delete" || sourceRulesChanged) {
         invalidateDayCache(undefined, true);
         await clearBrowserCache();
       }
@@ -1075,10 +1077,10 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
         setAudit([]);
       }
       let refreshed = true;
-      await refreshHistoryAndToday().catch(() => {
+      await refreshHistoryAndToday(sourceRulesChanged).catch(() => {
         refreshed = false;
       });
-      if (action.action === "preferences" && trainingDayRef.current !== previousTrainingDay) {
+      if (action.action === "preferences" && (sourceRulesChanged || trainingDayRef.current !== previousTrainingDay)) {
         void selectTrainingDay(trainingDayRef.current);
       }
       if (action.action === "energy" || action.action === "energy-import" || action.action === "import-health-file") {
@@ -1546,15 +1548,19 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
                 type="button"
                 className="secondary compact"
                 style={{ minHeight: "38px" }}
-                onClick={() => setSettingsOpen(false)}
+                onClick={() => dataSourcesOpen ? setDataSourcesOpen(false) : setSettingsOpen(false)}
               >
                 <ArrowLeft size={16} /> Back
               </button>
-              <h1 style={{ fontSize: "1.2rem", margin: 0, flex: 1, textAlign: "center" }}>Settings &amp; Profile</h1>
+              <h1 style={{ fontSize: "1.2rem", margin: 0, flex: 1, textAlign: "center" }}>{dataSourcesOpen ? "Data Sources" : "Settings & Profile"}</h1>
               <div style={{ minWidth: "64px" }} />
             </div>
             <SettingsView
               today={today}
+              day={homeDaily}
+              pulse={pulseInsights}
+              dataSourcesOpen={dataSourcesOpen}
+              setDataSourcesOpen={setDataSourcesOpen}
               userName={initial.userName}
               tracker={tracker}
               settings={settings}

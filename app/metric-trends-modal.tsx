@@ -136,14 +136,14 @@ export function MetricTrendsModal({
   const weightChartData = useMemo(() => {
     const from = addDays(today, -(days - 1));
     const nutrition = days === 90 && nutrition90 ? nutrition90 : history30;
-    return weightReadingsThrough(tracker.readings, [...nutrition.days, ...(daily ? [daily] : [])], today)
+    return weightReadingsThrough(tracker.readings, [...nutrition.days, ...(daily ? [daily] : [])], today, settings.sourceSettings?.weight)
       .filter((reading) => reading.date >= from)
       .map(({ date, value }) => ({
         day: date,
         label: shortDay(date),
         weightKg: Number(value.toFixed(1)),
       }));
-  }, [days, today, tracker.readings, history30, nutrition90, daily]);
+  }, [days, today, tracker.readings, history30, nutrition90, daily, settings.sourceSettings?.weight]);
 
   const strainStats = useMemo(() => {
     const valid = strainChartData.filter((d) => d.overall != null);

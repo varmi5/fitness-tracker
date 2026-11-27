@@ -1,3 +1,4 @@
+import { withWearableSyncSlot } from "./wearable-sync-queue";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { and, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import type { AuthDatabase } from "./auth";
@@ -16,6 +17,7 @@ import {
   dailyEnergy,
   dailyRecovery,
   dailySleep,
+  dailyStrain,
   dailyWorkout,
   healthIntegration,
   heartRateSample,
@@ -349,7 +351,26 @@ export async function createOpenWearablesInviteCode(db: AuthDatabase, userId: st
   };
 }
 
+type WearableSyncResult = Awaited<ReturnType<typeof runOpenWearablesSync>>;
+const openWearablesSyncs = new Map<string, { range: string; task: Promise<WearableSyncResult> }>();
+
 export async function syncOpenWearables(
+  db: AuthDatabase,
+  userId: string,
+  opts: { from?: string; to?: string } = {},
+) {
+  const range = `${opts.from ?? ""}:${opts.to ?? ""}`;
+  const active = openWearablesSyncs.get(userId);
+  if (active?.range === range) return active.task;
+  const start = () => withWearableSyncSlot(() => runOpenWearablesSync(db, userId, opts));
+  const task = (active ? active.task.then(start, start) : start()).finally(() => {
+    if (openWearablesSyncs.get(userId)?.task === task) openWearablesSyncs.delete(userId);
+  });
+  openWearablesSyncs.set(userId, { range, task });
+  return task;
+}
+
+async function runOpenWearablesSync(
   db: AuthDatabase,
   userId: string,
   opts: { from?: string; to?: string } = {},
@@ -462,6 +483,11 @@ export async function syncOpenWearables(
     let syncedStepIntervals = 0;
 
     await db.transaction(async (tx) => {
+      const [current] = await tx.select({ id: healthIntegration.externalUserId, connectionId: healthIntegration.connectionId })
+        .from(healthIntegration).where(ownOw(userId)).for("update");
+      if (!current || current.id !== owUserId || current.connectionId !== linked.connectionId) {
+        throw new NutritionError("The Open Wearables connection changed. Retry the sync.", 409);
+      }
       // 1. Activity Summaries -> dailyEnergy
       for (const item of activityItems) {
         const day = typeof item.date === "string" ? item.date.slice(0, 10) : null;
@@ -987,6 +1013,7 @@ export async function disconnectOpenWearables(db: AuthDatabase, userId: string) 
   ];
   await db.transaction(async (tx) => {
     await tx.delete(healthIntegration).where(ownOw(userId));
+    await tx.delete(dailyStrain).where(eq(dailyStrain.userId, userId));
     await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), inArray(dailyEnergy.source, wearableSources)));
     await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), inArray(dailySleep.source, wearableSources)));
     await tx.delete(sleepSession).where(and(eq(sleepSession.userId, userId), inArray(sleepSession.source, wearableSources)));

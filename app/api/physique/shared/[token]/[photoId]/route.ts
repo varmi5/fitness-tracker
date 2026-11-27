@@ -1,4 +1,4 @@
-import { sharedPhysiquePhoto } from "../../../../../../lib/physique-share";
+import { sharedPhysiquePhoto, sharedProtectedPhysiquePhoto } from "../../../../../../lib/physique-share";
 import { authConfigured, getDatabase } from "../../../../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
@@ -7,7 +7,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tok
   const headers = { "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex, nofollow" };
   if (!authConfigured()) return new Response(null, { status: 404, headers });
   const { token, photoId } = await params;
-  const photo = await sharedPhysiquePhoto(getDatabase(), token, photoId);
+  const db = getDatabase();
+  const encryptedPhoto = await sharedProtectedPhysiquePhoto(db, token, photoId);
+  if (encryptedPhoto) return Response.json(encryptedPhoto, { headers });
+  const photo = await sharedPhysiquePhoto(db, token, photoId);
   const match = /^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(photo ?? "");
   if (!match) return new Response(null, { status: 404, headers });
   const format = match[1].toLowerCase();

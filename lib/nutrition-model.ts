@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sourceSettingsInput, type SourceMetric } from "./data-source-settings";
 
 export const CATEGORIES = ["breakfast", "lunch", "dinner", "snacks", "drinks"] as const;
 export const UNITS = ["g", "kg", "oz", "ml", "l", "tsp", "tbsp", "cup", "fl_oz", "item", "slice", "piece", "scoop", "serving", "bottle", "can", "pack"] as const;
@@ -343,6 +344,7 @@ export const recoveryInput = z.object({
 });
 
 export interface RecoveryRecord {
+  metricSources?: Partial<Record<SourceMetric, string>>;
   day: string;
   source: EnergySource;
   restingHrBpm: number | null;
@@ -403,6 +405,7 @@ export const preferencesInput = z.object({
   onboardingCompleted: z.boolean().optional(),
   primaryRecoverySource: z.string().trim().min(1).max(40).optional(),
   primaryWorkoutSource: z.string().trim().min(1).max(40).optional(),
+  sourceSettings: sourceSettingsInput.optional(),
   autoSyncEnabled: z.boolean().optional(),
 });
 

@@ -2,6 +2,9 @@
 
 import { clearBrowserCache } from "../lib/browser-cache";
 
+import { DataSourcesView } from "./data-sources-view";
+import type { DailyNutritionView } from "../lib/nutrition-data";
+import type { PulseInsightsView } from "./types";
 import { ReminderSettings } from "./reminder-settings";
 import { MacroTargetEditor } from "./macro-target-editor";
 import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
@@ -27,6 +30,10 @@ import {
 
 interface SettingsViewProps {
   today: string;
+  day?: DailyNutritionView;
+  pulse?: PulseInsightsView | null;
+  dataSourcesOpen: boolean;
+  setDataSourcesOpen: (open: boolean) => void;
   userName?: string | null;
   tracker: TrackerSnapshot;
   settings: NutritionSettings;
@@ -56,6 +63,10 @@ interface SettingsViewProps {
 
 export function SettingsView({
   today,
+  day,
+  pulse,
+  dataSourcesOpen,
+  setDataSourcesOpen,
   userName,
   tracker,
   settings,
@@ -322,6 +333,13 @@ export function SettingsView({
 
   const missingWriteScopes = google.connected && (!google.canWriteNutrition || !google.canWriteWeights || !google.canReadSleep);
 
+  if (dataSourcesOpen) {
+    return <DataSourcesView settings={settings} day={day} pulse={pulse} busy={busy}
+      connected={[...(google.connected ? ["google"] : []), ...(openWearables?.providers ?? []), ...(hevy?.connected || hevy?.workoutCount ? ["hevy"] : [])]}
+      onBack={() => setDataSourcesOpen(false)} onSave={(sourceSettings) =>
+        onNutritionAction({ action: "preferences", data: { sourceSettings } }, "Data source settings saved.")} />;
+  }
+
   return (
     <>
       <section className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".75rem", flexWrap: "wrap" }}>
@@ -443,6 +461,10 @@ export function SettingsView({
           <Button variant="secondary" disabled={busy} type="submit">Save manual expenditure</Button>
         </form>
       </SettingsDropdown>
+
+      <button type="button" className="card card-interactive split-row" onClick={(event) => { event.currentTarget.closest(".silk-overlay")?.scrollTo({ top: 0 }); setDataSourcesOpen(true); }}>
+        <strong>Data Sources</strong><ChevronRight size={17} aria-hidden="true" />
+      </button>
 
       {/* Expenditure Source, Multi-Wearable Priority & Timezone */}
       <SettingsDropdown
