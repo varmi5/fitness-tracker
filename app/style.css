@@ -2404,11 +2404,23 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 }
 .physique-share-trigger { justify-self: start; }
 .physique-share-sheet .quick-sheet-header p { color: var(--muted); margin: 0; font-size: .86rem; }
+.physique-share-poses { display: grid; gap: .65rem; }
+.physique-share-pose { border-bottom: 1px solid var(--border-strong); padding-bottom: .55rem; }
+.physique-share-pose .split-row { gap: .45rem; }
+.physique-share-pose .split-row button { min-height: 44px; }
+.physique-share-include { text-transform: capitalize; }
+.physique-share-include .physique-share-check { position: static; }
+.physique-share-include[aria-pressed="true"] .physique-share-check { background: var(--accent); border-color: var(--accent); }
+.physique-share-expand[aria-expanded="true"] svg { transform: rotate(180deg); }
 .physique-share-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; }
+.physique-share-picker:not([hidden]) { margin-top: .65rem; }
+.physique-share-picker[hidden] { display: none; }
 .physique-share-photo {
   position: relative;
   display: grid;
   align-content: start;
+  justify-content: stretch;
+  grid-template-columns: minmax(0, 1fr);
   padding: .25rem;
   border: 2px solid transparent;
   color: var(--text);
@@ -2450,30 +2462,18 @@ details.settings-accordion[open] > summary.settings-accordion-summary .settings-
 .physique-share-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .55rem; }
 .physique-share-link input { width: 100%; min-width: 0; font-size: 1rem; }
 .physique-share-notice { margin: 0; }
-.shared-physique { width: min(100% - 2rem, 840px); margin: 0 auto; padding: max(2rem, env(safe-area-inset-top)) 0 2rem; }
-.shared-physique header { margin-bottom: 1.35rem; }
+.shared-physique { width: min(100% - 2rem, 620px); margin: 0 auto; padding: max(1.25rem, env(safe-area-inset-top)) 0 2rem; }
+.shared-physique header { margin-bottom: 1rem; }
 .shared-physique header p { color: var(--muted); font-size: .86rem; margin: 0 0 .25rem; }
 .shared-physique h1 { margin: 0; font-size: clamp(1.6rem, 5vw, 2.3rem); }
-.shared-physique-gallery {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
-  gap: .85rem;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.shared-physique-gallery figure { margin: 0; }
-.shared-physique-gallery img {
-  display: block;
-  width: 100%;
-  aspect-ratio: 3 / 4;
-  max-height: 62dvh;
-  object-fit: contain;
-  background: var(--surface-soft);
-  border-radius: 14px;
-}
-.shared-physique-gallery figcaption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .25rem .55rem; margin-top: .4rem; font-size: .8rem; }
-.shared-physique-gallery figcaption span { text-transform: capitalize; color: var(--muted); }
+.shared-physique-player .physique-pill-toggle button { min-height: 44px; }
+.shared-physique-poses button { text-transform: capitalize; }
+.shared-physique-stage { max-height: min(62dvh, 570px); }
+.shared-physique-stage img { position: absolute; inset: 0; }
+.shared-physique-stage img[aria-hidden="true"] { visibility: hidden; }
+.shared-physique-controls { display: flex; align-items: center; gap: .65rem; }
+.shared-physique-controls button { min-height: 44px; }
+.shared-physique-controls input { flex: 1; min-width: 0; box-shadow: none; }
 .physique-card {
   padding: .65rem;
   display: grid;
