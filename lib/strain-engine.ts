@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { distributeMuscleLoad, MUSCLE_GROUPS, resolveExerciseMuscles, type MuscleGroup, type MuscleMapping } from "./muscle-map";
 
-export const STRAIN_ALGORITHM_VERSION = "strain-v3.0-evidence";
+export const STRAIN_ALGORITHM_VERSION = "strain-v3.1-sources";
 export const CARDIO_REFERENCE_C_RAW = 220;
 export const MUSCULAR_REFERENCE_M_RAW = 18;
 export const STRENGTH_CARDIO_FACTOR = 0.30;

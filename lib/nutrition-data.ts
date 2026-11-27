@@ -1,3 +1,4 @@
+import { metricPreference, type SourcePreference, type SourceSettings } from "./data-source-settings";
 import { saveSleepSession } from "./sleep-session-data";
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
@@ -51,6 +52,7 @@ import {
   sleepSession,
   sleepGoal,
   dailyWorkout,
+  dailyStrain,
   healthIntegration,
   idempotencyRecord,
   meal,
@@ -65,9 +67,12 @@ import {
 import { macroTargetInput, resolveMacroTargets, rebalanceMacros, type MacroPlan } from "./macro-targets";
 import { queueGoogleMeal } from "./google-sync-queue";
 import {
+  applyRecoverySourceSettings,
+  pickSourceRow,
   DEFAULT_ENERGY_PRIORITY,
   DEFAULT_RECOVERY_PRIORITY,
   dedupeWorkoutsAcrossSources,
+  isSourceVisible,
   rankSources,
 } from "./source-priority";
 import { foodMatchScore } from "./search-match";
@@ -150,6 +155,8 @@ export interface DailyNutritionView {
   preferredEnergySource: EnergySource;
   energy: EnergyRecord | null;
   energySources: Partial<Record<EnergySource, EnergyRecord>>;
+  stepSource?: string | null;
+  weightSources?: { source: EnergySource; value: number }[];
   sleep: SleepRecord | null;
   recovery: RecoveryRecord | null;
   workouts: WorkoutRecord[];
@@ -290,6 +297,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const hasOpenWearablesConnected = integrations.some((i) => i.provider === "open_wearables" && i.status === "connected");
     const primaryRecoverySource = pref?.primaryRecoverySource ?? "auto";
     const primaryWorkoutSource = pref?.primaryWorkoutSource ?? "auto";
+    const sourceSettings = pref?.sourceSettings ?? {};
     const autoSyncEnabled = pref?.autoSyncEnabled ?? true;
     const needsOnboarding = !onboardingCompletedAt && !hasGoogleConnected && !hasOpenWearablesConnected && targets.length === 0;
     return {
@@ -303,6 +311,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       needsOnboarding,
       primaryRecoverySource,
       primaryWorkoutSource,
+      sourceSettings,
       autoSyncEnabled,
       sleepGoals: sleepGoals.map(g => ({ effectiveFrom: g.effectiveFrom, goalMinutes: g.goalMinutes })),
       sleepGoalMinutes: sleepGoals.find(g => g.effectiveFrom <= localDay(new Date(), pref?.timezone ?? DEFAULT_TIMEZONE))?.goalMinutes ?? 480,
@@ -317,18 +326,35 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     preferred: EnergySource,
     hasGoogleConnected: boolean,
     trackingMode: TrackingMode,
-    primarySource?: string | null,
+    primarySource?: SourcePreference,
+    sourceSettings: SourceSettings = {},
   ): EnergyRecord | null {
     if (trackingMode === "manual") {
-      return preferred === "apple" ? (bySource.apple ?? bySource.manual ?? null) : (bySource.manual ?? null);
+      const choices = [preferred === "apple" ? bySource.apple : undefined, bySource.manual];
+      const picked = choices.find((row) => row && isSourceVisible(sourceSettings.energy, row.source));
+      return picked ? { ...picked, steps: isSourceVisible(sourceSettings.steps, picked.source) ? picked.steps : null } : null;
     }
-    const order = rankSources(primarySource, DEFAULT_ENERGY_PRIORITY);
-    for (const src of order) {
-      if (src === "manual" && hasGoogleConnected) continue;
-      const found = bySource[src as EnergySource];
-      if (found) return found;
-    }
-    return !hasGoogleConnected ? (bySource.manual ?? null) : null;
+    const rows = Object.values(bySource).filter((row) => row.source !== "manual" || !hasGoogleConnected || sourceSettings.energy != null);
+    const energyPreference = metricPreference(sourceSettings, "energy", typeof primarySource === "string" ? primarySource : undefined);
+    const energy = pickSourceRow(rows, energyPreference, DEFAULT_ENERGY_PRIORITY, (row) => row.totalKcal != null)
+      ?? pickSourceRow(rows, energyPreference, DEFAULT_ENERGY_PRIORITY, (row) => row.activeKcal != null);
+    const steps = pickSteps(bySource, sourceSettings, energy);
+    const base = energy ?? steps ?? pickSourceRow(rows, sourceSettings.weight, DEFAULT_ENERGY_PRIORITY, (row) => row.weightKg != null);
+    return base ? {
+      ...base,
+      totalKcal: energy?.totalKcal ?? null,
+      activeKcal: energy?.activeKcal ?? null,
+      steps: steps?.steps ?? null,
+    } : null;
+  }
+
+  function pickSteps(sources: Partial<Record<EnergySource, EnergyRecord>>, settings: SourceSettings, base: EnergyRecord | null) {
+    if (!settings.steps && base?.steps != null) return base;
+    return pickSourceRow(Object.values(sources), settings.steps, DEFAULT_ENERGY_PRIORITY, (row) => row.steps != null);
+  }
+
+  function weightSources(sources: Partial<Record<EnergySource, EnergyRecord>>) {
+    return Object.values(sources).flatMap((row) => row.weightKg == null ? [] : [{ source: row.source, value: row.weightKg }]);
   }
 
   async function assembleMeals(
@@ -386,7 +412,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
   function pickSleep(
     bySource: Partial<Record<EnergySource, SleepRecord>>,
     trackingMode: TrackingMode,
-    primaryRecoverySource?: string | null,
+    primaryRecoverySource?: SourcePreference,
   ): SleepRecord | null {
     if (trackingMode !== "fitbit") return null;
     for (const src of rankSources(primaryRecoverySource, DEFAULT_RECOVERY_PRIORITY)) {
@@ -399,20 +425,19 @@ export function nutritionData(db: AuthDatabase, userId: string) {
   function pickRecovery(
     bySource: Partial<Record<EnergySource, RecoveryRecord>>,
     trackingMode: TrackingMode,
-    primaryRecoverySource?: string | null,
+    primaryRecoverySource?: string,
+    settings: SourceSettings = {},
   ): RecoveryRecord | null {
     if (trackingMode !== "fitbit") return null;
-    for (const src of rankSources(primaryRecoverySource, DEFAULT_RECOVERY_PRIORITY)) {
-      const found = bySource[src as EnergySource];
-      if (found) return found;
-    }
-    return null;
+    const rows = Object.values(bySource);
+    const base = pickSourceRow(rows, primaryRecoverySource, DEFAULT_RECOVERY_PRIORITY, () => true);
+    return applyRecoverySourceSettings(rows, base, settings, primaryRecoverySource);
   }
 
   function pickWorkouts(
     rows: WorkoutRecord[],
     trackingMode: TrackingMode,
-    primaryWorkoutSource?: string | null,
+    primaryWorkoutSource?: SourcePreference,
   ): WorkoutRecord[] {
     if (trackingMode !== "fitbit") return [];
     const deduped = dedupeWorkoutsAcrossSources(
@@ -515,19 +540,19 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       if (prefs.trackingMode !== "fitbit" && row.source === "google") continue;
       energySources[row.source as EnergySource] = mapEnergyRow(row);
     }
-    const energy = pickEnergy(energySources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode, prefs.primaryRecoverySource);
+    const energy = pickEnergy(energySources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode, prefs.primaryRecoverySource, prefs.sourceSettings);
     const sleepSources: Partial<Record<EnergySource, SleepRecord>> = {};
     for (const row of sleepRows) {
       sleepSources[row.source as EnergySource] = mapSleepRow(row);
     }
-    const sleep = pickSleep(sleepSources, prefs.trackingMode, prefs.primaryRecoverySource);
+    const sleep = pickSleep(sleepSources, prefs.trackingMode, metricPreference(prefs.sourceSettings, "sleep", prefs.primaryRecoverySource));
 
     const recoverySources: Partial<Record<EnergySource, RecoveryRecord>> = {};
     for (const row of recoveryRows) {
       recoverySources[row.source as EnergySource] = mapRecoveryRow(row);
     }
-    const recovery = pickRecovery(recoverySources, prefs.trackingMode, prefs.primaryRecoverySource);
-    const workouts = pickWorkouts(workoutRows.map(mapWorkoutRow), prefs.trackingMode, prefs.primaryWorkoutSource);
+    const recovery = pickRecovery(recoverySources, prefs.trackingMode, prefs.primaryRecoverySource, prefs.sourceSettings);
+    const workouts = pickWorkouts(workoutRows.map(mapWorkoutRow), prefs.trackingMode, metricPreference(prefs.sourceSettings, "workouts", prefs.primaryWorkoutSource));
 
     const totalBurn = energy?.totalKcal ?? null;
     const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
@@ -548,6 +573,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       preferredEnergySource: prefs.preferredEnergySource,
       energy,
       energySources,
+      stepSource: energy?.steps == null ? null : pickSteps(energySources, prefs.sourceSettings, energySources[energy.source] ?? null)?.source ?? null,
+      weightSources: weightSources(energySources),
       sleep,
       recovery,
       workouts,
@@ -652,10 +679,10 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       const remaining = totals.calories == null ? target : round1(target - totals.calories);
       const diaryComplete = isDayComplete(day, activeDay);
       const sources = energyByDay.get(day) ?? {};
-      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode, prefs.primaryRecoverySource);
-      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.trackingMode, prefs.primaryRecoverySource);
-      const recovery = pickRecovery(recoveryByDay.get(day) ?? {}, prefs.trackingMode, prefs.primaryRecoverySource);
-      const workouts = pickWorkouts(workoutsByDay.get(day) ?? [], prefs.trackingMode, prefs.primaryWorkoutSource);
+      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode, prefs.primaryRecoverySource, prefs.sourceSettings);
+      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.trackingMode, metricPreference(prefs.sourceSettings, "sleep", prefs.primaryRecoverySource));
+      const recovery = pickRecovery(recoveryByDay.get(day) ?? {}, prefs.trackingMode, prefs.primaryRecoverySource, prefs.sourceSettings);
+      const workouts = pickWorkouts(workoutsByDay.get(day) ?? [], prefs.trackingMode, metricPreference(prefs.sourceSettings, "workouts", prefs.primaryWorkoutSource));
       const totalBurn = energy?.totalKcal ?? null;
       const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
       const provisional = !diaryComplete || totalBurn == null || totals.calories == null;
@@ -671,6 +698,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         remaining,
         diaryComplete,
         energy,
+        stepSource: energy?.steps == null ? null : pickSteps(sources, prefs.sourceSettings, sources[energy.source] ?? null)?.source ?? null,
+        weightSources: weightSources(sources),
         sleep,
         recovery,
         workouts,
@@ -1015,6 +1044,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       needsOnboarding: prefs.needsOnboarding,
       primaryRecoverySource: prefs.primaryRecoverySource,
       primaryWorkoutSource: prefs.primaryWorkoutSource,
+      sourceSettings: prefs.sourceSettings,
       autoSyncEnabled: prefs.autoSyncEnabled,
       targetToday: resolveTargetForDay(prefs.targets, today),
       macroTargets: resolveMacroTargets(prefs.targets, today),
@@ -1048,6 +1078,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
     const googleTwoWaySync = input.googleTwoWaySync ?? existing.googleTwoWaySync;
     const primaryRecoverySource = input.primaryRecoverySource ?? existing.primaryRecoverySource;
     const primaryWorkoutSource = input.primaryWorkoutSource ?? existing.primaryWorkoutSource;
+    const sourceSettings = input.sourceSettings ?? existing.sourceSettings;
     const autoSyncEnabled = input.autoSyncEnabled ?? existing.autoSyncEnabled;
     const onboardingCompletedAt =
       input.onboardingCompleted === true
@@ -1069,6 +1100,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       onboardingCompletedAt,
       primaryRecoverySource,
       primaryWorkoutSource,
+      sourceSettings,
       autoSyncEnabled,
     }).onConflictDoUpdate({
       target: nutritionPreference.userId,
@@ -1082,9 +1114,13 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         onboardingCompletedAt,
         primaryRecoverySource,
         primaryWorkoutSource,
+        ...(input.sourceSettings !== undefined ? { sourceSettings } : {}),
         autoSyncEnabled,
       },
     });
+    if (JSON.stringify(sourceSettings) !== JSON.stringify(existing.sourceSettings) || primaryRecoverySource !== existing.primaryRecoverySource || primaryWorkoutSource !== existing.primaryWorkoutSource) {
+      await tx.delete(dailyStrain).where(eq(dailyStrain.userId, userId));
+    }
     if (input.sleepGoalMinutes !== undefined) {
       const effectiveFrom = input.sleepGoalEffectiveFrom ?? localDay(new Date(), timezone);
       await tx.insert(sleepGoal).values({ userId, effectiveFrom, goalMinutes: input.sleepGoalMinutes })
@@ -1648,10 +1684,10 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       const remaining = totals.calories == null ? target : round1(target - totals.calories);
       const diaryComplete = isDayComplete(day, activeDay);
       const sources = energyByDay.get(day) ?? {};
-      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode, prefs.primaryRecoverySource);
-      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.trackingMode, prefs.primaryRecoverySource);
-      const recovery = pickRecovery(recoveryByDay.get(day) ?? {}, prefs.trackingMode, prefs.primaryRecoverySource);
-      const workouts = pickWorkouts(workoutsByDay.get(day) ?? [], prefs.trackingMode, prefs.primaryWorkoutSource);
+      const energy = pickEnergy(sources, prefs.preferredEnergySource, prefs.hasGoogleConnected, prefs.trackingMode, prefs.primaryRecoverySource, prefs.sourceSettings);
+      const sleep = pickSleep(sleepByDay.get(day) ?? {}, prefs.trackingMode, metricPreference(prefs.sourceSettings, "sleep", prefs.primaryRecoverySource));
+      const recovery = pickRecovery(recoveryByDay.get(day) ?? {}, prefs.trackingMode, prefs.primaryRecoverySource, prefs.sourceSettings);
+      const workouts = pickWorkouts(workoutsByDay.get(day) ?? [], prefs.trackingMode, metricPreference(prefs.sourceSettings, "workouts", prefs.primaryWorkoutSource));
       const totalBurn = energy?.totalKcal ?? null;
       const deficit = totalBurn != null && totals.calories != null ? round1(totalBurn - totals.calories) : null;
       const provisional = !diaryComplete || totalBurn == null || totals.calories == null;
@@ -1667,6 +1703,8 @@ export function nutritionData(db: AuthDatabase, userId: string) {
         remaining,
         diaryComplete,
         energy,
+        stepSource: energy?.steps == null ? null : pickSteps(sources, prefs.sourceSettings, sources[energy.source] ?? null)?.source ?? null,
+        weightSources: weightSources(sources),
         sleep,
         recovery,
         workouts,
@@ -1736,6 +1774,7 @@ export function nutritionData(db: AuthDatabase, userId: string) {
       needsOnboarding: prefs.needsOnboarding,
       primaryRecoverySource: prefs.primaryRecoverySource,
       primaryWorkoutSource: prefs.primaryWorkoutSource,
+      sourceSettings: prefs.sourceSettings,
       autoSyncEnabled: prefs.autoSyncEnabled,
       targetToday: resolveTargetForDay(prefs.targets, calendarToday),
       macroTargets: resolveMacroTargets(prefs.targets, calendarToday),

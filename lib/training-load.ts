@@ -1,4 +1,6 @@
-import { and, asc, eq, gte, lte } from "drizzle-orm";
+import { dedupeHevyWorkouts } from "./hevy";
+import { isSourceVisible } from "./source-priority";
+import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 import type { AuthDatabase } from "./auth";
 import { MUSCLE_GROUPS, resolveExerciseMuscles, type MuscleGroup } from "./muscle-map";
 import { hevySet, hevyWorkout, nutritionPreference } from "./schema";
@@ -278,17 +280,18 @@ export async function getTrainingLoadSummary(
       muscleTotals[g] += d.muscleLoads?.[g] ?? 0;
     }
   }
-  const workouts = await db
+  const [sourceOptions] = await db.select({ rules: nutritionPreference.sourceSettings }).from(nutritionPreference).where(eq(nutritionPreference.userId, userId));
+  const workouts = isSourceVisible(sourceOptions?.rules.workouts, "hevy") ? dedupeHevyWorkouts(await db
     .select()
     .from(hevyWorkout)
     .where(and(eq(hevyWorkout.userId, userId), gte(hevyWorkout.day, historyFrom), lte(hevyWorkout.day, to)))
-    .orderBy(asc(hevyWorkout.day), asc(hevyWorkout.startTime));
+    .orderBy(asc(hevyWorkout.day), asc(hevyWorkout.startTime))) : [];
 
   const sets = workouts.length
     ? await db
         .select()
         .from(hevySet)
-        .where(eq(hevySet.userId, userId))
+        .where(and(eq(hevySet.userId, userId), inArray(hevySet.hevyId, workouts.map((w) => w.hevyId))))
         .orderBy(asc(hevySet.exerciseIndex), asc(hevySet.setIndex))
     : [];
 

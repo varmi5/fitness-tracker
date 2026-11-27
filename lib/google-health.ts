@@ -1,3 +1,4 @@
+import { withWearableSyncSlot } from "./wearable-sync-queue";
 import { saveSleepSession, sleepSessionKey } from "./sleep-session-data";
 import { createCipheriv, createDecipheriv, createHash, createPublicKey, randomBytes, timingSafeEqual, verify as verifyCrypto, type KeyObject } from "node:crypto";
 import { and, asc, eq, gt, gte, inArray, isNull, lte } from "drizzle-orm";
@@ -21,6 +22,7 @@ import {
   dailyEnergy,
   dailyRecovery,
   dailySleep,
+  dailyStrain,
   sleepSession,
   dailyWorkout,
   googleMealSync,
@@ -186,15 +188,16 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
 
   await db.transaction(async (tx) => {
     const [existing] = await tx
-      .select({ accountLabel: healthIntegration.accountLabel, lastSync: healthIntegration.lastSync })
+      .select({ accountLabel: healthIntegration.accountLabel, providerId: healthIntegration.externalUserId, lastSync: healthIntegration.lastSync })
       .from(healthIntegration)
       .where(and(eq(healthIntegration.userId, userId), eq(healthIntegration.provider, "google")));
 
-    const isSameAccount = Boolean(
-      existing?.accountLabel &&
-        accountLabel &&
-        existing.accountLabel.trim().toLowerCase() === accountLabel.trim().toLowerCase(),
-    );
+    const isSameAccount = existing?.providerId && healthUserId
+      ? existing.providerId === healthUserId
+      : Boolean(existing?.accountLabel && accountLabel && existing.accountLabel.trim().toLowerCase() === accountLabel.trim().toLowerCase());
+    if (existing && !isSameAccount) {
+      throw new NutritionError("A different Google Health account is already linked. Disconnect it in Settings before switching accounts.", 409);
+    }
 
     await tx
       .insert(healthIntegration)
@@ -237,16 +240,6 @@ export async function connectGoogle(db: AuthDatabase, userId: string, code: stri
         },
       });
 
-    // Only purge prior synced tables when switching to a different Google account so same-account reconnects keep data intact.
-    if (!isSameAccount) {
-      await tx.delete(googleMealSync).where(eq(googleMealSync.userId, userId));
-      await tx.update(meal).set({ googleDatapointName: null }).where(eq(meal.userId, userId));
-      await tx.delete(dailyEnergy).where(and(eq(dailyEnergy.userId, userId), eq(dailyEnergy.source, "google")));
-      await tx.delete(dailySleep).where(and(eq(dailySleep.userId, userId), eq(dailySleep.source, "google")));
-      await tx.delete(sleepSession).where(and(eq(sleepSession.userId, userId), eq(sleepSession.source, "google")));
-      await tx.delete(dailyRecovery).where(and(eq(dailyRecovery.userId, userId), eq(dailyRecovery.source, "google")));
-      await tx.delete(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google")));
-    }
   });
 }
 
@@ -1470,7 +1463,7 @@ export async function syncGoogle(db: AuthDatabase, userId: string, from: string,
   const active = inFlightGoogleSync.get(userId);
   if (active) return active;
 
-  const task = runSyncGoogle(db, userId, from, to).finally(() => {
+  const task = withWearableSyncSlot(() => runSyncGoogle(db, userId, from, to)).finally(() => {
     if (inFlightGoogleSync.get(userId) === task) {
       inFlightGoogleSync.delete(userId);
     }
@@ -2653,7 +2646,10 @@ export async function disconnectGoogle(db: AuthDatabase, userId: string) {
     await tx.delete(dailyWorkout).where(and(eq(dailyWorkout.userId, userId), eq(dailyWorkout.source, "google")));
     await tx.delete(heartRateSample).where(and(eq(heartRateSample.userId, userId), eq(heartRateSample.source, "google")));
     await tx.delete(stepInterval).where(and(eq(stepInterval.userId, userId), eq(stepInterval.source, "google")));
-    await tx
+    await tx.delete(dailyStrain).where(eq(dailyStrain.userId, userId));
+    const [openWearables] = await tx.select({ id: healthIntegration.userId }).from(healthIntegration)
+      .where(and(eq(healthIntegration.userId, userId), eq(healthIntegration.provider, "open_wearables"), eq(healthIntegration.status, "connected")));
+    if (!openWearables) await tx
       .insert(nutritionPreference)
       .values({
         userId,

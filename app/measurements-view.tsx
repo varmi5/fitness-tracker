@@ -98,7 +98,7 @@ export function MeasurementsView({
     : null;
 
   const weightMetric = metrics.find((m) => m.key === "weight")!;
-  const weightReadings = weightReadingsThrough(readings, [...(history30?.days ?? []), ...(daily ? [daily] : [])], today);
+  const weightReadings = weightReadingsThrough(readings, [...(history30?.days ?? []), ...(daily ? [daily] : [])], today, nutritionSettings?.sourceSettings?.weight);
   const weightSummary = summary(weightReadings, today);
   const latestWeightKg = weightSummary.latest?.value ?? null;
   const recentWeights = weightReadings

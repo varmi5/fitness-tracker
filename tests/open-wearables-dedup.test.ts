@@ -85,6 +85,17 @@ test("cross-wearable workout deduplication keeps primary on overlap and keeps bo
   );
 });
 
+test("workout rules hide sources and retain an overlapping workout of a different activity type", () => {
+  const times = { startTime: new Date("2026-11-24T08:00:00Z"), endTime: new Date("2026-11-24T08:30:00Z"), durationSeconds: 1800 };
+  const workouts = [
+    { ...times, sessionId: "a", source: "apple", exerciseType: "running" },
+    { ...times, sessionId: "b", source: "google", exerciseType: "run" },
+    { ...times, sessionId: "c", source: "google", exerciseType: "strength_training" },
+  ];
+  assert.deepEqual(dedupeWorkoutsAcrossSources(workouts, { priority: ["google"], hidden: [] }).map((row) => row.sessionId), ["b", "c"]);
+  assert.deepEqual(dedupeWorkoutsAcrossSources(workouts, { priority: [], hidden: ["google"] }).map((row) => row.sessionId), ["a"]);
+});
+
 test("HR window, daily HR stream, step intervals, and recovery baseline never interleave multiple watches", () => {
   const hrSamples = [
     { source: "google", recordedAt: new Date("2026-11-24T07:35:00Z"), bpm: 148 },

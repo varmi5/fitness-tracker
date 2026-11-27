@@ -1,5 +1,7 @@
 "use client";
 
+import { weightReadingsThrough } from "../lib/metrics";
+
 import { useMemo, useState } from "react";
 import {
   Bar,
@@ -18,6 +20,7 @@ interface NutritionTrendsProps {
   history: NutritionHistory;
   tracker: TrackerSnapshot;
   trackingMode?: TrackingMode;
+  weightPreference?: import("../lib/data-source-settings").SourceRule;
 }
 
 type TrendView = "energy" | "protein" | "quality" | "body" | "recovery" | "activity";
@@ -29,7 +32,7 @@ const tooltipStyle = {
   color: "var(--text)",
 };
 
-export function NutritionTrends({ history, tracker, trackingMode }: NutritionTrendsProps) {
+export function NutritionTrends({ history, tracker, trackingMode, weightPreference }: NutritionTrendsProps) {
   const [span, setSpan] = useState<7 | 30>(30);
   const [view, setView] = useState<TrendView>("energy");
 
@@ -53,10 +56,9 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
   const data = useMemo(() => {
     const days = span === 7 ? history.days.slice(-7) : history.days;
     const rollByDay = new Map(history.rolling.map((r) => [r.day, r]));
-    const weightMap = new Map<string, number>();
+    const weightMap = new Map(weightReadingsThrough(tracker.readings, days, days.at(-1)?.day ?? "", weightPreference).map((r) => [r.date, r.value]));
     const waistMap = new Map<string, number>();
     for (const r of tracker.readings) {
-      if (r.metric === "weight" && r.side === "none") weightMap.set(r.date, r.value);
       if (r.metric === "waist" && r.side === "none") waistMap.set(r.date, r.value);
     }
 
@@ -73,7 +75,7 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
         rollingProtein: roll?.rollingProtein7d ?? null,
         score: d.nutritionScore?.score ?? null,
         wholeFoodPct: d.nutritionScore?.wholeFoodPct ?? null,
-        weight: weightMap.get(d.day) ?? d.energy?.weightKg ?? null,
+        weight: weightMap.get(d.day) ?? null,
         waist: waistMap.get(d.day) ?? null,
         rhr: d.recovery?.restingHrBpm ?? null,
         hrv: d.recovery?.hrvRmssdMs ?? null,
@@ -82,7 +84,7 @@ export function NutritionTrends({ history, tracker, trackingMode }: NutritionTre
         azm: d.energy?.activeZoneMinutes ?? null,
       };
     });
-  }, [history, span, tracker.readings]);
+  }, [history, span, tracker.readings, weightPreference]);
 
   return (
     <section className="card chart-card">

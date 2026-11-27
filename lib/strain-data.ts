@@ -1,11 +1,16 @@
 import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import type { z } from "zod";
 import type { AuthDatabase } from "./auth";
-import { findMatchingGoogleWorkout } from "./hevy";
+import { dedupeHevyWorkouts, findMatchingGoogleWorkout } from "./hevy";
+import { metricPreference } from "./data-source-settings";
 import { MUSCLE_GROUPS, type MuscleGroup } from "./muscle-map";
 import { addDays, dayRange } from "./nutrition-model";
 import {
+  DEFAULT_ENERGY_PRIORITY,
+  DEFAULT_WORKOUT_PRIORITY,
   dedupeWorkoutsAcrossSources,
+  isSourceVisible,
+  pickSourceRow,
   formatSourceLabel,
   pickDailyEnergyRow,
   selectHrSamplesForWindow,
@@ -211,7 +216,7 @@ export function strainData(db: AuthDatabase, userId: string) {
   async function computeDay(day: string, settingsOverride?: StrainSettings): Promise<DailyStrainView> {
     const settings = settingsOverride ?? (await getSettings());
 
-    const [hevyRows, rawWorkoutRows, hrRows, energyRows, stepRows, navPrefRows] = await Promise.all([
+    const [rawHevyRows, rawWorkoutRows, hrRows, energyRows, stepRows, navPrefRows] = await Promise.all([
       db
         .select()
         .from(hevyWorkout)
@@ -240,14 +245,17 @@ export function strainData(db: AuthDatabase, userId: string) {
         .select({
           primaryWorkoutSource: nutritionPreference.primaryWorkoutSource,
           primaryRecoverySource: nutritionPreference.primaryRecoverySource,
+          sourceSettings: nutritionPreference.sourceSettings,
         })
         .from(nutritionPreference)
         .where(eq(nutritionPreference.userId, userId))
         .limit(1),
     ]);
-    const primaryWorkoutSource = navPrefRows[0]?.primaryWorkoutSource ?? "auto";
-    const primaryRecoverySource = navPrefRows[0]?.primaryRecoverySource ?? "auto";
-    const googleWorkoutRows = dedupeWorkoutsAcrossSources(rawWorkoutRows, primaryWorkoutSource);
+    const sourceSettings = navPrefRows[0]?.sourceSettings ?? {};
+    const workoutPreference = metricPreference(sourceSettings, "workouts", navPrefRows[0]?.primaryWorkoutSource);
+    const hevyRows = isSourceVisible(workoutPreference, "hevy") ? dedupeHevyWorkouts(rawHevyRows) : [];
+    const hrPreference = sourceSettings.heartRate;
+    const googleWorkoutRows = dedupeWorkoutsAcrossSources(rawWorkoutRows, workoutPreference);
 
     const hevyIds = hevyRows.map((h) => h.hevyId);
     const setRows = hevyIds.length
@@ -275,10 +283,7 @@ export function strainData(db: AuthDatabase, userId: string) {
       setsByHevy.set(s.hevyId, list);
     }
 
-    const matchedGoogleIds = new Set(
-      hevyRows.map((h) => h.matchedGoogleSessionId).filter((v): v is string => Boolean(v)),
-    );
-    const googleById = new Map(googleWorkoutRows.map((g) => [g.sessionId, g]));
+    const matchedWorkoutIds = new Set<string>();
 
     const activities: StrainActivityBreakdown[] = [];
     const workoutWindows: { startTime: Date; endTime: Date }[] = [];
@@ -289,24 +294,26 @@ export function strainData(db: AuthDatabase, userId: string) {
 
     for (const hw of hevyRows) {
       const sets = setsByHevy.get(hw.hevyId) ?? [];
-      const fallbackMatch = findMatchingGoogleWorkout(
+      const matchedG = findMatchingGoogleWorkout(
         hw.startTime.toISOString(),
         hw.endTime.toISOString(),
-        googleWorkoutRows,
+        googleWorkoutRows.filter((row) => !matchedWorkoutIds.has(`${row.source}:${row.sessionId}`)),
       );
-      const matchedG =
-        (hw.matchedGoogleSessionId ? googleById.get(hw.matchedGoogleSessionId) : undefined) ??
-        (fallbackMatch ? googleById.get(fallbackMatch.sessionId) : undefined);
-      if (matchedG) matchedGoogleIds.add(matchedG.sessionId);
-      const startMs = hw.startTime.getTime();
-      const endMs = hw.endTime.getTime();
-      workoutWindows.push({ startTime: hw.startTime, endTime: hw.endTime });
+      if (matchedG) matchedWorkoutIds.add(`${matchedG.source}:${matchedG.sessionId}`);
+      const primary = pickSourceRow(
+        [{ ...hw, source: "hevy" }, ...(matchedG ? [matchedG] : [])], workoutPreference, ["hevy", ...DEFAULT_WORKOUT_PRIORITY], () => true,
+      );
+      const start = primary?.startTime ?? hw.startTime;
+      const end = primary?.endTime ?? hw.endTime;
+      const startMs = start.getTime();
+      const endMs = end.getTime();
+      workoutWindows.push({ startTime: start, endTime: end });
 
       const matchedHrRows = selectHrSamplesForWindow(
         hrRows,
         startMs,
         endMs,
-        matchedG?.source ?? primaryWorkoutSource,
+        hrPreference ?? matchedG?.source ?? navPrefRows[0]?.primaryWorkoutSource,
       );
       const windowHr = matchedHrRows.map((s) => ({
         recordedAt: s.recordedAt.toISOString(),
@@ -314,7 +321,7 @@ export function strainData(db: AuthDatabase, userId: string) {
       }));
 
       const trimp = computeEdwardsTrimp(windowHr, settings.maxHrBpm, {
-        fallbackActiveZoneMinutes: matchedG?.activeZoneMinutes ?? null,
+        fallbackActiveZoneMinutes: matchedG && isSourceVisible(hrPreference, matchedG.source) ? matchedG.activeZoneMinutes : null,
         maxHrIsEstimated: settings.maxHrIsEstimated,
       });
       const muscular = computeMuscularWorkload(sets.map((set) => ({ ...set, reference1RmKg: references.get(set.exerciseTitle.trim().toLowerCase()) })));
@@ -342,16 +349,16 @@ export function strainData(db: AuthDatabase, userId: string) {
       const avgHr =
         windowHr.length > 0
           ? Math.round((windowHr.reduce((a, b) => a + b.bpm, 0) / windowHr.length) * 10) / 10
-          : hw.avgHrBpm ?? matchedG?.avgHrBpm ?? null;
+          : matchedG && isSourceVisible(hrPreference, matchedG.source) ? matchedG.avgHrBpm : hrPreference ? null : hw.avgHrBpm;
 
       activities.push({
         id: `hevy:${hw.hevyId}`,
         kind: "strength",
-        title: hw.title,
+        title: primary?.title ?? hw.title,
         source: matchedG ? `Hevy + ${formatSourceLabel(matchedG.source)}` : "Hevy",
-        startTime: hw.startTime.toISOString(),
-        endTime: hw.endTime.toISOString(),
-        durationSeconds: hw.durationSeconds,
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+        durationSeconds: primary?.durationSeconds ?? hw.durationSeconds,
         distanceMeters: matchedG?.distanceMeters ?? null,
         caloriesKcal: matchedG?.caloriesKcal ?? null,
         avgHrBpm: avgHr,
@@ -375,14 +382,14 @@ export function strainData(db: AuthDatabase, userId: string) {
     }
 
     for (const gw of googleWorkoutRows) {
-      if (matchedGoogleIds.has(gw.sessionId)) continue;
+      if (matchedWorkoutIds.has(`${gw.source}:${gw.sessionId}`)) continue;
       if (gw.startTime && gw.endTime) {
         workoutWindows.push({ startTime: gw.startTime, endTime: gw.endTime });
       }
       const startMs = gw.startTime?.getTime() ?? 0;
       const endMs = gw.endTime?.getTime() ?? startMs + (gw.durationSeconds ?? 0) * 1000;
       const matchedHrRows =
-        gw.startTime != null ? selectHrSamplesForWindow(hrRows, startMs, endMs, gw.source) : [];
+        gw.startTime != null ? selectHrSamplesForWindow(hrRows, startMs, endMs, hrPreference ?? gw.source) : [];
       const windowHr = matchedHrRows.map((s) => ({
         recordedAt: s.recordedAt.toISOString(),
         bpm: s.bpm,
@@ -390,7 +397,7 @@ export function strainData(db: AuthDatabase, userId: string) {
 
       const isStrength = isStrengthGoogleWorkout(gw.title, gw.exerciseType);
       const trimp = computeEdwardsTrimp(windowHr, settings.maxHrBpm, {
-        fallbackActiveZoneMinutes: gw.activeZoneMinutes,
+        fallbackActiveZoneMinutes: isSourceVisible(hrPreference, gw.source) ? gw.activeZoneMinutes : null,
         maxHrIsEstimated: settings.maxHrIsEstimated,
       });
       const effectiveCRaw = isStrength
@@ -402,7 +409,7 @@ export function strainData(db: AuthDatabase, userId: string) {
       const avgHr =
         windowHr.length > 0
           ? Math.round((windowHr.reduce((a, b) => a + b.bpm, 0) / windowHr.length) * 10) / 10
-          : gw.avgHrBpm;
+          : isSourceVisible(hrPreference, gw.source) ? gw.avgHrBpm : null;
 
       const durSec =
         gw.durationSeconds ?? (endMs > startMs ? Math.round((endMs - startMs) / 1000) : null);
@@ -453,9 +460,11 @@ export function strainData(db: AuthDatabase, userId: string) {
       });
     }
 
-    const selectedEnergy = pickDailyEnergyRow(energyRows, primaryRecoverySource);
+    const selectedEnergy = sourceSettings.steps
+      ? pickSourceRow(energyRows, sourceSettings.steps, DEFAULT_ENERGY_PRIORITY, (row) => row.steps != null)
+      : pickDailyEnergyRow(energyRows, navPrefRows[0]?.primaryRecoverySource);
     const totalSteps = selectedEnergy?.steps ?? null;
-    const filteredStepRows = selectStepIntervalsForEnergySource(stepRows, selectedEnergy?.source);
+    const filteredStepRows = selectStepIntervalsForEnergySource(stepRows.filter((r) => isSourceVisible(sourceSettings.steps, r.source)), selectedEnergy?.source);
     const verifiedWorkoutSteps = overlapStepsForWindows(filteredStepRows, workoutWindows);
     const walking = computeWalkingContribution(
       {

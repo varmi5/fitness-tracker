@@ -1,3 +1,5 @@
+import type { PhysiqueProtection, PhysiqueShareProtection, PhysiqueVault } from "./physique-protection";
+import type { SourceSettings } from "./data-source-settings";
 import { sql } from "drizzle-orm";
 import { boolean, date, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
@@ -91,6 +93,7 @@ export const nutritionPreference = pgTable("nutrition_preference", {
   bulkMode: boolean("bulk_mode").notNull().default(false),
   onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
   primaryRecoverySource: text("primary_recovery_source").notNull().default("auto"),
+  sourceSettings: jsonb("source_settings").$type<SourceSettings>().notNull().default({}),
   primaryWorkoutSource: text("primary_workout_source").notNull().default("auto"),
   autoSyncEnabled: boolean("auto_sync_enabled").notNull().default(true),
 });
@@ -450,6 +453,11 @@ export const reminderDelivery = pgTable("reminder_delivery", {
  leasedUntil: timestamp("leased_until", { withTimezone: true }),
 }, (t) => [primaryKey({ columns: [t.userId, t.day, t.time, t.subscriptionId] })]);
 
+export const physiqueVault = pgTable("physique_vault", {
+  userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
+  vault: jsonb().$type<PhysiqueVault>().notNull(),
+});
+
 export const physiqueCheckin = pgTable("physique_checkin", {
   id: text().primaryKey(),
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
@@ -457,6 +465,7 @@ export const physiqueCheckin = pgTable("physique_checkin", {
   pose: text().notNull().default("front"),
   cadence: text().notNull().default("weekly"),
   photoData: text("photo_data").notNull(),
+  protection: jsonb().$type<PhysiqueProtection>(),
   weightKg: doublePrecision("weight_kg"),
   bodyFatPct: doublePrecision("body_fat_pct"),
   note: text().notNull().default(""),
@@ -469,6 +478,7 @@ export const physiqueShare = pgTable("physique_share", {
   userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
   token: text().notNull().unique(),
   checkinIds: text("checkin_ids").array().notNull(),
+  protection: jsonb().$type<PhysiqueShareProtection>(),
 });
 
 export const feedbackReport = pgTable("feedback_report", {

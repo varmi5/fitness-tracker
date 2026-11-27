@@ -1,7 +1,8 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { AuthDatabase } from "./auth";
-import { physiqueCheckin } from "./schema";
+import { physiqueCheckin, physiqueShare, physiqueVault } from "./schema";
+import { physiqueProtectionInput, type PhysiqueProtection, type PhysiqueVault } from "./physique-protection";
 
 export const PHYSIQUE_POSES = ["front", "side", "back"] as const;
 export type PhysiquePose = (typeof PHYSIQUE_POSES)[number];
@@ -35,12 +36,18 @@ export const updatePhysiqueInput = z.object({
 
 export type UpdatePhysiqueInput = z.infer<typeof updatePhysiqueInput>;
 
+export const protectedCheckinInput = createPhysiqueInput.omit({ photoData: true, note: true, weightKg: true, bodyFatPct: true })
+  .extend({ protection: physiqueProtectionInput });
+export const protectedCheckinUpdate = updatePhysiqueInput.omit({ note: true, weightKg: true })
+  .extend({ details: physiqueProtectionInput.shape.details });
+
 export interface PhysiqueCheckinRecord {
   id: string;
   day: string;
   pose: PhysiquePose;
   cadence: PhysiqueCadence;
   photoData: string;
+  protection?: PhysiqueProtection | null;
   weightKg: number | null;
   bodyFatPct: number | null;
   note: string;
@@ -54,6 +61,7 @@ function toRecord(row: typeof physiqueCheckin.$inferSelect): PhysiqueCheckinReco
     pose: (PHYSIQUE_POSES.includes(row.pose as PhysiquePose) ? row.pose : "front") as PhysiquePose,
     cadence: (PHYSIQUE_CADENCES.includes(row.cadence as PhysiqueCadence) ? row.cadence : "weekly") as PhysiqueCadence,
     photoData: row.photoData,
+    protection: row.protection,
     weightKg: row.weightKg ?? null,
     bodyFatPct: row.bodyFatPct ?? null,
     note: row.note,
@@ -63,7 +71,50 @@ function toRecord(row: typeof physiqueCheckin.$inferSelect): PhysiqueCheckinReco
 
 export function physiqueData(db: AuthDatabase, userId: string) {
   return {
-    async list(pose?: PhysiquePose): Promise<PhysiqueCheckinRecord[]> {
+    async getVault() {
+      const [row] = await db.select({ vault: physiqueVault.vault }).from(physiqueVault).where(eq(physiqueVault.userId, userId));
+      return row?.vault ?? null;
+    },
+    async setupVault(vault: PhysiqueVault) {
+      const [row] = await db.insert(physiqueVault).values({ userId, vault })
+        .onConflictDoNothing({ target: physiqueVault.userId }).returning({ vault: physiqueVault.vault });
+      if (row) return row.vault;
+      const [existing] = await db.select({ vault: physiqueVault.vault }).from(physiqueVault).where(eq(physiqueVault.userId, userId));
+      return existing.vault;
+    },
+    async createProtected(raw: z.infer<typeof protectedCheckinInput>) {
+      const input = protectedCheckinInput.parse(raw);
+      const [saved] = await db.insert(physiqueCheckin).values({ ...input, id: crypto.randomUUID(), userId, photoData: "" }).returning();
+      return toRecord(saved);
+    },
+    async migrate(id: string, protection: PhysiqueProtection) {
+      return db.transaction(async (tx) => {
+        const own = and(eq(physiqueCheckin.id, id), eq(physiqueCheckin.userId, userId));
+        const [saved] = await tx.update(physiqueCheckin)
+          .set({ protection, photoData: "", note: "", weightKg: null, bodyFatPct: null })
+          .where(and(own, isNull(physiqueCheckin.protection))).returning();
+        if (saved) {
+          await tx.delete(physiqueShare).where(and(eq(physiqueShare.userId, userId), isNull(physiqueShare.protection), sql`${id} = any(${physiqueShare.checkinIds})`));
+          return toRecord(saved);
+        }
+        const [existing] = await tx.select().from(physiqueCheckin).where(own);
+        return existing ? toRecord(existing) : null;
+      });
+    },
+    async updateProtected(id: string, input: z.infer<typeof protectedCheckinUpdate>) {
+      const { details, ...metadata } = input;
+      const [saved] = await db.update(physiqueCheckin)
+        .set({ ...metadata, protection: sql`jsonb_set(${physiqueCheckin.protection}, '{details}', ${JSON.stringify(details)}::jsonb)` })
+        .where(and(eq(physiqueCheckin.id, id), eq(physiqueCheckin.userId, userId), sql`${physiqueCheckin.protection} IS NOT NULL`))
+        .returning();
+      return saved ? toRecord(saved) : null;
+    },
+    async hasUnprotected() {
+      const [found] = await db.select({ id: physiqueCheckin.id }).from(physiqueCheckin)
+        .where(and(eq(physiqueCheckin.userId, userId), isNull(physiqueCheckin.protection))).limit(1);
+      return Boolean(found);
+    },
+    async list(pose?: PhysiquePose, legacy = false): Promise<PhysiqueCheckinRecord[]> {
       const condition = pose
         ? and(eq(physiqueCheckin.userId, userId), eq(physiqueCheckin.pose, pose))
         : eq(physiqueCheckin.userId, userId);
@@ -71,9 +122,9 @@ export function physiqueData(db: AuthDatabase, userId: string) {
       const rows = await db
         .select()
         .from(physiqueCheckin)
-        .where(condition)
+        .where(legacy ? and(condition, isNull(physiqueCheckin.protection)) : condition)
         .orderBy(desc(physiqueCheckin.day), desc(physiqueCheckin.createdAt))
-        .limit(300);
+        .limit(legacy ? 12 : 300);
 
       return rows.map(toRecord);
     },

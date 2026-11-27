@@ -1,3 +1,5 @@
+import { metricPreference } from "./data-source-settings";
+import { dedupeHevyWorkouts, findMatchingGoogleWorkout } from "./hevy";
 import { and, asc, desc, eq, gte, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { addDays, isCalorieGoalMet } from "./nutrition-model";
@@ -12,7 +14,7 @@ import {
   computeRecoveryForecast,
   computeSleepInsights,
   selectNonOverlappingSleepSessions,
-  type SleepNightRecord,
+  recoveryBaselineForSource,
   type BehaviorDayObservation,
   type BehaviorImpactItem,
   type BiologicalAgeResult,
@@ -29,11 +31,15 @@ import {
 } from "./pulse-engine";
 import * as schema from "./schema";
 import {
+  DEFAULT_ENERGY_PRIORITY,
+  DEFAULT_RECOVERY_PRIORITY,
   dedupeWorkoutsAcrossSources,
+  isSourceVisible,
+  pickSourceRow,
+  rankSources,
   pickDailyEnergyRow,
-  pickRecoveryRowForDay,
+  selectRecoveryByDay,
   selectDailyHrStream,
-  workoutsOverlap,
 } from "./source-priority";
 import { computeTargetStrain, type TargetStrainRecommendation } from "./strain-engine";
 import { getTrainingLoadSummary } from "./training-load";
@@ -47,6 +53,7 @@ export interface PulseInsightsView {
   strainTarget: TargetStrainRecommendation;
   energyBank: EnergyBankResult;
   stress: DaytimeStressResult;
+  heartRateSources?: string[];
   fitnessLevel: {
     vo2max: number | null;
     percentile: number | null;
@@ -82,7 +89,7 @@ export async function getPulseInsightsForUser(
     energyRows,
     strainRows,
     workoutRows,
-    hevyRows,
+    rawHevyRows,
     hrDayRows,
     profileRows,
     trainingPrefRows,
@@ -157,17 +164,26 @@ export async function getPulseInsightsForUser(
   const primaryRecoverySource = nutritionPrefRows[0]?.primaryRecoverySource ?? "auto";
   const primaryWorkoutSource = nutritionPrefRows[0]?.primaryWorkoutSource ?? "auto";
   const goalForDay = (d: string) => (goalRows.find((g) => g.effectiveFrom <= d)?.goalMinutes ?? 480) / 60;
-  const recByDay = pickRecoveryRowForDay(recoveryRows, primaryRecoverySource);
+  const sourceSettings = nutritionPrefRows[0]?.sourceSettings ?? {};
+  const workoutPreference = metricPreference(sourceSettings, "workouts", primaryWorkoutSource);
+  const hevyRows = isSourceVisible(workoutPreference, "hevy") ? dedupeHevyWorkouts(rawHevyRows) : [];
+  const recByDay = selectRecoveryByDay(recoveryRows, sourceSettings, primaryRecoverySource);
+  const sleepPreference = metricPreference(sourceSettings, "sleep", primaryRecoverySource);
+  const sleepOrder = rankSources(sleepPreference, DEFAULT_RECOVERY_PRIORITY);
+  const sleepRank = (source: string) => {
+    const index = sleepOrder.indexOf(source);
+    return index === -1 ? sleepOrder.length : index;
+  };
   const mainSessionKeys = new Set(sessionRows.filter((r) => r.isMainSleep).map((r) => `${r.source}:${r.day}`));
-  const sleepRecords: SleepNightRecord[] = selectNonOverlappingSleepSessions([
-    ...sessionRows.filter((r) => r.processed !== false).map((r) => ({ ...r, coverageComplete: false })),
-    ...sleepRows.filter((r) => !mainSessionKeys.has(`${r.source}:${r.day}`)).map((r) => ({ ...r, isMainSleep: true, coverageComplete: false })),
-  ]);
-  const sleepByDay = new Map<string, SleepNightRecord>();
+  const sleepRecords = selectNonOverlappingSleepSessions([
+    ...sessionRows.filter((r) => r.processed !== false && isSourceVisible(sleepPreference, r.source)).map((r) => ({ ...r, coverageComplete: false })),
+    ...sleepRows.filter((r) => isSourceVisible(sleepPreference, r.source) && !mainSessionKeys.has(`${r.source}:${r.day}`)).map((r) => ({ ...r, isMainSleep: true, coverageComplete: false })),
+  ], new Date(), (a, b) => sleepRank(a.source) - sleepRank(b.source));
+  const sleepByDay = new Map<string, (typeof sleepRecords)[number]>();
   for (const s of sleepRecords) {
     if (s.isMainSleep === false) continue;
     const previous = sleepByDay.get(s.day);
-    if (!previous || s.minutesAsleep > previous.minutesAsleep) sleepByDay.set(s.day, s);
+    if (!previous || sleepRank(s.source) < sleepRank(previous.source) || (sleepRank(s.source) === sleepRank(previous.source) && s.minutesAsleep > previous.minutesAsleep)) sleepByDay.set(s.day, s);
   }
 
   const energyByDayRaw = new Map<string, (typeof energyRows)[number][]>();
@@ -178,7 +194,9 @@ export async function getPulseInsightsForUser(
   }
   const energyByDay = new Map<string, (typeof energyRows)[number]>();
   for (const [d, rows] of energyByDayRaw.entries()) {
-    const chosen = pickDailyEnergyRow(rows, primaryRecoverySource);
+    const preferredEnergy = metricPreference(sourceSettings, "energy", primaryRecoverySource);
+    const chosen = pickSourceRow(rows, preferredEnergy, DEFAULT_ENERGY_PRIORITY, (row) => row.totalKcal != null || row.activeKcal != null)
+      ?? pickDailyEnergyRow(rows, preferredEnergy);
     if (chosen) energyByDay.set(d, chosen);
   }
 
@@ -187,7 +205,7 @@ export async function getPulseInsightsForUser(
 
   const recoveryInputForDay = (d: string) => {
     const r = recByDay.get(d), s = sleepByDay.get(d);
-    return { source: r?.source, hrvRmssdMs: r?.hrvRmssdMs ?? null, restingHrBpm: r?.restingHrBpm ?? null,
+    return { source: r?.source, metricSources: r?.metricSources, hrvRmssdMs: r?.hrvRmssdMs ?? null, restingHrBpm: r?.restingHrBpm ?? null,
       respiratoryRate: r?.respiratoryRate ?? null, skinTempDeltaC: r?.skinTempDeltaC ?? null,
       sleepHours: s ? s.minutesAsleep / 60 : null };
   };
@@ -195,12 +213,14 @@ export async function getPulseInsightsForUser(
   const priorDays = baselineBefore(day);
   const yesterdayStrain = strainByDay.get(addDays(day, -1))?.overallStrain ?? null;
   const todaySleep = sleepByDay.get(day) ?? null;
-  const sleep = computeSleepInsights(todaySleep, sleepRecords, day, yesterdayStrain, { timezone, goalForDay });
+  const scoredSleep = sleepRecords.filter((entry) => entry.isMainSleep === false || sleepByDay.get(entry.day) === entry);
+  const sleep = computeSleepInsights(todaySleep, scoredSleep, day, yesterdayStrain, { timezone, goalForDay });
 
   const todayRec = recByDay.get(day);
   const recovery = computePulseRecovery(
     {
       source: todayRec?.source,
+      metricSources: todayRec?.metricSources,
       hrvRmssdMs: todayRec?.hrvRmssdMs ?? null,
       restingHrBpm: todayRec?.restingHrBpm ?? null,
       respiratoryRate: todayRec?.respiratoryRate ?? null,
@@ -219,7 +239,7 @@ export async function getPulseInsightsForUser(
       spo2Pct: todayRec?.spo2Pct ?? null,
       skinTempDeltaC: todayRec?.skinTempDeltaC ?? null,
     },
-    priorDays.map(d => todayRec?.source && d.source !== todayRec.source ? { ...d, hrvRmssdMs: null, restingHrBpm: null, respiratoryRate: null, skinTempDeltaC: null } : d),
+    priorDays.map((d) => recoveryBaselineForSource(recoveryInputForDay(day), d)),
   );
 
   // Recent recovery scores for 14d forecast
@@ -254,13 +274,14 @@ export async function getPulseInsightsForUser(
   const strainTarget = computeTargetStrain(recovery.score, { acwr, priorEffort });
 
   const maxHr = trainingPrefRows[0]?.maxHrBpm ?? 190;
-  const todayHrSamples = selectDailyHrStream(hrDayRows, primaryRecoverySource).map((h) => ({
+  const hrStream = selectDailyHrStream(hrDayRows, metricPreference(sourceSettings, "heartRate", primaryRecoverySource));
+  const todayHrSamples = hrStream.map((h) => ({
     recordedAt: h.recordedAt.toISOString(),
     bpm: h.bpm,
   }));
   const dedupedDayWorkouts = dedupeWorkoutsAcrossSources(
     workoutRows.filter((w) => w.day === day),
-    primaryWorkoutSource,
+    workoutPreference,
   );
   const todayWorkouts = [
     ...dedupedDayWorkouts
@@ -308,9 +329,6 @@ export async function getPulseInsightsForUser(
   // Build 180-day HealthspanDayInput array (deduplicated per day across wearables and Hevy)
   const workoutsByDay = new Map<string, { strengthMin: number; cardioMin: number; vigorousMin: number }>();
   const hevyByDayMap = new Map<string, (typeof hevyRows)[number][]>();
-  const hevyMatchedSessionIds = new Set(
-    hevyRows.map((h) => h.matchedGoogleSessionId).filter((v): v is string => Boolean(v)),
-  );
   for (const h of hevyRows) {
     const list = hevyByDayMap.get(h.day) ?? [];
     list.push(h);
@@ -322,16 +340,15 @@ export async function getPulseInsightsForUser(
   }
   const rawWorkoutsByDay = new Map<string, (typeof workoutRows)[number][]>();
   for (const w of workoutRows) {
-    if (hevyMatchedSessionIds.has(w.sessionId)) continue;
     const list = rawWorkoutsByDay.get(w.day) ?? [];
     list.push(w);
     rawWorkoutsByDay.set(w.day, list);
   }
   for (const [d, rows] of rawWorkoutsByDay.entries()) {
-    const deduped = dedupeWorkoutsAcrossSources(rows, primaryWorkoutSource);
+    const deduped = dedupeWorkoutsAcrossSources(rows, workoutPreference);
     const hevyForDay = hevyByDayMap.get(d) ?? [];
     for (const w of deduped) {
-      if (hevyForDay.some((h) => workoutsOverlap(h, w))) continue;
+      if (hevyForDay.some((h) => findMatchingGoogleWorkout(h.startTime.toISOString(), h.endTime.toISOString(), [w]))) continue;
       const cur = workoutsByDay.get(d) ?? { strengthMin: 0, cardioMin: 0, vigorousMin: 0 };
       const mins = Math.round((w.durationSeconds ?? 0) / 60);
       if (/strength|weight|crossfit|calisthenics/i.test(w.exerciseType || w.title)) {
@@ -444,6 +461,7 @@ export async function getPulseInsightsForUser(
     strainTarget,
     energyBank,
     stress,
+    heartRateSources: [...new Set(hrStream.map((sample) => sample.source))],
     fitnessLevel,
     biologicalAge,
     workoutHrrById,

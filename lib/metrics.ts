@@ -1,3 +1,6 @@
+import { DEFAULT_ENERGY_PRIORITY, pickSourceRow } from "./source-priority";
+import type { SourceRule } from "./data-source-settings";
+
 export const metrics = [
   { key: "waist", label: "Waist", metric: "waist", side: "none", unit: "cm" },
   { key: "left-bicep", label: "Left bicep", metric: "bicep", side: "left", unit: "cm" },
@@ -21,9 +24,35 @@ export function readingsFor(readings: Reading[], metric: Metric) {
 // The measurement log owns same-day weights. Older imports can exist only in energy history.
 export function weightReadingsThrough(
   readings: Reading[],
-  energyDays: readonly { day: string; energy?: { weightKg?: number | null } | null }[],
+  energyDays: readonly { day: string; energy?: { weightKg?: number | null } | null; weightSources?: { source: string; value: number }[] }[],
   through: string,
+  preference?: SourceRule,
 ) {
+  if (preference) {
+    type Candidate = { source: string; reading: Reading };
+    const available = new Map<string, Candidate[]>();
+    for (const { day, weightSources } of energyDays) {
+      if (day > through) continue;
+      available.set(day, (weightSources ?? []).map((entry) => ({
+        source: entry.source,
+        reading: { id: day, date: day, metric: "weight", side: "none", value: entry.value, note: "" },
+      })));
+    }
+    for (const reading of readings) {
+      if (reading.metric !== "weight" || reading.side !== "none" || reading.date > through) continue;
+      const source = /^Synced from|^Imported from/i.test(reading.note)
+        ? (/google|fitbit/i.test(reading.note) ? "google"
+          : /apple/i.test(reading.note) ? "apple"
+            : DEFAULT_ENERGY_PRIORITY.find((key) => reading.note.toLowerCase().includes(key.replaceAll("_", " "))) ?? "unknown")
+        : "manual";
+      const day = available.get(reading.date) ?? [];
+      available.set(reading.date, [{ source, reading }, ...day.filter((item) => item.source !== source)]);
+    }
+    return [...available.values()].flatMap((rows) => {
+      const chosen = pickSourceRow(rows, preference, ["manual", ...DEFAULT_ENERGY_PRIORITY], () => true);
+      return chosen ? [chosen.reading] : [];
+    }).sort((a, b) => a.date.localeCompare(b.date));
+  }
   const byDay = new Map<string, Reading>();
   for (const { day, energy } of energyDays) {
     if (day <= through && energy?.weightKg != null) {
