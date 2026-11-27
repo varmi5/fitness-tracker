@@ -53,3 +53,36 @@ The last two variables let FitnessTrackr authenticate at the invitation endpoint
 ## Password recovery
 
 In the Fitness application terminal, run `node scripts/set-password.mjs <email>`. Enter the new password at the hidden prompt. Existing sessions are revoked. For a source checkout, use `npx tsx scripts/set-password.ts <email>`.
+
+## Backups and recovery
+
+Coolify manages two database backups. The FitnessTrackr PostgreSQL dump contains application data. The Coolify instance dump contains Coolify projects, settings, and saved credentials. Code and build images are available through GitHub and GHCR.
+
+Use these settings for the two schedules.
+
+| Backup | Where to manage it | Schedule | Retention |
+|---|---|---|---|
+| FitnessTrackr data | `fitness-postgres` → **Backups** | Daily at 02:00 (`0 2 * * *`) | 14 local copies and up to 30 remote copies or 1 GB |
+| Coolify instance settings | **Settings → Backup** | Daily at midnight (`0 0 * * *`) | Keep local copies and up to 30 remote copies or 1 GB |
+
+Times follow the timezone shown in each schedule. The remote destination is **Cloudflare R2 backups** in Coolify **Storage**, backed by a private R2 Standard bucket. In each schedule, enable S3, select that destination, and keep the local copy. Configure the instance schedule through **Settings → Backup → Configure backup** if it has not been created yet. Coolify prunes remote copies when either retention threshold is reached. [Coolify backup settings](https://coolify.io/docs/databases/backups) · [R2 connection settings](https://coolify.io/docs/core/s3-storage/r2)
+
+After creating or changing either schedule, select **Back up now**, check that the execution succeeds, and verify the new object in R2. Coolify retention runs after uploads. R2 Standard's free allowance is shared across the Cloudflare account, and budget alerts notify you about spending. [R2 pricing](https://developers.cloudflare.com/r2/pricing/) · [Cloudflare budget alerts](https://developers.cloudflare.com/billing/manage/budget-alerts/)
+
+### Save the recovery keys
+
+On the Ubuntu VM that hosts Coolify, run:
+
+```bash
+sudo grep '^APP_KEY=' /data/coolify/source/.env
+```
+
+Store the full line in a password manager outside the NAS. Coolify needs the original key to decrypt credentials in its restored instance database. Keep a separate secure backup of Coolify's SSH keys under `/data/coolify/ssh/keys/` and the applicable `~/.ssh/authorized_keys` for recovery to a replacement server. Keep these values and files out of Git. [Coolify instance backup](https://coolify.io/docs/core/backup-and-recovery/instance-backup) · [Coolify instance recovery](https://coolify.io/docs/core/backup-and-recovery/instance-restore)
+
+### Recover after losing the NAS or VM
+
+1. Download both database dumps directly from R2. Have the saved Coolify `APP_KEY`, SSH keys, and the original Coolify version ready.
+2. Follow the [Coolify instance restore guide](https://coolify.io/docs/core/backup-and-recovery/instance-restore) on the replacement host. Verify that Coolify can decrypt its settings and validate the server connection.
+3. Follow the [database restore guide](https://coolify.io/docs/databases/restore) to import the FitnessTrackr dump into a PostgreSQL target. Confirm the application's database URL and original runtime secrets, then redeploy and verify sign-in and existing data.
+
+Test the FitnessTrackr restore from an R2 copy into a disposable database before relying on it for recovery. Back up any other app databases or persistent volumes separately.

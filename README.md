@@ -11,6 +11,7 @@ A private, mobile-first nutrition, energy balance, and body measurement tracker.
 `npm test` runs the signup, data isolation, nutrition, MCP, and Google Health tests using an embedded PostgreSQL engine. `npm run build` produces the production app and service worker. Run `npm run test:smoke` after building to exercise the production server and migrations.
 
 - [Coolify setup](docs/coolify-setup.md)
+- [Backups and recovery](docs/coolify-setup.md#backups-and-recovery)
 - [Apple Health companion architecture](docs/apple-health-companion.md)
 - [ChatGPT MCP skill](skills/fitness-nutrition-mcp/SKILL.md)
 - [Connect ChatGPT on web and mobile](docs/chatgpt-connector.md)
