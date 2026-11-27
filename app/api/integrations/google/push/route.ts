@@ -2,6 +2,7 @@ import { z } from "zod";
 import { googleConfigured, googleStatus, pushPendingToGoogle } from "../../../../../lib/google-health";
 import { nutritionData, NutritionError } from "../../../../../lib/nutrition-data";
 import { addDays, historyInput, localDay } from "../../../../../lib/nutrition-model";
+import { isSameAllowedOrigin } from "../../../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
 import { processGoogleMeals } from "../../../../../lib/google-meal-worker";
 
@@ -18,7 +19,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) {
+  if (!isSameAllowedOrigin(request, getAuthConfig())) {
     return json({ message: "A same-origin request is required." }, 403);
   }
   if (!authConfigured()) return json({ message: "Setup is not configured." }, 503);

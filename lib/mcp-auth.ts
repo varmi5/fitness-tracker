@@ -8,6 +8,7 @@ import { mcpAudit, mcpRevocation, oauthClient, oauthConsent, session } from "./s
 
 export async function mcpIdentity(request: Request) {
   const config = getAuthConfig();
+  const mcpOrigin = config.mcpBaseURL ?? config.baseURL;
   const token = /^Bearer\s+([^\s,]{1,8192})$/i.exec(request.headers.get("authorization") ?? "")?.[1];
   const unauthorized = (invalid = false) =>
     Response.json(
@@ -15,7 +16,7 @@ export async function mcpIdentity(request: Request) {
       {
         status: 401,
         headers: {
-          "WWW-Authenticate": `Bearer resource_metadata="${metadataURL(config.baseURL)}", scope="fitness:read fitness:write offline_access"${invalid ? ', error="invalid_token"' : ""}`,
+          "WWW-Authenticate": `Bearer resource_metadata="${metadataURL(mcpOrigin)}", scope="fitness:read fitness:write offline_access"${invalid ? ', error="invalid_token"' : ""}`,
         },
       },
     );
@@ -24,11 +25,11 @@ export async function mcpIdentity(request: Request) {
 
   let payload;
   try {
-    const jwksRes = await getAuth().handler(new Request(new URL("/api/auth/jwks", config.baseURL)));
+    const jwksRes = await getAuth().handler(new Request(new URL("/api/auth/jwks", mcpOrigin)));
     const keys = createLocalJWKSet(await jwksRes.json());
     ({ payload } = await jwtVerify(token, keys, {
-      issuer: new URL(config.baseURL).origin,
-      audience: mcpResource(config.baseURL),
+      issuer: new URL(mcpOrigin).origin,
+      audience: mcpResource(mcpOrigin),
       requiredClaims: ["exp", "iat", "sub"],
     }));
   } catch {

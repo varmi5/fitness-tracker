@@ -1,6 +1,7 @@
 import { logDiaryLoadFailure } from "../../../lib/diary-load-diagnostics";
 import { z } from "zod";
 import { historyInput } from "../../../lib/nutrition-model";
+import { isSameAllowedOrigin } from "../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
 import { strainData } from "../../../lib/strain-data";
 import { getRecoveryInsightsForUser } from "../../../lib/recovery-insights";
@@ -49,7 +50,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) {
+  if (!isSameAllowedOrigin(request, getAuthConfig())) {
     return json({ message: "A same-origin request is required." }, 403);
   }
   if (!authConfigured()) return json({ message: "Setup is not configured." }, 503);

@@ -43,6 +43,7 @@ interface SettingsViewProps {
   strainSettings?: StrainSettings;
   audit: AuditEntry[];
   mcpEnabled: boolean;
+  mcpUrl?: string;
   busy: boolean;
   googleSyncPct?: number | null;
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
@@ -76,6 +77,7 @@ export function SettingsView({
   strainSettings,
   audit,
   mcpEnabled,
+  mcpUrl: configuredMcpUrl,
   busy,
   googleSyncPct = null,
   onSaveTracker,
@@ -177,7 +179,7 @@ export function SettingsView({
   const [showDelete, setShowDelete] = useState(false);
 
   const waistMetric = metrics[0];
-  const mcpUrl = typeof window !== "undefined" ? `${window.location.origin}/mcp` : "/mcp";
+  const mcpUrl = configuredMcpUrl || (typeof window !== "undefined" ? `${window.location.origin}/mcp` : "/mcp");
 
   function selectMode(mode: TrackingMode) {
     setTrackingMode(mode);

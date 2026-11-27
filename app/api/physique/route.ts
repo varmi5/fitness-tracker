@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { PHYSIQUE_POSES, physiqueData, protectedCheckinInput, protectedCheckinUpdate } from "../../../lib/physique-data";
 import { physiqueProtectionInput, physiqueVaultInput } from "../../../lib/physique-protection";
+import { isSameAllowedOrigin } from "../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +34,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) {
+  if (!isSameAllowedOrigin(request, getAuthConfig())) {
     return json({ message: "A same-origin request is required." }, 403);
   }
   const contentLength = Number(request.headers.get("content-length") ?? 0);

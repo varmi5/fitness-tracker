@@ -2,6 +2,7 @@ import { z } from "zod";
 import { hevyStatus, importHevyWorkouts, parseHevyImport } from "../../../../../lib/hevy";
 import { NutritionError, nutritionData } from "../../../../../lib/nutrition-data";
 import { localDay } from "../../../../../lib/nutrition-model";
+import { isSameAllowedOrigin } from "../../../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
 import { strainData } from "../../../../../lib/strain-data";
 
@@ -11,7 +12,7 @@ const json = (data: unknown, status = 200) =>
   Response.json(data, { status, headers: { "Cache-Control": "private, no-store" } });
 
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) {
+  if (!isSameAllowedOrigin(request, getAuthConfig())) {
     return json({ message: "A same-origin request is required." }, 403);
   }
   const contentLength = Number(request.headers.get("content-length") ?? 0);

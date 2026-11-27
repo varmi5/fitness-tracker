@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { pushWeightToGoogle } from "../../../lib/google-health";
 import { nutritionData } from "../../../lib/nutrition-data";
+import { isSameAllowedOrigin } from "../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
 import { logInput, profileInput, trackerData } from "../../../lib/tracker-data";
 
@@ -28,7 +29,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) {
+  if (!isSameAllowedOrigin(request, getAuthConfig())) {
     return json({ message: "A same-origin request is required." }, 403);
   }
   const user = await userSession(request);

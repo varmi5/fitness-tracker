@@ -1623,6 +1623,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
               strainSettings={strainSettings}
               audit={audit}
               mcpEnabled={initial.mcpEnabled}
+              mcpUrl={initial.mcpUrl}
               busy={busy}
               googleSyncPct={googleSyncPct}
               onSaveTracker={async (action, msg) => { await saveTracker(action, msg); }}
@@ -1659,6 +1660,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
         openWearables={openWearables}
         hevy={hevy}
         mcpEnabled={initial.mcpEnabled}
+        mcpUrl={initial.mcpUrl}
         busy={busy}
         onClose={() => setOnboardingOpen(false)}
         onSaveTracker={saveTracker}

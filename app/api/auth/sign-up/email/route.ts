@@ -1,4 +1,5 @@
 import { SETUP_NOT_CONFIGURED, hasValidSetupCode, signUpOwner } from "../../../../../lib/owner-setup";
+import { isSameAllowedOrigin } from "../../../../../lib/origins";
 import { authConfigured, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
 import { eq } from "drizzle-orm";
 import { ownerSetup } from "../../../../../lib/schema";
@@ -17,14 +18,15 @@ export async function POST(request: Request) {
     return forbidden(SETUP_NOT_CONFIGURED);
   }
   if (config.mode === "closed") return signUpOwner(request, getDatabase(), config);
-  if (request.headers.get("origin") !== new URL(config.baseURL).origin) return forbidden("Signup requires a same-origin request.");
+  if (!isSameAllowedOrigin(request, config)) return forbidden("Signup requires a same-origin request.");
+  const reqOrigin = request.headers.get("origin") ?? config.baseURL;
   if (config.mode === "invite" && !equalCodes(process.env.INVITE_CODE!, request.headers.get("x-invite-code") ?? "")) {
     return forbidden("Invalid invite code.");
   }
   const db = getDatabase();
   const [setup] = await db.select().from(ownerSetup).where(eq(ownerSetup.id, 1));
   if (!setup?.consumed) return forbidden("Create the owner in closed mode before opening signup.");
-  const verified = await verifyTurnstile(request.headers.get("x-turnstile-response") ?? "", config.baseURL).catch(() => false);
+  const verified = await verifyTurnstile(request.headers.get("x-turnstile-response") ?? "", reqOrigin).catch(() => false);
   if (!verified) return forbidden("Please complete the verification challenge again.");
   const headers = new Headers(request.headers);
   headers.delete("x-invite-code");

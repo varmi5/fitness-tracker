@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { googleConfigured, googleConsent, pkcePair } from "../../../../../lib/google-health";
 import { createOAuthState, parseOAuthReturnTo } from "../../../../../lib/oauth-state";
+import { getValidatedRequestOrigin } from "../../../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
@@ -13,9 +14,10 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ message: "Please sign in." }, { status: 401 });
 
   const config = getAuthConfig();
+  const reqOrigin = getValidatedRequestOrigin(request, config);
   const reqUrl = new URL(request.url);
   const returnTo = parseOAuthReturnTo(reqUrl.searchParams.get("returnTo"));
-  const callback = new URL("/api/integrations/google/callback", config.baseURL).href;
+  const callback = new URL("/api/integrations/google/callback", reqOrigin).href;
   const { verifier, challenge } = pkcePair();
   const { state, sealed, maxAge } = await createOAuthState(getDatabase(), "google", session.user.id, {
     returnTo,
@@ -27,7 +29,7 @@ export async function GET(request: Request) {
   response.cookies.set("fitness_google_oauth", sealed, {
     httpOnly: true,
     sameSite: "lax",
-    secure: new URL(config.baseURL).protocol === "https:",
+    secure: reqOrigin.startsWith("https:"),
     path: "/api/integrations/google/callback",
     maxAge,
   });

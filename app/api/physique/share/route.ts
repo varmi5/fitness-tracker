@@ -1,4 +1,5 @@
 import { physiqueShareAction, physiqueSharing } from "../../../../lib/physique-share";
+import { isSameAllowedOrigin } from "../../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!authConfigured()) return json({ message: "Setup is not configured." }, 503);
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) {
+  if (!isSameAllowedOrigin(request, getAuthConfig())) {
     return json({ message: "A same-origin request is required." }, 403);
   }
   const session = await getAuth().api.getSession({ headers: request.headers });

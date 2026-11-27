@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { createAuth, type AuthConfig } from "./auth";
+import { getAllowedOrigins, getMcpPublicOrigin, getPrimaryOrigin } from "./origins";
 import { sendEmail, signupMode } from "./signup-config";
 import * as schema from "./schema";
 
@@ -30,7 +31,9 @@ export function getDatabase() {
 export function getAuthConfig(): AuthConfig {
   const mode = signupMode();
   return {
-    baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
+    baseURL: getPrimaryOrigin(),
+    allowedOrigins: getAllowedOrigins(),
+    mcpBaseURL: getMcpPublicOrigin(),
     secret: process.env.BETTER_AUTH_SECRET ?? "",
     mode,
     mcpEnabled: process.env.FITNESS_MCP_ENABLED === "true",

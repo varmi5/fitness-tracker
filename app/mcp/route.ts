@@ -10,7 +10,9 @@ async function handle(request: Request) {
   if (!authConfigured() || !getAuthConfig().mcpEnabled) return new Response(null, { status: 404 });
 
   const origin = request.headers.get("origin");
-  if (origin && ![new URL(getAuthConfig().baseURL).origin, "https://chatgpt.com"].includes(origin)) {
+  const config = getAuthConfig();
+  const allowedOrigins = config.allowedOrigins ?? [new URL(config.baseURL).origin];
+  if (origin && ![...allowedOrigins, "https://chatgpt.com"].includes(origin)) {
     return new Response(null, { status: 403 });
   }
 

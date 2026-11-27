@@ -4,14 +4,16 @@ import { connectGoogle, googleConfigured, syncGoogle } from "../../../../../lib/
 import { nutritionData, NutritionError } from "../../../../../lib/nutrition-data";
 import { addDays, localDay } from "../../../../../lib/nutrition-model";
 import { consumeOAuthState, type OAuthReturnTo } from "../../../../../lib/oauth-state";
+import { getValidatedRequestOrigin } from "../../../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const config = getAuthConfig();
+  const reqOrigin = getValidatedRequestOrigin(request, config);
   const back = (params: Record<string, string>, returnTo?: OAuthReturnTo | null) => {
-    const dest = new URL("/", config.baseURL);
+    const dest = new URL("/", reqOrigin);
     if (returnTo === "onboarding-1") dest.searchParams.set("onboarding", "1");
     else dest.searchParams.set("tab", "Settings");
     for (const [k, v] of Object.entries(params)) dest.searchParams.set(k, v);
@@ -48,7 +50,7 @@ export async function GET(request: Request) {
   const returnTo = stateResult.data.returnTo;
 
   try {
-    const callback = new URL("/api/integrations/google/callback", config.baseURL).href;
+    const callback = new URL("/api/integrations/google/callback", reqOrigin).href;
     await connectGoogle(db, session.user.id, code, stateResult.data.verifier, callback);
     const settings = await nutritionData(db, session.user.id).settings();
     const today = localDay(new Date(), settings.timezone);

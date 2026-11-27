@@ -2,6 +2,7 @@ import { z } from "zod";
 import { openWearablesConfigured, openWearablesStatus, syncOpenWearables } from "../../../../../lib/open-wearables";
 import { nutritionData, NutritionError } from "../../../../../lib/nutrition-data";
 import { addDays, historyInput, localDay } from "../../../../../lib/nutrition-model";
+import { isSameAllowedOrigin } from "../../../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +11,7 @@ const json = (data: unknown, status = 200) =>
   Response.json(data, { status, headers: { "Cache-Control": "private, no-store" } });
 
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) {
+  if (!isSameAllowedOrigin(request, getAuthConfig())) {
     return json({ message: "A same-origin request is required." }, 403);
   }
   if (!authConfigured()) return json({ message: "Setup is not configured." }, 503);

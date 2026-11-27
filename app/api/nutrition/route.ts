@@ -9,6 +9,8 @@ import {
 } from "../../../lib/google-health";
 import { NutritionError, nutritionData, preferencesInput, targetInput } from "../../../lib/nutrition-data";
 import { energyInput, historyInput, logMealInput, templateInput, updateMealInput } from "../../../lib/nutrition-model";
+import { mcpResource } from "../../../lib/mcp-config";
+import { isSameAllowedOrigin } from "../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
 import { mcpRevocation, oauthAccessToken, oauthConsent, oauthRefreshToken } from "../../../lib/schema";
 import { hevyStatus } from "../../../lib/hevy";
@@ -82,7 +84,8 @@ export async function GET(request: Request) {
       data.recentAudit(15),
     ]);
     const homeState = await data.homeState({ canReadSleep: google.canReadSleep, timezone: settings.timezone });
-    return json({ settings, google, hevy, openWearables, audit, homeState, mcpEnabled: getAuthConfig().mcpEnabled });
+    const authConfig = getAuthConfig();
+    return json({ settings, google, hevy, openWearables, audit, homeState, mcpEnabled: authConfig.mcpEnabled, mcpUrl: mcpResource(authConfig.mcpBaseURL ?? authConfig.baseURL) });
   } catch (error) {
     if (!(error instanceof z.ZodError) && !(error instanceof NutritionError)) logDiaryLoadFailure("nutrition", error);
     return handleError(error);
@@ -90,7 +93,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) {
+  if (!isSameAllowedOrigin(request, getAuthConfig())) {
     return json({ message: "A same-origin request is required." }, 403);
   }
   const contentLength = Number(request.headers.get("content-length") ?? 0);

@@ -1,6 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  getAllowedOrigins,
+  getPrimaryOrigin,
+  isLegacyBrowserRedirectPath,
+  resolveRequestOrigin,
+} from "./lib/origins";
 
 export function proxy(request: NextRequest) {
+  const primaryOrigin = getPrimaryOrigin();
+  const allowedOrigins = getAllowedOrigins();
+  const reqOrigin = resolveRequestOrigin(request, allowedOrigins, primaryOrigin);
+  const isLegacyHost = reqOrigin !== primaryOrigin;
+
+  if (
+    process.env.REDIRECT_LEGACY_WEB_TO_PRIMARY === "true" &&
+    isLegacyHost &&
+    (request.method === "GET" || request.method === "HEAD") &&
+    isLegacyBrowserRedirectPath(request.nextUrl.pathname)
+  ) {
+    return NextResponse.redirect(
+      new URL(request.nextUrl.pathname + request.nextUrl.search, primaryOrigin),
+      301,
+    );
+  }
+
   const nonce = btoa(crypto.randomUUID());
   const turnstile = process.env.SIGNUP_MODE === "invite" || process.env.SIGNUP_MODE === "open";
   const challenge = turnstile ? " https://challenges.cloudflare.com" : "";
@@ -21,8 +44,24 @@ export function proxy(request: NextRequest) {
   response.headers.set("Cache-Control", "private, no-store");
   if (request.nextUrl.pathname.startsWith("/share/physique/")) {
     response.headers.set("X-Robots-Tag", "noindex, nofollow");
+  } else if (isLegacyHost) {
+    response.headers.set("X-Robots-Tag", "noindex");
   }
   return response;
 }
 
-export const config = { matcher: ["/", "/support", "/setup", "/reset-password", "/share/physique/:path*", "/api/:path*", "/oauth/:path*", "/mcp"] };
+export const config = {
+  matcher: [
+    "/",
+    "/connect",
+    "/privacy",
+    "/terms",
+    "/support",
+    "/setup",
+    "/reset-password",
+    "/share/physique/:path*",
+    "/api/:path*",
+    "/oauth/:path*",
+    "/mcp",
+  ],
+};

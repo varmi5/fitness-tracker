@@ -1,5 +1,6 @@
 import { FeedbackError, feedbackInput, feedbackUser, recordFeedback, sendFeedback, updateFeedbackStatus } from "../../../lib/feedback";
 import { requestGithubFix, sendToCanny } from "../../../lib/feedback-integrations";
+import { isSameAllowedOrigin } from "../../../lib/origins";
 import { getAuthConfig } from "../../../lib/runtime";
 
 const json = (data: unknown, status = 200) =>
@@ -32,7 +33,7 @@ async function readPayload(request: Request) {
 }
 
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) {
+  if (!isSameAllowedOrigin(request, getAuthConfig())) {
     return json({ message: "A same-origin request is required." }, 403);
   }
 

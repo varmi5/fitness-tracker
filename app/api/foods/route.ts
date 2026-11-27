@@ -3,6 +3,7 @@ import { searchBrandedFoods, FoodProviderError, barcodeFood } from "../../../lib
 import { catalogueCount, searchCatalogue } from "../../../lib/food-catalogue";
 import { nutritionData, NutritionError } from "../../../lib/nutrition-data";
 import { templateInput } from "../../../lib/nutrition-model";
+import { isSameAllowedOrigin } from "../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +38,7 @@ const action = z.discriminatedUnion("action", [
   z.object({ action: z.literal("delete"), id: z.uuid() }),
 ]);
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) return json({ message: "A same-origin request is required." }, 403);
+  if (!isSameAllowedOrigin(request, getAuthConfig())) return json({ message: "A same-origin request is required." }, 403);
   const user = await viewer(request);
   if (!user) return json({ message: "Please sign in." }, 401);
   try {

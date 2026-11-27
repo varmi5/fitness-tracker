@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { hevyConsentUrl, hevyOAuthConfigured } from "../../../../../lib/hevy";
 import { createOAuthState, parseOAuthReturnTo } from "../../../../../lib/oauth-state";
+import { getValidatedRequestOrigin } from "../../../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
 
 export const dynamic = "force-dynamic";
@@ -19,16 +20,17 @@ export async function GET(request: Request) {
   }
 
   const config = getAuthConfig();
+  const reqOrigin = getValidatedRequestOrigin(request, config);
   const returnTo = parseOAuthReturnTo(new URL(request.url).searchParams.get("returnTo"));
   const { state, sealed, maxAge } = await createOAuthState(getDatabase(), "hevy", session.user.id, { returnTo });
-  const callback = `${new URL(config.baseURL).origin}/api/integrations/hevy/callback`;
+  const callback = `${reqOrigin}/api/integrations/hevy/callback`;
   const consent = hevyConsentUrl(callback, state);
 
   const response = NextResponse.redirect(consent);
   response.cookies.set(OAUTH_COOKIE, sealed, {
     httpOnly: true,
     sameSite: "lax",
-    secure: new URL(config.baseURL).protocol === "https:",
+    secure: reqOrigin.startsWith("https:"),
     path: "/",
     maxAge,
   });

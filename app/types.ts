@@ -91,6 +91,7 @@ export interface InitialAppData {
   pulseInsights?: PulseInsightsView | null;
   audit: AuditEntry[];
   mcpEnabled: boolean;
+  mcpUrl?: string;
   syncToken: string;
 }
 

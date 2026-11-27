@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isSameAllowedOrigin } from "../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../lib/runtime";
 import { registerPush, reminderInput, reminderSettings, saveReminderSettings, unregisterPush } from "../../../lib/reminders";
 export const dynamic = "force-dynamic";
@@ -7,7 +8,7 @@ async function user(request: Request) { return authConfigured() ? (await getAuth
 export async function GET(request: Request) { const viewer = await user(request); return viewer ? json(await reminderSettings(getDatabase(), viewer.id)) : json({ message: "Please sign in." }, 401); }
 const input = z.discriminatedUnion("action", [z.object({ action: z.literal("settings"), data: reminderInput }), z.object({ action: z.literal("subscribe"), subscription: z.unknown() }), z.object({ action: z.literal("unsubscribe"), endpoint: z.string().max(2000) })]);
 export async function POST(request: Request) {
-  if (request.headers.get("origin") !== new URL(getAuthConfig().baseURL).origin) return json({ message: "A same-origin request is required." }, 403);
+  if (!isSameAllowedOrigin(request, getAuthConfig())) return json({ message: "A same-origin request is required." }, 403);
   const viewer = await user(request); if (!viewer) return json({ message: "Please sign in." }, 401);
   try {
     const data = input.parse(await request.json()); const db = getDatabase();

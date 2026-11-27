@@ -45,6 +45,7 @@ interface OnboardingWizardProps {
   openWearables?: OpenWearablesIntegrationStatus;
   hevy?: HevyIntegrationStatus;
   mcpEnabled: boolean;
+  mcpUrl?: string;
   busy: boolean;
   initialStep?: number;
   onClose: () => void;
@@ -76,6 +77,7 @@ export function OnboardingWizard({
   openWearables,
   hevy,
   mcpEnabled,
+  mcpUrl: configuredMcpUrl,
   busy,
   initialStep = 1,
   onClose,
@@ -197,7 +199,7 @@ export function OnboardingWizard({
     [estWeight, startingWeightKg, estHeight, heightCm, estAge, estSex, selectedActivity, bulkMode, wearableNote],
   );
 
-  const mcpUrl = typeof window !== "undefined" ? `${window.location.origin}/mcp` : "/mcp";
+  const mcpUrl = configuredMcpUrl || (typeof window !== "undefined" ? `${window.location.origin}/mcp` : "/mcp");
   const parsedManualTdee = Number(manualTdee.replace(",", "."));
   const hasValidManualTdee = Number.isFinite(parsedManualTdee) && parsedManualTdee >= 800 && parsedManualTdee <= 10000;
 

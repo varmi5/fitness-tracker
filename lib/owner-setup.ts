@@ -1,6 +1,7 @@
 import { equalCodes } from "./signup-config";
 import { eq } from "drizzle-orm";
 import { createAuth, type AuthConfig, type AuthDatabase } from "./auth";
+import { isSameAllowedOrigin } from "./origins";
 import { ownerSetup, user } from "./schema";
 
 export const SETUP_NOT_CONFIGURED = "Setup is not configured.";
@@ -42,7 +43,7 @@ export async function signUpOwner(request: Request, db: AuthDatabase, config: Au
   if (config.mode !== "closed") return problem(403, SIGNUP_CLOSED);
   const expectedCode = configuredCode(config.setupCode);
   if (!expectedCode) return problem(403, SETUP_NOT_CONFIGURED);
-  if (request.headers.get("origin") !== new URL(config.baseURL).origin) {
+  if (!isSameAllowedOrigin(request, config)) {
     return problem(403, "Signup requires a same-origin request.");
   }
 

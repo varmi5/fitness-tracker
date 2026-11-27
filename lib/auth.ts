@@ -11,6 +11,8 @@ export type AuthDatabase = PgDatabase<PgQueryResultHKT, typeof schema>;
 
 export interface AuthConfig {
   baseURL: string;
+  allowedOrigins?: string[];
+  mcpBaseURL?: string;
   secret: string;
   mode: string;
   mcpEnabled?: boolean;
@@ -20,9 +22,15 @@ export interface AuthConfig {
 
 export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner = false, allowMemberSignup = false) {
   const mcpActive = Boolean(config.mcpEnabled && !creatingOwner && !allowMemberSignup);
-  const resource = mcpResource(config.baseURL);
+  const primaryOrigin = new URL(config.baseURL).origin;
+  const allowedOrigins = config.allowedOrigins?.length
+    ? [...new Set([primaryOrigin, ...config.allowedOrigins])]
+    : [primaryOrigin];
+  const allowedHosts = [...new Set(allowedOrigins.map((o) => new URL(o).host))];
+  const mcpOrigin = new URL(config.mcpBaseURL ?? config.baseURL).origin;
+  const resource = mcpResource(mcpOrigin);
   const oauthPlugins = [
-    jwt({ jwt: { issuer: new URL(config.baseURL).origin } }),
+    jwt({ jwt: { issuer: mcpOrigin } }),
     oauthProvider({
       loginPage: "/oauth/login",
       consentPage: "/oauth/consent",
@@ -44,7 +52,15 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
   ] as const;
 
   return betterAuth({
-    baseURL: config.baseURL,
+    baseURL:
+      allowedOrigins.length > 1
+        ? {
+            allowedHosts,
+            protocol: new URL(config.baseURL).protocol === "https:" ? "https" : "http",
+            fallback: config.baseURL,
+          }
+        : config.baseURL,
+    trustedOrigins: allowedOrigins,
     secret: config.secret,
     database: drizzleAdapter(db, { provider: "pg", schema }),
     emailAndPassword: { enabled: true, disableSignUp: !creatingOwner && !allowMemberSignup,
@@ -57,7 +73,9 @@ export function createAuth(db: AuthDatabase, config: AuthConfig, creatingOwner =
       sendVerificationEmail: ({ user, url }) => config.sendEmail!(user.email, "Verify your FitnessTrackr email", url),
     } : undefined,
     plugins: [
-      passkey({ rpName: "FitnessTrackr", rpID: new URL(config.baseURL).hostname, origin: new URL(config.baseURL).origin }),
+      allowedOrigins.length > 1
+        ? passkey({ rpName: "FitnessTrackr" })
+        : passkey({ rpName: "FitnessTrackr", rpID: new URL(config.baseURL).hostname, origin: primaryOrigin }),
       ...(mcpActive ? oauthPlugins : []),
     ],
     session: { expiresIn: 90 * 86400, updateAge: 86400 },

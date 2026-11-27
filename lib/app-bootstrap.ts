@@ -1,5 +1,6 @@
 import { googleStatus } from "./google-health";
 import { hevyStatus } from "./hevy";
+import { mcpResource } from "./mcp-config";
 import { openWearablesStatus } from "./open-wearables";
 import { nutritionData } from "./nutrition-data";
 import { localDay } from "./nutrition-model";
@@ -66,6 +67,7 @@ export async function getAppBootstrap(requestHeaders: Headers): Promise<InitialA
         pulseInsights,
         audit,
         mcpEnabled: Boolean(config.mcpEnabled),
+        mcpUrl: mcpResource(config.mcpBaseURL ?? config.baseURL),
         syncToken,
   };
 }

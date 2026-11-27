@@ -4,6 +4,7 @@ import { connectHevy, exchangeHevyToken, hevyOAuthConfigured, syncHevyOAuth } fr
 import { nutritionData } from "../../../../../lib/nutrition-data";
 import { localDay } from "../../../../../lib/nutrition-model";
 import { consumeOAuthState, type OAuthReturnTo } from "../../../../../lib/oauth-state";
+import { getValidatedRequestOrigin } from "../../../../../lib/origins";
 import { authConfigured, getAuth, getAuthConfig, getDatabase } from "../../../../../lib/runtime";
 import { strainData } from "../../../../../lib/strain-data";
 
@@ -13,7 +14,7 @@ const OAUTH_COOKIE = "fitness_hevy_oauth";
 
 export async function GET(request: Request) {
   const config = getAuthConfig();
-  const origin = new URL(config.baseURL).origin;
+  const origin = getValidatedRequestOrigin(request, config);
   const destFor = (returnTo: OAuthReturnTo | null | undefined, params: Record<string, string>) => {
     const dest = new URL("/", origin);
     if (returnTo === "onboarding-3") dest.searchParams.set("onboarding", "3");
