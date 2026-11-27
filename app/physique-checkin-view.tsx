@@ -5,6 +5,8 @@ import { ArrowLeft, Pause, Pencil, Play, Plus, Trash2, X } from "lucide-react";
 import { extractPhotoDate, orderPhysiqueFrames } from "../lib/photo-date";
 import { PHYSIQUE_POSES, type PhysiqueCadence, type PhysiqueCheckinRecord, type PhysiquePose } from "../lib/physique-data";
 import { PHYSIQUE_FRAME_INTERVALS, PhysiquePlaybackSpeed, type PhysiqueSpeed } from "./physique-playback-speed";
+import { makeVault, openVault, protectCheckin, protectDetails, readProtectedCheckin } from "./physique-crypto";
+import type { PhysiqueVault } from "../lib/physique-protection";
 import { PhysiqueShareDialog } from "./physique-share-dialog";
 
 interface PhysiqueCheckinViewProps {
@@ -106,6 +108,14 @@ export function PhysiqueCheckinView({
   onMessage,
 }: PhysiqueCheckinViewProps) {
   const [checkins, setCheckins] = useState<PhysiqueCheckinRecord[]>([]);
+  const [hasUnprotected, setHasUnprotected] = useState(false);
+  const [vault, setVault] = useState<PhysiqueVault | null>(null);
+  const [vaultKey, setVaultKey] = useState<CryptoKey | null>(null);
+  const [passphrase, setPassphrase] = useState("");
+  const [confirmPassphrase, setConfirmPassphrase] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [poseFilter, setPoseFilter] = useState<PhysiquePose>("front");
   const [viewCadence, setViewCadence] = useState<PhysiqueCadence>("weekly");
@@ -133,19 +143,26 @@ export function PhysiqueCheckinView({
   useEffect(() => {
     let active = true;
     setLoading(true);
-    fetch("/api/physique", { cache: "no-store" })
-      .then(async (res) => (res.ok ? ((await res.json()) as { checkins: PhysiqueCheckinRecord[] }) : null))
-      .then((payload) => {
-        if (active && payload?.checkins) setCheckins(payload.checkins);
+    setLoadError(false);
+    fetch("/api/physique?status=1", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Could not load your check-ins.");
+        return await res.json() as { hasUnprotected: boolean; vault: PhysiqueVault | null };
       })
-      .catch(() => undefined)
+      .then((payload) => {
+        if (active) {
+          setHasUnprotected(payload.hasUnprotected);
+          setVault(payload.vault);
+        }
+      })
+      .catch(() => { if (active) setLoadError(true); })
       .finally(() => {
         if (active) setLoading(false);
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [loadAttempt]);
 
   const filteredNewest = useMemo(
     () =>
@@ -260,8 +277,60 @@ export function PhysiqueCheckinView({
     }
   }
 
+  async function unlock(e: FormEvent) {
+    e.preventDefault();
+    if (!vault && (passphrase.length < 12 || passphrase !== confirmPassphrase)) {
+      onMessage("Use a passphrase of at least 12 characters and enter it twice.");
+      return;
+    }
+    setUnlocking(true);
+    try {
+      let current = vault;
+      if (!current) {
+        const res = await fetch("/api/physique", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "vault", vault: await makeVault(passphrase) }),
+        });
+        if (!res.ok) throw new Error("Could not set up photo protection.");
+        current = (await res.json()).vault as PhysiqueVault;
+        setVault(current);
+      }
+      const key = await openVault(passphrase, current);
+      if (hasUnprotected) {
+        for (;;) {
+          const remaining = await fetch("/api/physique?unprotected=1", { cache: "no-store" });
+          if (!remaining.ok) throw new Error("Could not load older check-ins.");
+          const batch = (await remaining.json()).checkins as PhysiqueCheckinRecord[];
+          if (!batch.length) break;
+          for (const entry of batch) {
+            const response = await fetch("/api/physique", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "migrate", id: entry.id, protection: await protectCheckin(key, entry) }),
+            });
+            if (!response.ok && response.status !== 404) throw new Error("Could not protect all check-ins. Unlock again to continue.");
+          }
+        }
+        setHasUnprotected(false);
+      }
+      const response = await fetch("/api/physique", { cache: "no-store" });
+      if (!response.ok) throw new Error("Could not load your check-ins.");
+      const entries = (await response.json()).checkins as PhysiqueCheckinRecord[];
+      const opened: PhysiqueCheckinRecord[] = [];
+      for (const entry of entries) opened.push(await readProtectedCheckin(key, entry));
+      setCheckins(opened);
+      setVaultKey(key);
+      setPassphrase("");
+      setConfirmPassphrase("");
+    } catch (err) {
+      onMessage(err instanceof Error ? err.message : "Could not unlock Physique.");
+    } finally {
+      setUnlocking(false);
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!vaultKey) return;
     if (pendingUploads.length === 0) {
       onMessage("Choose at least one check-in photo first.");
       return;
@@ -296,16 +365,20 @@ export function PhysiqueCheckinView({
               day: item.day,
               pose: item.pose,
               cadence: viewCadence,
-              photoData: item.photoData,
-              weightKg: parsedWeight === "invalid" ? null : parsedWeight,
-              note: item.note,
+              protection: await protectCheckin(vaultKey, {
+                photoData: item.photoData,
+                weightKg: parsedWeight === "invalid" ? null : parsedWeight,
+                note: item.note,
+                bodyFatPct: null,
+              }),
             },
           }),
         });
         const payload = await res.json();
         if (!res.ok) throw new Error(payload.message ?? "Could not save check-in.");
 
-        setCheckins((prev) => [payload.checkin, ...prev]);
+        const opened = await readProtectedCheckin(vaultKey, payload.checkin);
+        setCheckins((prev) => [opened, ...prev]);
         setPendingUploads((prev) => prev.filter((p) => p.localId !== item.localId));
         savedPoses.push(item.pose);
         savedCount++;
@@ -334,6 +407,8 @@ export function PhysiqueCheckinView({
 
   async function handleSaveEdit(e: FormEvent, id: string) {
     e.preventDefault();
+    const current = checkins.find((item) => item.id === id);
+    if (!vaultKey || !current?.protection) return;
     const parsedWeight = parseOptionalWeight(editWeightKg);
     if (parsedWeight === "invalid") {
       onMessage("Enter a valid weight in kg or leave it blank.");
@@ -351,14 +426,14 @@ export function PhysiqueCheckinView({
           data: {
             day: editDay,
             pose: editPose,
-            weightKg: parsedWeight,
-            note: editNote,
+            details: await protectDetails(vaultKey, { weightKg: parsedWeight, note: editNote, bodyFatPct: current.bodyFatPct }, current.protection.wrappedKey),
           },
         }),
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Could not update check-in.");
-      setCheckins((prev) => prev.map((c) => (c.id === id ? payload.checkin : c)));
+      const opened = await readProtectedCheckin(vaultKey, payload.checkin);
+      setCheckins((prev) => prev.map((c) => (c.id === id ? opened : c)));
       setEditingId(null);
       if (editPose !== poseFilter) {
         setPoseFilter(editPose);
@@ -412,7 +487,7 @@ export function PhysiqueCheckinView({
           <ArrowLeft size={16} /> Back
         </button>
         <h1 style={{ fontSize: "1.12rem", margin: 0, flex: 1, textAlign: "center" }}>Physique</h1>
-        <div className="physique-header-actions">
+        {vaultKey && <div className="physique-header-actions">
           <select
             className="physique-pose-select"
             aria-label="Filter pose"
@@ -428,12 +503,30 @@ export function PhysiqueCheckinView({
           <button type="button" className="compact" onClick={handleToggleAdd} style={{ minHeight: "36px" }}>
             <Plus size={15} /> Add
           </button>
-        </div>
+        </div>}
       </div>
 
-      {!loading && <PhysiqueShareDialog checkins={checkins} />}
+      {!vaultKey && (
+        <section className="card physique-lock" aria-label="Physique protection">
+          <h2>{vault ? "Unlock Physique" : "Protect your check-ins"}</h2>
+          {loading ? <p role="status">Loading check-ins…</p> : loadError ?
+            <button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Retry loading check-ins</button> : (
+            <form className="physique-lock" onSubmit={(event) => void unlock(event)}>
+              <p className="metric-provenance">Your passphrase stays on this device. Keep it safe so you can unlock your check-ins on any device. FitnessTrackr can’t recover this passphrase.</p>
+              {hasUnprotected && <p className="metric-provenance">Unlocking protects your existing photos and turns off any link that shares them. You can create a new link after this.</p>}
+              <label>Physique passphrase<input type="password" autoComplete={vault ? "current-password" : "new-password"}
+                minLength={vault ? 1 : 12} maxLength={512} required value={passphrase} onChange={(event) => setPassphrase(event.target.value)} /></label>
+              {!vault && <label>Confirm passphrase<input type="password" autoComplete="new-password" required
+                maxLength={512} value={confirmPassphrase} onChange={(event) => setConfirmPassphrase(event.target.value)} /></label>}
+              <button type="submit" disabled={unlocking}>{unlocking ? "Unlocking…" : vault ? "Unlock" : "Set passphrase"}</button>
+            </form>
+          )}
+        </section>
+      )}
 
-      {showUpload && (
+      {vaultKey && <PhysiqueShareDialog checkins={checkins} vaultKey={vaultKey} />}
+
+      {vaultKey && showUpload && (
         <form className="card" onSubmit={(e) => void handleSubmit(e)}>
           <div className="split-row">
             <h2>Add check-ins</h2>
@@ -566,7 +659,7 @@ export function PhysiqueCheckinView({
       )}
 
       {/* Photo & Timelapse Viewer */}
-      {timelapseFrames.length >= 1 && activeFrame && (
+      {vaultKey && timelapseFrames.length >= 1 && activeFrame && (
         <section className="card physique-player" aria-label="Physique timelapse">
           <div className="physique-viewer-bar">
             <div className="physique-pill-toggle" role="group" aria-label="Timelapse cadence">
@@ -619,9 +712,7 @@ export function PhysiqueCheckinView({
         </section>
       )}
 
-      {loading ? (
-        <p className="empty">Loading check-ins…</p>
-      ) : filteredNewest.length === 0 ? (
+      {vaultKey && (filteredNewest.length === 0 ? (
         <section className="card">
           <p className="empty">
             No {poseFilter} check-in photos yet. Tap <strong>+ Add</strong> to capture your first progress shot.
@@ -745,7 +836,7 @@ export function PhysiqueCheckinView({
             );
           })}
         </div>
-      )}
+      ))}
     </>
   );
 }

@@ -1,9 +1,10 @@
+import { metricPreference } from "./data-source-settings";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { addDays } from "./nutrition-model";
 import * as schema from "./schema";
 import { computePulseRecovery, selectNonOverlappingSleepSessions, type PulseRecoveryDayInput } from "./pulse-engine";
-import { pickRecoveryRowForDay } from "./source-priority";
+import { DEFAULT_RECOVERY_PRIORITY, isSourceVisible, rankSources, selectRecoveryByDay } from "./source-priority";
 
 export interface RecoverySleepInput {
   minutesAsleep: number;
@@ -276,26 +277,31 @@ export async function getRecoveryInsightsForUser(
         ),
       ),
     db
-      .select({ primaryRecoverySource: schema.nutritionPreference.primaryRecoverySource })
+      .select({ primaryRecoverySource: schema.nutritionPreference.primaryRecoverySource, sourceSettings: schema.nutritionPreference.sourceSettings })
       .from(schema.nutritionPreference)
       .where(eq(schema.nutritionPreference.userId, userId))
       .limit(1),
   ]);
 
-  const sessionDays = new Set(sessionRows.map((r) => r.day));
+  const primaryRecoverySource = prefRows[0]?.primaryRecoverySource;
+  const sourceSettings = prefRows[0]?.sourceSettings ?? {};
+  const sleepPreference = metricPreference(sourceSettings, "sleep", primaryRecoverySource);
+  const priorities = rankSources(sleepPreference, DEFAULT_RECOVERY_PRIORITY);
+  const rank = (source: string) => priorities.includes(source) ? priorities.indexOf(source) : priorities.length;
+  const sessionDays = new Set(sessionRows.filter((row) => row.isMainSleep).map((row) => `${row.source}:${row.day}`));
   const sleepRecords = selectNonOverlappingSleepSessions([
-    ...sessionRows.filter((r) => r.processed !== false).map((r) => ({ ...r, coverageComplete: false })),
-    ...sleepRows.filter((r) => !sessionDays.has(r.day)).map((r) => ({ ...r, isMainSleep: true, coverageComplete: false })),
-  ]);
+    ...sessionRows.filter((r) => r.processed !== false && isSourceVisible(sleepPreference, r.source)).map((r) => ({ ...r, coverageComplete: false })),
+    ...sleepRows.filter((r) => isSourceVisible(sleepPreference, r.source) && !sessionDays.has(`${r.source}:${r.day}`))
+      .map((r) => ({ ...r, isMainSleep: true, coverageComplete: false })),
+  ], new Date(), (a, b) => rank(a.source) - rank(b.source));
   const sleepByDay = new Map<string, (typeof sleepRecords)[number]>();
   for (const s of sleepRecords) {
     if (s.isMainSleep === false) continue;
     const prev = sleepByDay.get(s.day);
-    if (!prev || s.minutesAsleep > prev.minutesAsleep) sleepByDay.set(s.day, s);
+    if (!prev || rank(s.source) < rank(prev.source) || (rank(s.source) === rank(prev.source) && s.minutesAsleep > prev.minutesAsleep)) sleepByDay.set(s.day, s);
   }
 
-  const primaryRecoverySource = prefRows[0]?.primaryRecoverySource ?? "auto";
-  const recByDay = pickRecoveryRowForDay(recoveryRows, primaryRecoverySource);
+  const recByDay = selectRecoveryByDay(recoveryRows, sourceSettings, primaryRecoverySource);
 
   const todaySleep = sleepByDay.get(day) ?? null;
   const todayRecovery = recByDay.get(day) ?? null;
@@ -306,6 +312,7 @@ export async function getRecoveryInsightsForUser(
     const s = sleepByDay.get(d);
     return {
       source: r?.source,
+      metricSources: r?.metricSources,
       hrvRmssdMs: r?.hrvRmssdMs ?? null,
       restingHrBpm: r?.restingHrBpm ?? null,
       respiratoryRate: r?.respiratoryRate ?? null,
@@ -315,8 +322,8 @@ export async function getRecoveryInsightsForUser(
   });
 
   const priorSleeps = [...sleepByDay.values()].filter((r) => r.day < day && r.minutesAsleep > 0);
-  const priorRhrs = [...recByDay.values()].filter((r) => r.day < day && r.restingHrBpm != null).map((r) => r.restingHrBpm as number);
-  const priorHrvs = [...recByDay.values()].filter((r) => r.day < day && r.hrvRmssdMs != null).map((r) => r.hrvRmssdMs as number);
+  const priorRhrs = [...recByDay.values()].filter((r) => r && r.day < day && r.restingHrBpm != null).map((r) => r!.restingHrBpm as number);
+  const priorHrvs = [...recByDay.values()].filter((r) => r && r.day < day && r.hrvRmssdMs != null).map((r) => r!.hrvRmssdMs as number);
 
   const baseline: RecoveryBaselineInput = {
     avgSleepMinutes: avg(priorSleeps.map((s) => s.minutesAsleep)),

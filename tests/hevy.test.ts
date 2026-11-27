@@ -8,6 +8,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import {
   connectHevy,
   disconnectHevy,
+  dedupeHevyWorkouts,
   findMatchingGoogleWorkout,
   hevyStatus,
   importHevyWorkouts,
@@ -201,4 +202,20 @@ test("syncHevyOAuth paginates /v1/workouts and disconnectHevy cleans up credenti
     globalThis.fetch = originalFetch;
     delete process.env.FITNESS_INTEGRATION_KEY;
   }
+});
+
+test("Hevy matches overlapping strength and de-duplicates an export paired with a live record", () => {
+  const day = "2026-11-23";
+  const startTime = new Date(day + "T12:00:00Z");
+  const endTime = new Date(day + "T13:00:00Z");
+  const session = { day, startTime, endTime, title: "Bench Session" };
+  const csv = { ...session, source: "hevy_csv" };
+  const live = { ...session, source: "hevy_oauth" };
+  assert.deepEqual(dedupeHevyWorkouts([csv, live]), [live]);
+  assert.equal(findMatchingGoogleWorkout(startTime.toISOString(), endTime.toISOString(), [
+    { ...session, avgHrBpm: 140, sessionId: "run", exerciseType: "running" },
+  ]), null);
+  assert.equal(findMatchingGoogleWorkout(startTime.toISOString(), endTime.toISOString(), [
+    { ...session, avgHrBpm: 120, sessionId: "strength", exerciseType: "strength_training" },
+  ])?.sessionId, "strength");
 });

@@ -158,6 +158,17 @@ export interface PulseRecoveryDayInput {
   skinTempDeltaC: number | null;
   sleepHours: number | null;
   source?: string;
+  metricSources?: Partial<Record<"hrvRmssdMs" | "restingHrBpm" | "respiratoryRate" | "skinTempDeltaC", string>>;
+}
+
+export function recoveryBaselineForSource(today: PulseRecoveryDayInput, past: PulseRecoveryDayInput): PulseRecoveryDayInput {
+  const comparable = { ...past };
+  for (const metric of ["hrvRmssdMs", "restingHrBpm", "respiratoryRate", "skinTempDeltaC"] as const) {
+    const current = today.metricSources?.[metric] ?? today.source;
+    const previous = past.metricSources?.[metric] ?? past.source;
+    if (current && previous && current !== previous) comparable[metric] = null;
+  }
+  return comparable;
 }
 
 export function computePulseRecovery(
@@ -165,11 +176,7 @@ export function computePulseRecovery(
   priorDays: PulseRecoveryDayInput[],
   sleepNeedHours = 8.0,
 ): PulseRecoveryResult {
-  priorDays = priorDays.map((d) =>
-    today.source && d.source && d.source !== today.source
-      ? { ...d, hrvRmssdMs: null, restingHrBpm: null, respiratoryRate: null, skinTempDeltaC: null }
-      : d,
-  );
+  priorDays = priorDays.map((d) => recoveryBaselineForSource(today, d));
   const hrvBase = foldBaselineSeries(
     priorDays.map((d) => (d.hrvRmssdMs != null && d.hrvRmssdMs > 0 ? Math.log(d.hrvRmssdMs) : null)),
     PULSE_METRIC_CFG.readinessHrvLn,
@@ -418,11 +425,13 @@ function fmtMinutesHHMM(mins: number): string {
 }
 
 /** Drop overlapping provider sessions rather than double-crediting their durations. */
-export function selectNonOverlappingSleepSessions(nights: SleepNightRecord[], now = new Date()): SleepNightRecord[] {
+export function selectNonOverlappingSleepSessions<T extends SleepNightRecord>(
+  nights: T[], now = new Date(), compareSources: (a: T, b: T) => number = () => 0,
+): T[] {
   const candidates = nights.filter((n) => n.sleepStart && n.sleepEnd && n.sleepEnd > n.sleepStart && n.sleepEnd <= now
     && Number.isFinite(n.minutesAsleep) && n.minutesAsleep > 0 && n.minutesAsleep <= (n.sleepEnd.getTime() - n.sleepStart.getTime()) / 60000 + 1)
-    .sort((a, b) => Number(b.isMainSleep !== false) - Number(a.isMainSleep !== false) || b.minutesAsleep - a.minutesAsleep || a.sleepStart!.getTime() - b.sleepStart!.getTime());
-  const kept: SleepNightRecord[] = [];
+    .sort((a, b) => Number(b.isMainSleep !== false) - Number(a.isMainSleep !== false) || compareSources(a, b) || b.minutesAsleep - a.minutesAsleep || a.sleepStart!.getTime() - b.sleepStart!.getTime());
+  const kept: T[] = [];
   for (const n of candidates) {
     if (kept.some((k) => n.sleepStart! < k.sleepEnd! && n.sleepEnd! > k.sleepStart!)) continue;
     kept.push(n);

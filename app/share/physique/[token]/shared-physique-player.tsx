@@ -2,10 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw } from "lucide-react";
+import type { PhysiqueKey } from "../../../../lib/physique-protection";
+import { readSharedPhoto } from "../../../physique-crypto";
 import type { PhysiquePose } from "../../../../lib/physique-data";
 import { PHYSIQUE_FRAME_INTERVALS, PhysiquePlaybackSpeed, type PhysiqueSpeed } from "../../../physique-playback-speed";
 
 interface SharedPhysiqueFrame {
+  id: string;
+  wrappedKey?: PhysiqueKey;
   day: string;
   src: string;
 }
@@ -79,8 +83,8 @@ function PoseTimelapse({ track, speed }: { track: SharedPhysiqueTrack; speed: Ph
     <>
       <div className="physique-stage shared-physique-stage" ref={stage}>
         {frames.slice(index, index + 2).map((photo, offset) => (
-          <img key={`${photo.src}-${attempt}`} src={photo.src} className={offset === 0 ? undefined : "shared-physique-next"}
-            alt={offset === 0 ? `${pose} progress photo, ${date}` : ""} aria-hidden={offset !== 0 || failedSrc === photo.src}
+          <SharedFrame key={`${photo.src}-${attempt}`} frame={photo} hidden={offset !== 0 || failedSrc === photo.src}
+            alt={offset === 0 ? `${pose} progress photo, ${date}` : ""}
             onLoad={() => {
               setFailedSrc((failed) => failed === photo.src ? null : failed);
               setLoadVersion((version) => version + 1);
@@ -111,7 +115,7 @@ function PoseTimelapse({ track, speed }: { track: SharedPhysiqueTrack; speed: Ph
       )}
       {hasFailure && (
         <div className="split-row">
-          <p className="metric-provenance" role="status">A photo couldn’t load.</p>
+          <p className="metric-provenance" role="status">A photo couldn’t load. Check that you opened the full share link.</p>
           <button type="button" className="secondary compact" onClick={() => {
             setFailedSrc(null);
             setAttempt((value) => value + 1);
@@ -120,4 +124,34 @@ function PoseTimelapse({ track, speed }: { track: SharedPhysiqueTrack; speed: Ph
       )}
     </>
   );
+}
+
+
+function SharedFrame({ frame, hidden, alt, onLoad, onError }: {
+  frame: SharedPhysiqueFrame;
+  hidden: boolean;
+  alt: string;
+  onLoad: () => void;
+  onError: () => void;
+}) {
+  const [imageSrc, setImageSrc] = useState(frame.wrappedKey ? null : frame.src);
+  const error = useRef(onError);
+  error.current = onError;
+
+  useEffect(() => {
+    if (!frame.wrappedKey) return;
+    const cancel = new AbortController();
+    async function load() {
+      const secret = decodeURIComponent(window.location.hash.slice(1));
+      if (!secret || !frame.wrappedKey) throw new Error("The link is missing its photo key.");
+      const response = await fetch(frame.src, { cache: "no-store", signal: cancel.signal });
+      if (!response.ok) throw new Error("This photo is unavailable.");
+      const photo = await readSharedPhoto(secret, frame.wrappedKey, frame.id, await response.json());
+      if (!cancel.signal.aborted) setImageSrc(photo);
+    }
+    void load().catch(() => { if (!cancel.signal.aborted) error.current(); });
+    return () => cancel.abort();
+  }, [frame]);
+
+  return imageSrc ? <img src={imageSrc} alt={alt} aria-hidden={hidden} onLoad={onLoad} onError={onError} /> : null;
 }

@@ -1,3 +1,6 @@
+import { metricPreference, RECOVERY_FIELDS, type SourcePreference, type SourceSettings } from "./data-source-settings";
+type RecoveryField = (typeof RECOVERY_FIELDS)[number];
+
 export const DEFAULT_RECOVERY_PRIORITY = [
   "google",
   "oura",
@@ -56,6 +59,7 @@ const SOURCE_LABELS: Record<string, string> = {
   strava: "Strava",
   withings: "Withings",
   manual: "Manual",
+  hevy: "Hevy",
 };
 
 export function formatSourceLabel(source: string): string {
@@ -71,14 +75,21 @@ export function linkedWearableProviders(connection?: { connected: boolean; provi
   };
 }
 
-export function rankSources(preferred: string | null | undefined, defaults: readonly string[]): string[] {
-  const cleanPref = preferred && preferred !== "auto" ? preferred.trim().toLowerCase() : null;
-  const order: string[] = [];
-  if (cleanPref) order.push(cleanPref);
-  for (const s of defaults) {
-    if (!order.includes(s)) order.push(s);
-  }
-  return order;
+export function isSourceVisible(preference: SourcePreference, source: string) {
+  return !preference || typeof preference === "string" || !preference.hidden.includes(source);
+}
+
+export function rankSources(preference: SourcePreference, defaults: readonly string[]): string[] {
+  const preferred = typeof preference === "string" ? [preference.trim().toLowerCase()] : preference?.priority ?? [];
+  return [...new Set([...preferred, ...defaults])].filter((source) => source !== "auto" && isSourceVisible(preference, source));
+}
+
+export function pickSourceRow<T extends { source: string }>(
+  rows: readonly T[], preference: SourcePreference, defaults: readonly string[], hasData: (row: T) => boolean,
+): T | null {
+  const order = rankSources(preference, defaults);
+  return rows.filter((row) => isSourceVisible(preference, row.source) && hasData(row))
+    .sort((a, b) => sourceRankIndex(a.source, order) - sourceRankIndex(b.source, order))[0] ?? null;
 }
 
 function sourceRankIndex(source: string, order: string[]): number {
@@ -86,7 +97,7 @@ function sourceRankIndex(source: string, order: string[]): number {
   return idx >= 0 ? idx : order.length + 1;
 }
 
-function sessionBoundsMs(w: { startTime: Date | null; endTime: Date | null; durationSeconds: number | null }): { start: number; end: number } | null {
+export function sessionBoundsMs(w: { startTime: Date | null; endTime: Date | null; durationSeconds: number | null }): { start: number; end: number } | null {
   if (!w.startTime) return null;
   const start = w.startTime.getTime();
   const end = w.endTime ? w.endTime.getTime() : start + Math.max(0, w.durationSeconds ?? 0) * 1000;
@@ -94,19 +105,39 @@ function sessionBoundsMs(w: { startTime: Date | null; endTime: Date | null; dura
   return { start, end };
 }
 
-export function workoutsOverlap(
-  a: { startTime: Date | null; endTime: Date | null; durationSeconds: number | null },
-  b: { startTime: Date | null; endTime: Date | null; durationSeconds: number | null },
-): boolean {
+type WorkoutWindow = {
+  startTime: Date | null;
+  endTime: Date | null;
+  durationSeconds: number | null;
+  exerciseType?: string;
+  title?: string;
+};
+
+export function workoutCategory(workout: Pick<WorkoutWindow, "exerciseType" | "title">) {
+  const type = workout.exerciseType?.trim().toLowerCase().replace(/[_-]/g, " ") ?? "";
+  const title = workout.title?.trim().toLowerCase() ?? "";
+  const category = (word: string) => {
+    if (/strength|weightlifting|weight train|resistance|crossfit|calisthenic|weight lift/.test(word)) return "strength";
+    if (/run|jog/.test(word)) return "run";
+    if (/walk|hik/.test(word)) return "walk";
+    if (/cycl|bike|bik/.test(word)) return "cycle";
+    if (/swim/.test(word)) return "swim";
+    if (/row(ing|er)?\b/.test(word)) return "row";
+    return null;
+  };
+  return category(type) ?? category(title) ?? (type && !/^(workout|exercise|activity|other|unknown|generic|\d+)$/.test(type) ? type : null);
+}
+
+export function workoutsOverlap(a: WorkoutWindow, b: WorkoutWindow): boolean {
   const ba = sessionBoundsMs(a);
   const bb = sessionBoundsMs(b);
   if (!ba || !bb) return false;
+  const aCategory = workoutCategory(a);
+  const bCategory = workoutCategory(b);
+  if (aCategory && bCategory && aCategory !== bCategory) return false;
   const overlap = Math.min(ba.end, bb.end) - Math.max(ba.start, bb.start);
-  if (overlap <= 0) return false;
-  const shorter = Math.min(ba.end - ba.start, bb.end - bb.start);
-  if (shorter <= 0) return false;
-  if (overlap / shorter >= 0.5) return true;
-  return Math.abs(ba.start - bb.start) <= 10 * 60 * 1000;
+  const longest = Math.max(ba.end - ba.start, bb.end - bb.start);
+  return overlap >= longest * (aCategory && bCategory ? 0.7 : 0.8);
 }
 
 /**
@@ -114,11 +145,12 @@ export function workoutsOverlap(
  * while preserving separate non-overlapping workouts (e.g. Fitbit off for Apple Watch run).
  */
 export function dedupeWorkoutsAcrossSources<
-  T extends { source: string; sessionId: string; startTime: Date | null; endTime: Date | null; durationSeconds: number | null },
->(workouts: T[], primaryWorkoutSource?: string | null): T[] {
-  if (workouts.length <= 1) return workouts;
+  T extends WorkoutWindow & { source: string; sessionId: string },
+>(workouts: T[], primaryWorkoutSource?: SourcePreference): T[] {
+  const visible = workouts.filter((row) => isSourceVisible(primaryWorkoutSource, row.source));
+  if (visible.length <= 1) return visible;
   const order = rankSources(primaryWorkoutSource, DEFAULT_WORKOUT_PRIORITY);
-  const ranked = [...workouts].sort((a, b) => {
+  const ranked = visible.sort((a, b) => {
     const ra = sourceRankIndex(a.source, order);
     const rb = sourceRankIndex(b.source, order);
     if (ra !== rb) return ra - rb;
@@ -147,11 +179,11 @@ export function selectHrSamplesForWindow<T extends { source?: string; recordedAt
   samples: T[],
   startMs: number,
   endMs: number,
-  preferredSource?: string | null,
+  preferredSource?: SourcePreference,
 ): T[] {
   const inside = samples.filter((s) => {
     const t = toMs(s.recordedAt);
-    return t >= startMs && t <= endMs;
+    return t >= startMs && t <= endMs && isSourceVisible(preferredSource, s.source ?? "unknown");
   });
   if (inside.length <= 1) return inside;
 
@@ -164,9 +196,10 @@ export function selectHrSamplesForWindow<T extends { source?: string; recordedAt
   }
   if (bySource.size <= 1) return inside;
 
-  if (preferredSource && preferredSource !== "auto") {
-    const pref = bySource.get(preferredSource);
-    if (pref && pref.length > 0) return pref;
+  const requested = rankSources(preferredSource, []);
+  for (const source of requested) {
+    const pref = bySource.get(source);
+    if (pref?.length) return pref;
   }
 
   let best: T[] = inside;
@@ -186,8 +219,9 @@ export function selectHrSamplesForWindow<T extends { source?: string; recordedAt
  */
 export function selectDailyHrStream<T extends { source?: string; recordedAt: Date | string; bpm: number }>(
   samples: T[],
-  primarySource?: string | null,
+  primarySource?: SourcePreference,
 ): T[] {
+  samples = samples.filter((sample) => isSourceVisible(primarySource, sample.source ?? "unknown"));
   if (samples.length <= 1) return samples;
   const sources = new Set(samples.map((s) => s.source ?? "unknown"));
   if (sources.size <= 1) return samples;
@@ -268,11 +302,11 @@ export function pickRecoveryRowForDay<
     respiratoryRate?: number | null;
     skinTempDeltaC?: number | null;
   },
->(rows: T[], primaryRecoverySource?: string | null): Map<string, T> {
+>(rows: T[], primaryRecoverySource?: SourcePreference): Map<string, T> {
   const order = rankSources(primaryRecoverySource, DEFAULT_RECOVERY_PRIORITY);
   const byDay = new Map<string, T>();
 
-  const sorted = [...rows].sort((a, b) => {
+  const sorted = rows.filter((r) => isSourceVisible(primaryRecoverySource, r.source)).sort((a, b) => {
     const aHas = hasRecoveryVitals(a) ? 0 : 1;
     const bHas = hasRecoveryVitals(b) ? 0 : 1;
     if (aHas !== bHas) return aHas - bHas;
@@ -292,11 +326,11 @@ export function pickRecoveryRowForDay<
 
 export function pickDailyEnergyRow<T extends { source: string; totalKcal?: number | null; steps?: number | null }>(
   rows: T[],
-  primarySource?: string | null,
+  primarySource?: SourcePreference,
 ): T | null {
   if (rows.length === 0) return null;
   const order = rankSources(primarySource, DEFAULT_ENERGY_PRIORITY);
-  return [...rows].sort((a, b) => {
+  return rows.filter((r) => isSourceVisible(primarySource, r.source)).sort((a, b) => {
     const ra = sourceRankIndex(a.source, order);
     const rb = sourceRankIndex(b.source, order);
     if (ra !== rb) return ra - rb;
@@ -304,4 +338,34 @@ export function pickDailyEnergyRow<T extends { source: string; totalKcal?: numbe
     const bCompleteness = (b.totalKcal != null ? 2 : 0) + (b.steps != null ? 1 : 0);
     return bCompleteness - aCompleteness;
   })[0] ?? null;
+}
+
+/** Fill gaps field by field while retaining the origin of each recovery reading. */
+export function applyRecoverySourceSettings<T extends { source: string } & Record<RecoveryField, number | null>>(
+  rows: readonly T[], base: T | null, settings: SourceSettings, legacy?: string,
+): (T & { metricSources?: Partial<Record<RecoveryField, string>> }) | null {
+  const result = base ? { ...base } : rows[0] ? { ...rows[0] } : null;
+  if (!result) return null;
+  const metricSources: Partial<Record<RecoveryField, string>> = {};
+  for (const field of RECOVERY_FIELDS) {
+    const chosen = settings[field] || base?.[field] == null
+      ? pickSourceRow(rows, metricPreference(settings, field, legacy), DEFAULT_RECOVERY_PRIORITY, (row) => row[field] != null)
+      : base;
+    result[field] = chosen?.[field] ?? null;
+    if (chosen) metricSources[field] = chosen.source;
+  }
+  return Object.keys(metricSources).length ? { ...result, metricSources } : null;
+}
+
+export function selectRecoveryByDay<T extends { source: string; day: string; syncedAt: Date } & Record<RecoveryField, number | null>>(
+  rows: T[], settings: SourceSettings, legacy?: string,
+) {
+  const groups = new Map<string, T[]>();
+  for (const row of rows) {
+    const day = groups.get(row.day) ?? [];
+    day.push(row);
+    groups.set(row.day, day);
+  }
+  const selected = pickRecoveryRowForDay(rows, legacy);
+  return new Map([...groups].map(([day, items]) => [day, applyRecoverySourceSettings(items, selected.get(day) ?? null, settings, legacy)]));
 }

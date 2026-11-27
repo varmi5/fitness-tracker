@@ -4,6 +4,7 @@ import { useEffect, useId, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, ChevronDown, Copy, Share2, X } from "lucide-react";
 import { PHYSIQUE_POSES, type PhysiqueCheckinRecord, type PhysiquePose } from "../lib/physique-data";
+import { protectShare, reopenShare } from "./physique-crypto";
 import type { PhysiqueShareLink } from "../lib/physique-share";
 
 async function readShareResponse(response: Response): Promise<PhysiqueShareLink | null> {
@@ -12,8 +13,9 @@ async function readShareResponse(response: Response): Promise<PhysiqueShareLink 
   return payload.link;
 }
 
-export function PhysiqueShareDialog({ checkins }: { checkins: PhysiqueCheckinRecord[] }) {
+export function PhysiqueShareDialog({ checkins, vaultKey }: { checkins: PhysiqueCheckinRecord[]; vaultKey: CryptoKey }) {
   const [open, setOpen] = useState(false);
+  const [secret, setSecret] = useState("");
   const [link, setLink] = useState<PhysiqueShareLink | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [excludedPoses, setExcludedPoses] = useState<PhysiquePose[]>([]);
@@ -29,8 +31,10 @@ export function PhysiqueShareDialog({ checkins }: { checkins: PhysiqueCheckinRec
     const controller = new AbortController();
     void fetch("/api/physique/share", { cache: "no-store", signal: controller.signal })
       .then(readShareResponse)
-      .then((current) => {
+      .then(async (current) => {
+        const fragment = current?.protection ? await reopenShare(vaultKey, current.protection.ownerKey) : "";
         if (controller.signal.aborted) return;
+        setSecret(fragment);
         setLink(current);
         setSelected(current?.checkinIds ?? []);
         setReady(true);
@@ -39,14 +43,14 @@ export function PhysiqueShareDialog({ checkins }: { checkins: PhysiqueCheckinRec
         if (!controller.signal.aborted) setError("Could not load sharing. Close this sheet and try again.");
       });
     return () => controller.abort();
-  }, [open]);
+  }, [open, vaultKey]);
 
   const chosenIds = new Set(selected);
   const chosenPhotos = checkins.filter((item) => chosenIds.has(item.id) && !excludedPoses.includes(item.pose));
   const availableIds = chosenPhotos.map((item) => item.id);
   const poseCount = new Set(chosenPhotos.map((item) => item.pose)).size;
   const changed = link == null || availableIds.length !== link.checkinIds.length || availableIds.some((id) => !link.checkinIds.includes(id));
-  const url = link && typeof window !== "undefined" ? `${window.location.origin}/share/physique/${link.token}` : "";
+  const url = link && typeof window !== "undefined" ? `${window.location.origin}/share/physique/${link.token}${secret ? `#${encodeURIComponent(secret)}` : ""}` : "";
 
   function togglePose(pose: PhysiquePose, photos: PhysiqueCheckinRecord[], included: boolean) {
     if (included) {
@@ -74,13 +78,15 @@ export function PhysiqueShareDialog({ checkins }: { checkins: PhysiqueCheckinRec
     setError(null);
     setNotice("");
     try {
+      const encrypted = action === "save" ? await protectShare(vaultKey, chosenPhotos) : null;
       const response = await fetch("/api/physique/share", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, checkinIds: availableIds, currentToken: link?.token ?? null }),
+        body: JSON.stringify({ action, checkinIds: availableIds, currentToken: link?.token ?? null, protection: encrypted?.protection }),
       });
       const updated = await readShareResponse(response);
       setLink(updated);
+      setSecret(encrypted?.secret ?? "");
       setSelected(updated?.checkinIds ?? []);
       setExcludedPoses([]);
       setNotice(updated ? "Link ready to share." : "Sharing stopped.");

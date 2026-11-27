@@ -5,7 +5,8 @@ import type { AuthDatabase } from "./auth";
 import { analyzeHeartRateCoverage, googleConfigured, seal, unseal } from "./google-health";
 import { NutritionError, nutritionData } from "./nutrition-data";
 import { DEFAULT_TIMEZONE, localDay } from "./nutrition-model";
-import { dailyWorkout, healthIntegration, heartRateSample, hevySet, hevyWorkout } from "./schema";
+import { workoutCategory } from "./source-priority";
+import { dailyStrain, dailyWorkout, healthIntegration, heartRateSample, hevySet, hevyWorkout } from "./schema";
 
 const HEVY_API_BASE = "https://api.hevyapp.com/v1";
 const HEVY_AUTHORIZE_URL = process.env.HEVY_AUTHORIZE_URL ?? "https://hevy.com/oauth/authorize";
@@ -413,32 +414,52 @@ export function parseHevyImport(rawText: string, timezone = DEFAULT_TIMEZONE): P
   return workouts;
 }
 
-export function findMatchingGoogleWorkout(
-  hevyStartIso: string,
-  hevyEndIso: string,
-  candidates: { sessionId: string; startTime: Date | null; endTime: Date | null; avgHrBpm: number | null }[],
-): { sessionId: string; avgHrBpm: number | null } | null {
+export function findMatchingGoogleWorkout<T extends {
+  sessionId: string; startTime: Date | null; endTime: Date | null; avgHrBpm: number | null;
+  title?: string; exerciseType?: string; durationSeconds?: number | null;
+}>(hevyStartIso: string, hevyEndIso: string, candidates: T[]): T | null {
   const hStart = new Date(hevyStartIso).getTime();
   const hEnd = Math.max(hStart + 60_000, new Date(hevyEndIso).getTime());
 
-  let best: { sessionId: string; avgHrBpm: number | null; score: number } | null = null;
+  let best: { row: T; score: number } | null = null;
   for (const cand of candidates) {
     if (!cand.startTime) continue;
+    const category = workoutCategory(cand);
+    if (category && category !== "strength") continue;
     const gStart = cand.startTime.getTime();
-    const gEnd = cand.endTime ? Math.max(gStart + 60_000, cand.endTime.getTime()) : gStart + (hEnd - hStart);
+    const gEnd = cand.endTime?.getTime() ?? gStart + (cand.durationSeconds ?? 0) * 1000;
 
     const overlapMs = Math.max(0, Math.min(hEnd, gEnd) - Math.max(hStart, gStart));
-    const minDurMs = Math.max(60_000, Math.min(hEnd - hStart, gEnd - gStart));
+    const minDurMs = Math.max(60_000, hEnd - hStart, gEnd - gStart);
     const startDiffMs = Math.abs(hStart - gStart);
 
-    if (overlapMs >= minDurMs * 0.4 || startDiffMs <= 15 * 60_000) {
+    if (overlapMs >= minDurMs * 0.6 && startDiffMs <= 15 * 60_000) {
       const score = overlapMs - startDiffMs * 0.25;
       if (!best || score > best.score) {
-        best = { sessionId: cand.sessionId, avgHrBpm: cand.avgHrBpm, score };
+        best = { row: cand, score };
       }
     }
   }
-  return best ? { sessionId: best.sessionId, avgHrBpm: best.avgHrBpm } : null;
+  return best?.row ?? null;
+}
+
+/** CSV exports use synthetic IDs. Keep the richer provider record when an export matches it. */
+export function dedupeHevyWorkouts<T extends { day: string; source: string; title: string; startTime: Date; endTime: Date }>(rows: T[]): T[] {
+  const directByDay = new Map<string, T[]>();
+  for (const row of rows) {
+    if (row.source === "hevy_csv" || row.source === "hevy_json") continue;
+    const day = directByDay.get(row.day) ?? [];
+    day.push(row);
+    directByDay.set(row.day, day);
+  }
+  const titleKey = (title: string) => title.trim().toLowerCase().replace(/\s+/g, " ");
+  return rows.filter((row) => {
+    if (row.source !== "hevy_csv" && row.source !== "hevy_json") return true;
+    return !directByDay.get(row.day)?.some((other) =>
+      titleKey(row.title) === titleKey(other.title)
+      && Math.abs(row.startTime.getTime() - other.startTime.getTime()) <= 90_000
+      && Math.abs(row.endTime.getTime() - other.endTime.getTime()) <= 90_000);
+  });
 }
 
 export async function importHevyWorkouts(
@@ -460,6 +481,9 @@ export async function importHevyWorkouts(
             startTime: dailyWorkout.startTime,
             endTime: dailyWorkout.endTime,
             avgHrBpm: dailyWorkout.avgHrBpm,
+            title: dailyWorkout.title,
+            exerciseType: dailyWorkout.exerciseType,
+            durationSeconds: dailyWorkout.durationSeconds,
             day: dailyWorkout.day,
           })
           .from(dailyWorkout)
@@ -487,6 +511,10 @@ export async function importHevyWorkouts(
 
   await db.transaction(async (tx) => {
     if (deletedIds.length > 0) {
+      const removed = await tx.select({ day: hevyWorkout.day }).from(hevyWorkout)
+        .where(and(eq(hevyWorkout.userId, userId), inArray(hevyWorkout.hevyId, deletedIds)));
+      if (removed.length) await tx.delete(dailyStrain)
+        .where(and(eq(dailyStrain.userId, userId), inArray(dailyStrain.day, removed.map((row) => row.day))));
       await tx.delete(hevySet).where(and(eq(hevySet.userId, userId), inArray(hevySet.hevyId, deletedIds)));
       await tx.delete(hevyWorkout).where(and(eq(hevyWorkout.userId, userId), inArray(hevyWorkout.hevyId, deletedIds)));
     }
@@ -627,6 +655,7 @@ export async function disconnectHevy(db: AuthDatabase, userId: string, deleteWor
   await db.transaction(async (tx) => {
     await tx.delete(healthIntegration).where(ownHevy(userId));
     if (deleteWorkouts) {
+      await tx.delete(dailyStrain).where(eq(dailyStrain.userId, userId));
       await tx.delete(hevySet).where(eq(hevySet.userId, userId));
       await tx.delete(hevyWorkout).where(eq(hevyWorkout.userId, userId));
     }

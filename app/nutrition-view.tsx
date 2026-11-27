@@ -450,7 +450,7 @@ export function NutritionView({
           </div>
         </section>
 
-        <NutritionTrends history={history30} tracker={tracker} trackingMode={settings.trackingMode} />
+        <NutritionTrends history={history30} tracker={tracker} trackingMode={settings.trackingMode} weightPreference={settings.sourceSettings?.weight} />
       </>
     );
   }
