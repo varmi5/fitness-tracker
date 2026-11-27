@@ -1010,7 +1010,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
     }
   }
 
-  async function saveTracker(action: object, successMessage: string) {
+  async function saveTracker(action: object, successMessage: string): Promise<boolean> {
     setBusy(true);
     setToast(null);
     try {
@@ -1024,14 +1024,16 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       if (payload.deleted) {
         await clearBrowserCache();
         location.reload();
-        return;
+        return true;
       }
       await saveTrackerSnapshot(payload, ++trackerRevision.current);
       await refreshHistoryAndToday();
       void refreshSyncToken().catch(() => null);
       showToast(successMessage, "success");
+      return true;
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Could not save.", "error");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -1534,7 +1536,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
             onClearInitialSubPage={() => setBodySubPage(null)}
             onOpenTrends={(m) => setTrendsMetric(m)}
             onOpenSettings={() => setSettingsOpen(true)}
-            onSaveTracker={saveTracker}
+            onSaveTracker={async (action, msg) => { await saveTracker(action, msg); }}
             onMessage={(msg) => showToast(msg)}
           />
         )}
@@ -1572,7 +1574,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
               mcpEnabled={initial.mcpEnabled}
               busy={busy}
               googleSyncPct={googleSyncPct}
-              onSaveTracker={saveTracker}
+              onSaveTracker={async (action, msg) => { await saveTracker(action, msg); }}
               onNutritionAction={(action, msg) => runNutritionAction(action as { action: string }, msg)}
               onSaveStrainSettings={saveStrainSettings}
               onImportHevy={importHevy}
@@ -1636,7 +1638,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
           onClose={() => setQuickLogOpen(false)}
           onOpenMealComposer={(opts) => openNewMeal(activeFocusDay, Boolean(opts?.openBarcode))}
           onQuickLogFood={quickLogFood}
-          onSaveTracker={saveTracker}
+          onSaveTracker={async (action, msg) => { await saveTracker(action, msg); }}
           onSyncHevy={syncHevy}
           onSyncGoogle={() => syncGoogle(14)}
           onOpenTraining={() => navigate("Training")}

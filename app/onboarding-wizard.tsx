@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   CheckCircle2,
   ChevronLeft,
@@ -25,7 +25,7 @@ import {
   estimateMifflinTdee,
 } from "../lib/onboarding";
 import { formatSourceLabel, linkedWearableProviders } from "../lib/source-priority";
-import { type TrackingMode } from "../lib/nutrition-model";
+import { isValidTimezone, type TrackingMode } from "../lib/nutrition-model";
 import { OpenWearablesGuide } from "./open-wearables-guide";
 import type {
   GoogleIntegrationStatus,
@@ -47,7 +47,7 @@ interface OnboardingWizardProps {
   mcpEnabled: boolean;
   busy: boolean;
   onClose: () => void;
-  onSaveTracker: (action: object, successMessage: string) => Promise<void>;
+  onSaveTracker: (action: object, successMessage: string) => Promise<boolean | void>;
   onNutritionAction: (action: object, successMessage: string) => Promise<boolean>;
   onImportHevy?: (rawText: string) => Promise<boolean>;
   onCreateOpenWearablesInvite?: (reset?: boolean) => Promise<{ code: string; expiresAt: string | null; apiUrl: string | null } | null>;
@@ -132,9 +132,13 @@ export function OnboardingWizard({
     tracker.settings.units === "imperial" ? "imperial" : "metric",
   );
 
+  const wasOpenRef = useRef(false);
+
   // Sync estimator weight/height into Step 2 when user opens/edits Step 1
   useEffect(() => {
-    if (!open) return;
+    const opened = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+    if (!opened) return;
     setStep(1);
     setSourceChoice(defaultSource);
     setBulkMode(Boolean(settings.bulkMode));
@@ -146,6 +150,9 @@ export function OnboardingWizard({
         : settings.timezone,
     );
     setHeightCm(tracker.settings.heightCm != null ? String(tracker.settings.heightCm) : "");
+    setStartingWeightKg("");
+    setManualTdee("");
+    setOwInvite(null);
     setBirthDate(tracker.settings.birthDate ?? "");
     setBiologicalSex(tracker.settings.biologicalSex ?? "");
     setUnits(tracker.settings.units === "imperial" ? "imperial" : "metric");
@@ -184,7 +191,7 @@ export function OnboardingWizard({
   );
 
   const mcpUrl = typeof window !== "undefined" ? `${window.location.origin}/mcp` : "/mcp";
-  const parsedManualTdee = Number(manualTdee);
+  const parsedManualTdee = Number(manualTdee.replace(",", "."));
   const hasValidManualTdee = Number.isFinite(parsedManualTdee) && parsedManualTdee >= 800 && parsedManualTdee <= 10000;
 
   if (!open) return null;
@@ -228,21 +235,33 @@ export function OnboardingWizard({
       onMessage("Enter a daily calorie target between 500 and 15,000 kcal.");
       return;
     }
-    const sleepMins = Math.round(Number(sleepGoalHours) * 60);
+    const sleepMins = Math.round(Number(sleepGoalHours.replace(",", ".")) * 60);
     if (!Number.isFinite(sleepMins) || sleepMins < 240 || sleepMins > 720) {
       onMessage("Enter a sleep goal between 4 and 12 hours.");
       return;
     }
 
-    const parsedWeight = startingWeightKg.trim() ? Number(startingWeightKg) : null;
-    if (parsedWeight != null && (!Number.isFinite(parsedWeight) || parsedWeight <= 20 || parsedWeight > 400)) {
+    const parsedWeight = startingWeightKg.trim() ? Number(startingWeightKg.replace(",", ".")) : null;
+    if (parsedWeight != null && (!Number.isFinite(parsedWeight) || parsedWeight < 20 || parsedWeight > 400)) {
       onMessage("Enter a valid weight in kg or leave it blank.");
       return;
     }
 
-    const parsedHeight = heightCm.trim() ? Number(heightCm) : null;
+    const parsedHeight = heightCm.trim() ? Number(heightCm.replace(",", ".")) : null;
     if (parsedHeight != null && (!Number.isFinite(parsedHeight) || parsedHeight < 50 || parsedHeight > 280)) {
       onMessage("Enter a valid height in cm or leave it blank.");
+      return;
+    }
+
+    const trimmedBirthDate = birthDate.trim();
+    if (trimmedBirthDate && (!/^\d{4}-\d{2}-\d{2}$/.test(trimmedBirthDate) || trimmedBirthDate > today)) {
+      onMessage("Enter a valid birth date or leave it blank.");
+      return;
+    }
+
+    const resolvedTimezone = timezone.trim() || settings.timezone;
+    if (!isValidTimezone(resolvedTimezone)) {
+      onMessage("Enter a valid IANA timezone (e.g. Europe/London).");
       return;
     }
 
@@ -252,7 +271,7 @@ export function OnboardingWizard({
         {
           action: "preferences",
           data: {
-            timezone: timezone.trim() || settings.timezone,
+            timezone: resolvedTimezone,
             trackingMode,
             preferredEnergySource: trackingMode === "fitbit" ? "google" : "manual",
             bulkMode,
@@ -272,8 +291,7 @@ export function OnboardingWizard({
 
       let loggedWeightViaEnergy = false;
       if (trackingMode === "manual" && hasValidManualTdee) {
-        loggedWeightViaEnergy = parsedWeight != null;
-        await onNutritionAction(
+        const energyOk = await onNutritionAction(
           {
             action: "energy",
             data: {
@@ -286,39 +304,41 @@ export function OnboardingWizard({
           },
           "Today's TDEE saved.",
         );
+        if (!energyOk) return;
+        loggedWeightViaEnergy = parsedWeight != null;
       }
 
-      if (parsedHeight != null || birthDate.trim() || biologicalSex || units !== tracker.settings.units) {
-        await onSaveTracker(
+      if (parsedHeight != null || trimmedBirthDate || biologicalSex || units !== tracker.settings.units) {
+        const profileOk = await onSaveTracker(
           {
             action: "settings",
             data: {
               heightCm: parsedHeight,
               units,
               goals: tracker.settings.goals,
-              birthDate: birthDate.trim() || null,
+              birthDate: trimmedBirthDate || null,
               biologicalSex:
                 biologicalSex === "male" || biologicalSex === "female" ? biologicalSex : null,
             },
           },
           "Body profile saved.",
         );
+        if (profileOk === false) return;
       }
 
       if (parsedWeight != null && !loggedWeightViaEnergy) {
-        await onSaveTracker(
+        const weightOk = await onSaveTracker(
           {
-            action: "add",
+            action: "log",
             data: {
-              metric: "weight",
-              side: "none",
-              value: parsedWeight,
               date: today,
+              values: [{ key: "weight", value: parsedWeight }],
               note: "Onboarding starting weight",
             },
           },
           "Starting weight logged.",
         );
+        if (weightOk === false) return;
       }
 
       setStep(3);
@@ -330,11 +350,11 @@ export function OnboardingWizard({
   async function handleFinishOnboarding() {
     setSaving(true);
     try {
-      await onNutritionAction(
+      const ok = await onNutritionAction(
         { action: "preferences", data: { onboardingCompleted: true } },
         "Welcome to FitnessTrackr — you're all set!",
       );
-      onClose();
+      if (ok) onClose();
     } finally {
       setSaving(false);
     }
