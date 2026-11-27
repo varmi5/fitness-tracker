@@ -6,7 +6,7 @@ import { foodProviderCache, foodProviderRate } from "./schema";
 import { foodSnapshotInput } from "./nutrition-model";
 import { standardMeasures, type FoodDefinition } from "./food-catalogue-model";
 
-const agent = "FitnessTrackr/1.1 (https://fitnesstrackr.co.uk)";
+const agent = `FitnessTrackr/1.2 (+${process.env.BETTER_AUTH_URL?.trim() || "https://github.com/varmi5/fitness-tracker"})`;
 const fields = "code,product_name,product_name_en,generic_name,brands,quantity,serving_size,serving_quantity,serving_quantity_unit,nutriments,nutrition_data_per,categories_tags,nutriscore_score,nutriscore_grade,nova_group,ingredients_text_en,ingredients_text";
 const inflight = new Map<string, Promise<FoodDefinition[]>>();
 export class FoodProviderError extends Error { constructor(message: string, public status = 502) { super(message); } }

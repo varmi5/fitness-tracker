@@ -116,9 +116,11 @@ export function OpenWearablesGuide({
             <button type="button" className="secondary compact" onClick={() => chooseSource("apple")}>Use Apple Health</button>
             <button type="button" className="secondary compact" onClick={() => chooseSource("android")}>Use Health Connect</button>
           </div>
-          <a href="https://wearables.fitnesstrackr.example" target="_blank" rel="noreferrer">
-            Open Wearables web portal <ExternalLink size={13} aria-hidden="true" />
-          </a>
+          {hostUrl && (
+            <a href={hostUrl} target="_blank" rel="noreferrer">
+              Open Wearables web portal <ExternalLink size={13} aria-hidden="true" />
+            </a>
+          )}
         </div>
       ) : (
         <>

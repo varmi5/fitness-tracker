@@ -66,8 +66,9 @@ export async function processReminders(db: AuthDatabase, now = new Date(), send 
       if (!current || !enabled?.enabled) continue;
       try {
         const subscription = subscriptionInput.parse(unseal(current.credential, pref.userId, encryptionKey()));
+        const supportEmail = process.env.APP_SUPPORT_EMAIL?.trim();
         await send(subscription, JSON.stringify({ title: "FitnessTrackr", body: "Ready to log a meal? Open your diary when you have a moment.", url: "/?tab=Nutrition", tag: `meal-reminder-${day}-${time}` }), {
-          vapidDetails: { subject: process.env.VAPID_SUBJECT ?? "mailto:support@fitnesstrackr.co.uk", publicKey: process.env.VAPID_PUBLIC_KEY!, privateKey: process.env.VAPID_PRIVATE_KEY! }, TTL: 3600, timeout: 8000, urgency: "normal",
+          vapidDetails: { subject: process.env.VAPID_SUBJECT?.trim() || (supportEmail ? `mailto:${supportEmail}` : "mailto:admin@localhost"), publicKey: process.env.VAPID_PUBLIC_KEY!, privateKey: process.env.VAPID_PRIVATE_KEY! }, TTL: 3600, timeout: 8000, urgency: "normal",
         });
         await db.update(reminderDelivery).set({ state: "sent", leasedUntil: null }).where(own); sent++;
       } catch (error) {

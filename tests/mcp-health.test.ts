@@ -1292,18 +1292,17 @@ test("concurrent syncGoogle calls coalesce cleanly without triggering a 409 conn
   }
 });
 
-test("OpenAI domain verification challenge route serves default token, allows env override, and returns 404 when blank", async () => {
+test("OpenAI domain verification challenge route requires env configuration, serves trimmed token when set, and returns 404 when blank", async () => {
   const prev = process.env.OPENAI_APPS_CHALLENGE;
   try {
     delete process.env.OPENAI_APPS_CHALLENGE;
-    const defRes = getOpenAiChallenge();
-    assert.equal(defRes.status, 200);
-    assert.ok(defRes.headers.get("content-type")?.startsWith("text/plain"));
-    assert.equal(await defRes.text(), "1bh80Pgqg1cn1aJM7kyJQznU8EIweL");
+    const unsetRes = getOpenAiChallenge();
+    assert.equal(unsetRes.status, 404);
 
     process.env.OPENAI_APPS_CHALLENGE = "custom-token-123";
     const overrideRes = getOpenAiChallenge();
     assert.equal(overrideRes.status, 200);
+    assert.ok(overrideRes.headers.get("content-type")?.startsWith("text/plain"));
     assert.equal(await overrideRes.text(), "custom-token-123");
 
     process.env.OPENAI_APPS_CHALLENGE = "   ";

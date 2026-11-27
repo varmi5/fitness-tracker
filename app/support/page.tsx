@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { ArrowLeft } from "lucide-react";
 import { feedbackAreas, feedbackInbox, feedbackUser, recentFeedback, type FeedbackStatus } from "../../lib/feedback";
 import { feedbackIntegrations } from "../../lib/feedback-integrations";
+import { getInstanceConfig } from "../../lib/instance-config";
 import { FeedbackForm, FeedbackState, TriageActions } from "./feedback-client";
 import "./support.css";
 
@@ -10,11 +11,11 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Support · FitnessTrackr" };
 
 const formatDate = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "Europe/London" });
-const supportEmail = "support@fitnesstrackr.co.uk";
 
 export default async function Support({ searchParams }: {
   searchParams: Promise<{ inbox?: string; status?: string; page?: string }>;
 }) {
+  const { supportEmail } = getInstanceConfig();
   const viewer = await feedbackUser(await headers());
   const owner = viewer?.role === "owner";
   const params = await searchParams;
@@ -50,7 +51,7 @@ export default async function Support({ searchParams }: {
           <div className="support-sign-in">
             <p>Sign in to report a bug, suggest a feature or check your submissions.</p>
             <a className="support-primary" href="/">Open FitnessTrackr</a>
-            <p>Can’t sign in? <a href={`mailto:${supportEmail}?subject=FitnessTrackr%20support`}>Email support</a> and describe what happened.</p>
+            {supportEmail && <p>Can’t sign in? <a href={`mailto:${supportEmail}?subject=FitnessTrackr%20support`}>Email support</a> and describe what happened.</p>}
           </div>
         )}
       </section>
@@ -111,7 +112,7 @@ export default async function Support({ searchParams }: {
       )}
 
       <footer className="support-footer">
-        {viewer && <a href={`mailto:${supportEmail}?subject=FitnessTrackr%20support`}>Email support</a>}
+        {viewer && supportEmail && <a href={`mailto:${supportEmail}?subject=FitnessTrackr%20support`}>Email support</a>}
         <a href="/connect">Connect ChatGPT</a>
         <a href="/privacy">Privacy</a>
         <a href="/terms">Terms</a>
