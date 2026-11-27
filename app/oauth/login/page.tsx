@@ -7,5 +7,5 @@ export const dynamic = "force-dynamic";
 export default function OAuthLogin() {
   const config = getAuthConfig();
   if (!config.mcpEnabled) notFound();
-  return <Login signup={false} oauth />;
+  return <Login signup={config.mode !== "closed"} oauth />;
 }

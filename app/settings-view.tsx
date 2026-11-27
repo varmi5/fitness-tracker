@@ -44,6 +44,7 @@ interface SettingsViewProps {
   audit: AuditEntry[];
   mcpEnabled: boolean;
   mcpUrl?: string;
+  emailResetEnabled?: boolean;
   busy: boolean;
   googleSyncPct?: number | null;
   onSaveTracker: (action: object, successMessage: string) => Promise<void>;
@@ -78,6 +79,7 @@ export function SettingsView({
   audit,
   mcpEnabled,
   mcpUrl: configuredMcpUrl,
+  emailResetEnabled = false,
   busy,
   googleSyncPct = null,
   onSaveTracker,
@@ -1181,6 +1183,7 @@ export function SettingsView({
       </SettingsDropdown>
 
       <Passkeys onMessage={onMessage} />
+      <PasswordSecurity emailResetEnabled={Boolean(emailResetEnabled)} onMessage={onMessage} />
 
       {/* Methodology & Calculation Guide */}
       <SettingsDropdown
@@ -1347,6 +1350,123 @@ function Passkeys({ onMessage }: { onMessage: (message: string) => void }) {
       >
         <Fingerprint size={18} /> Add passkey
       </button>
+    </SettingsDropdown>
+  );
+}
+
+function PasswordSecurity({
+  emailResetEnabled,
+  onMessage,
+}: {
+  emailResetEnabled: boolean;
+  onMessage: (message: string) => void;
+}) {
+  const session = authClient.useSession();
+  const userEmail = (session.data as unknown as { user?: { email?: string | null } } | null)?.user?.email ?? null;
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function handleChangePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const currentPassword = String(form.get("currentPassword") ?? "");
+    const newPassword = String(form.get("newPassword") ?? "");
+    const confirmPassword = String(form.get("confirmPassword") ?? "");
+    const revokeOtherSessions = form.get("revokeOtherSessions") === "on";
+
+    if (newPassword.length < 8) {
+      setStatus("New password must be at least 8 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setStatus("New passwords do not match.");
+      return;
+    }
+
+    setBusy(true);
+    setStatus("");
+    try {
+      const result = await authClient.changePassword({
+        currentPassword,
+        newPassword,
+        revokeOtherSessions,
+      });
+      if (result.error) {
+        setStatus(result.error.message || "Could not update password. Check your current password.");
+        return;
+      }
+      formElement.reset();
+      setStatus("Password updated.");
+      onMessage("Password updated.");
+    } catch {
+      setStatus("Could not reach FitnessTrackr.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSendResetEmail() {
+    if (!userEmail) return;
+    setBusy(true);
+    setStatus("");
+    try {
+      const result = await authClient.requestPasswordReset({
+        email: userEmail,
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (result.error) {
+        setStatus(result.error.message || "Could not send a password reset email.");
+        return;
+      }
+      setStatus("Password reset link sent to your email.");
+      onMessage("Password reset link sent to your email.");
+    } catch {
+      setStatus("Could not reach FitnessTrackr.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <SettingsDropdown
+      title="Password"
+      subtitle="Change your password or send a reset link to your email"
+      badge="Security"
+    >
+      <form onSubmit={handleChangePassword} method="post">
+        <label>
+          Current password
+          <input type="password" name="currentPassword" autoComplete="current-password" required />
+        </label>
+        <label>
+          New password
+          <input type="password" name="newPassword" autoComplete="new-password" minLength={8} required />
+        </label>
+        <label>
+          Confirm new password
+          <input type="password" name="confirmPassword" autoComplete="new-password" minLength={8} required />
+        </label>
+        <label className="checkbox-row">
+          <input type="checkbox" name="revokeOtherSessions" defaultChecked />
+          <span>Sign out other devices</span>
+        </label>
+        <Button disabled={busy} type="submit">Update password</Button>
+      </form>
+      {emailResetEnabled && userEmail && (
+        <div style={{ marginTop: "0.9rem" }}>
+          <p className="search-hint">Signed in with a passkey or forgot your current password?</p>
+          <button
+            type="button"
+            className="secondary wide"
+            disabled={busy}
+            onClick={() => void handleSendResetEmail()}
+          >
+            Email me a password reset link
+          </button>
+        </div>
+      )}
+      {status && <p role="status" style={{ marginTop: "0.6rem" }}>{status}</p>}
     </SettingsDropdown>
   );
 }

@@ -92,6 +92,7 @@ export interface InitialAppData {
   audit: AuditEntry[];
   mcpEnabled: boolean;
   mcpUrl?: string;
+  emailResetEnabled?: boolean;
   syncToken: string;
 }
 

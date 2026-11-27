@@ -165,9 +165,42 @@ try {
   assert.equal(verified.status, 302);
   const memberSignIn = await post("/api/auth/sign-in/email", { email: member.email, password });
   assert.equal(memberSignIn.status, 200);
-  const memberCookie = memberSignIn.headers.getSetCookie().map((header) => header.split(";")[0]).join("; ");
+  let memberCookie = memberSignIn.headers.getSetCookie().map((header) => header.split(";")[0]).join("; ");
   assert.ok(memberCookie);
   console.log("Public signup, bot challenge rejection and replay protection, and verified member sign-in passed with simulated providers.");
+
+  const resetPage = await fetch(url("/reset-password"));
+  assert.equal(resetPage.status, 200);
+  assert.match(await resetPage.text(), /Send reset link/);
+  await rm(verificationFile, { force: true });
+  const resetReq = await post("/api/auth/request-password-reset", {
+    email: member.email, redirectTo: `${origin}/reset-password`,
+  });
+  assert.equal(resetReq.status, 200);
+  const resetEmail = JSON.parse(await readFile(verificationFile, "utf8"));
+  assert.match(resetEmail.subject, /Reset your FitnessTrackr password/);
+  const resetCallback = new URL(resetEmail.text);
+  const resetCallbackRes = await fetch(url(resetCallback.pathname + resetCallback.search), { redirect: "manual" });
+  assert.equal(resetCallbackRes.status, 302);
+  const resetDest = new URL(resetCallbackRes.headers.get("location"), origin);
+  const resetToken = resetDest.searchParams.get("token");
+  assert.ok(resetToken);
+  const tempPassword = `${password}-reset`;
+  assert.equal((await post("/api/auth/reset-password", { token: resetToken, newPassword: tempPassword })).status, 200);
+  const resetClientIp = { "cf-connecting-ip": "198.51.100.42" };
+  assert.equal((await post("/api/auth/sign-in/email", { email: member.email, password }, resetClientIp)).status, 401);
+  const signInAfterReset = await post("/api/auth/sign-in/email", { email: member.email, password: tempPassword }, resetClientIp);
+  assert.equal(signInAfterReset.status, 200);
+  const resetSessionCookie = signInAfterReset.headers.getSetCookie().map((header) => header.split(";")[0]).join("; ");
+  assert.ok(resetSessionCookie);
+  assert.equal((await post("/api/auth/change-password", {
+    currentPassword: tempPassword, newPassword: password, revokeOtherSessions: true,
+  }, { Cookie: resetSessionCookie })).status, 200);
+  const reSignedIn = await post("/api/auth/sign-in/email", { email: member.email, password }, resetClientIp);
+  assert.equal(reSignedIn.status, 200);
+  memberCookie = reSignedIn.headers.getSetCookie().map((header) => header.split(";")[0]).join("; ");
+  assert.ok(memberCookie);
+  console.log("Password reset email flow and authenticated change-password passed.");
   const feedback = {
     action: "submit", id: randomUUID(), kind: "bug", title: "My workout won’t save",
     description: "A private example for the owner to review.", area: "Training", includeContext: true,

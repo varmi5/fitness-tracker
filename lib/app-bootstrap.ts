@@ -68,6 +68,7 @@ export async function getAppBootstrap(requestHeaders: Headers): Promise<InitialA
         audit,
         mcpEnabled: Boolean(config.mcpEnabled),
         mcpUrl: mcpResource(config.mcpBaseURL ?? config.baseURL),
+        emailResetEnabled: config.mode !== "closed",
         syncToken,
   };
 }

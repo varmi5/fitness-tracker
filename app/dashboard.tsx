@@ -1624,6 +1624,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
               audit={audit}
               mcpEnabled={initial.mcpEnabled}
               mcpUrl={initial.mcpUrl}
+              emailResetEnabled={initial.emailResetEnabled}
               busy={busy}
               googleSyncPct={googleSyncPct}
               onSaveTracker={async (action, msg) => { await saveTracker(action, msg); }}

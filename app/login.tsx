@@ -19,7 +19,7 @@ export function Login({ signup, oauth = false }: { signup: boolean; oauth?: bool
     try {
       if (reset) {
         const result = await authClient.requestPasswordReset({
-          email: String(form.get("email")), redirectTo: "/reset-password",
+          email: String(form.get("email")), redirectTo: `${window.location.origin}/reset-password`,
         });
         setMessage(result.error ? "Could not request a password reset." : "If the account exists, you’ll receive a reset email.");
         return;
@@ -64,8 +64,8 @@ export function Login({ signup, oauth = false }: { signup: boolean; oauth?: bool
       <span className="brand-badge"><McpBrandMark size={24} /></span>
       <span>FitnessTrackr</span>
     </div>
-    <h1>{oauth ? "Sign in" : "Welcome back"}</h1>
-    <p>{oauth ? "Sign in to connect your FitnessTrackr account." : "Sign in to your nutrition, energy balance, and measurement tracker."}</p>
+    <h1>{reset ? "Reset password" : oauth ? "Sign in" : "Welcome back"}</h1>
+    <p>{reset ? "Enter your email address and we’ll send you a password reset link." : oauth ? "Sign in to connect your FitnessTrackr account." : "Sign in to your nutrition, energy balance, and measurement tracker."}</p>
     <form onSubmit={signIn} method="post">
       <label>Email<input type="email" name="email" autoComplete="username webauthn" required /></label>
       {!reset && <label>Password<input type="password" name="password" autoComplete="current-password" required /></label>}
@@ -78,8 +78,9 @@ export function Login({ signup, oauth = false }: { signup: boolean; oauth?: bool
         else if (result.data) location.reload();
       } catch { setMessage("Passkey sign-in is unavailable."); }
     }}><Fingerprint size={19} /> Use a passkey</button>}
-    {!oauth && signup && <button className="secondary" onClick={() => { setReset(!reset); setMessage(""); }}>{reset ? "Back to sign in" : "Forgot password?"}</button>}
+    {!oauth && signup && <button type="button" className="secondary wide" onClick={() => { setReset(!reset); setMessage(""); }}>{reset ? "Back to sign in" : "Forgot password?"}</button>}
     <p aria-live="polite">{message}</p>
+    {oauth && signup && <Link href="/reset-password">Forgot password?</Link>}
     {!oauth && <Link href="/setup">{signup ? "Create an account" : "Owner setup"}</Link>}
   </main>;
 }
