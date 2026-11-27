@@ -14,32 +14,32 @@ import { verifyTurnstile } from "../lib/signup-config";
 
 test("origin helpers parse BETTER_AUTH_URL, ALLOWED_ORIGINS, and decoupled MCP_PUBLIC_URL", () => {
   const env = {
-    BETTER_AUTH_URL: "https://fitnesstrackr.co.uk/app",
-    ALLOWED_ORIGINS: " https://fitnesstrackr.co.uk/ , invalid-url, https://fitnesstrackr.co.uk, ftp://bad.example ",
-    MCP_PUBLIC_URL: "https://fitnesstrackr.co.uk/mcp",
+    BETTER_AUTH_URL: "https://primary.example.test/app",
+    ALLOWED_ORIGINS: " https://legacy.example.test/ , invalid-url, https://primary.example.test, ftp://bad.example ",
+    MCP_PUBLIC_URL: "https://legacy.example.test/mcp",
   };
-  assert.equal(getPrimaryOrigin(env), "https://fitnesstrackr.co.uk");
+  assert.equal(getPrimaryOrigin(env), "https://primary.example.test");
   assert.deepEqual(getAllowedOrigins(env), [
-    "https://fitnesstrackr.co.uk",
-    "https://fitnesstrackr.co.uk",
+    "https://primary.example.test",
+    "https://legacy.example.test",
   ]);
-  assert.equal(getMcpPublicOrigin(env), "https://fitnesstrackr.co.uk");
-  assert.equal(getMcpPublicOrigin({ BETTER_AUTH_URL: "https://fitnesstrackr.co.uk" }), "https://fitnesstrackr.co.uk");
+  assert.equal(getMcpPublicOrigin(env), "https://legacy.example.test");
+  assert.equal(getMcpPublicOrigin({ BETTER_AUTH_URL: "https://primary.example.test" }), "https://primary.example.test");
 });
 
 test("isAllowedOrigin, isSameAllowedOrigin, and resolveRequestOrigin enforce allowlists and fall back safely", () => {
-  const allowed = ["https://fitnesstrackr.co.uk", "https://fitnesstrackr.co.uk"];
-  assert.equal(isAllowedOrigin("https://fitnesstrackr.co.uk", allowed), true);
+  const allowed = ["https://legacy.example.test", "https://primary.example.test"];
+  assert.equal(isAllowedOrigin("https://primary.example.test", allowed), true);
   assert.equal(isAllowedOrigin("https://evil.example", allowed), false);
   assert.equal(isAllowedOrigin(null, allowed), false);
 
-  const goodPost = new Request("https://fitnesstrackr.co.uk/api/nutrition", {
+  const goodPost = new Request("https://primary.example.test/api/nutrition", {
     method: "POST",
-    headers: { origin: "https://fitnesstrackr.co.uk" },
+    headers: { origin: "https://primary.example.test" },
   });
   assert.equal(isSameAllowedOrigin(goodPost, { baseURL: allowed[0], allowedOrigins: allowed }), true);
 
-  const evilPost = new Request("https://fitnesstrackr.co.uk/api/nutrition", {
+  const evilPost = new Request("https://primary.example.test/api/nutrition", {
     method: "POST",
     headers: { origin: "https://evil.example" },
   });
@@ -47,24 +47,24 @@ test("isAllowedOrigin, isSameAllowedOrigin, and resolveRequestOrigin enforce all
 
   const forwardedReq = new Request("http://127.0.0.1:3000/api/integrations/google/connect", {
     headers: {
-      "x-forwarded-host": "fitnesstrackr.co.uk",
+      "x-forwarded-host": "primary.example.test",
       "x-forwarded-proto": "https",
     },
   });
   assert.equal(
     getValidatedRequestOrigin(forwardedReq, { baseURL: allowed[0], allowedOrigins: allowed }),
-    "https://fitnesstrackr.co.uk",
+    "https://primary.example.test",
   );
 
   const forwardedHttpProxyReq = new Request("http://127.0.0.1:3000/api/integrations/google/connect", {
     headers: {
-      "x-forwarded-host": "fitnesstrackr.co.uk",
+      "x-forwarded-host": "primary.example.test",
       "x-forwarded-proto": "http",
     },
   });
   assert.equal(
     getValidatedRequestOrigin(forwardedHttpProxyReq, { baseURL: allowed[0], allowedOrigins: allowed }),
-    "https://fitnesstrackr.co.uk",
+    "https://primary.example.test",
   );
 
   const spoofedReq = new Request("http://127.0.0.1:3000/api/integrations/google/connect", {
@@ -75,7 +75,7 @@ test("isAllowedOrigin, isSameAllowedOrigin, and resolveRequestOrigin enforce all
   });
   assert.equal(
     resolveRequestOrigin(spoofedReq, allowed, allowed[0]),
-    "https://fitnesstrackr.co.uk",
+    "https://legacy.example.test",
   );
 });
 
@@ -105,13 +105,13 @@ test("verifyTurnstile validates hostname against the supplied request origin", a
   globalThis.fetch = (async () =>
     Response.json({
       success: true,
-      hostname: "fitnesstrackr.co.uk",
+      hostname: "primary.example.test",
       action: "signup",
     })) as typeof fetch;
 
   try {
-    assert.equal(await verifyTurnstile("tok", "https://fitnesstrackr.co.uk"), true);
-    assert.equal(await verifyTurnstile("tok", "https://fitnesstrackr.co.uk"), false);
+    assert.equal(await verifyTurnstile("tok", "https://primary.example.test"), true);
+    assert.equal(await verifyTurnstile("tok", "https://legacy.example.test"), false);
   } finally {
     globalThis.fetch = prevFetch;
     if (prevSecret === undefined) delete process.env.TURNSTILE_SECRET_KEY;

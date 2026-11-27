@@ -1,6 +1,6 @@
 # FitnessTrackr downloadable plugin
 
-The live ZIP is https://fitnesstrackr.co.uk/fitnesstrackr-plugin.zip.
+The live ZIP is https://<your-domain>/fitnesstrackr-plugin.zip.
 The Connect page versions its download URL and filename from the portable manifest.
 
 Canonical inputs:

@@ -12,7 +12,7 @@
       "interface": {
         "displayName": "FitnessTrackr",
         "shortDescription": "Nutrition, sleep and workouts",
-        "longDescription": "Log meals and drinks, search UK reference and branded foods, reuse saved recipes and review your own nutrition diary. Compare calorie intake with estimated total energy expenditure, review weight and waist trends, and retrieve synced sleep sessions, naps, stages, vitals and workouts when available. Manage dated calorie and macro targets and opt-in FitnessTrackr phone reminders with your explicit approval. Each user connects their own account through OAuth. Food, portion, wearable and calculated health values are estimates, not medical advice. FitnessTrackr is a free personal project by FitnessTrackr, hosted in the UK.",
+        "longDescription": "Log meals and drinks, search UK reference and branded foods, reuse saved recipes and review your own nutrition diary. Compare calorie intake with estimated total energy expenditure, review weight and waist trends, and retrieve synced sleep sessions, naps, stages, vitals and workouts when available. Manage dated calorie and macro targets and opt-in FitnessTrackr phone reminders with your explicit approval. Each user connects their own account through OAuth. Food, portion, wearable and calculated health values are estimates, not medical advice. FitnessTrackr is a free open-source project hosted in the UK.",
         "developerName": "FitnessTrackr",
         "category": "Healthcare",
         "capabilities": [],

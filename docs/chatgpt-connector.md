@@ -1,6 +1,6 @@
 # Connect FitnessTrackr to ChatGPT
 
-The private Streamable HTTP MCP endpoint is `https://fitnesstrackr.co.uk/mcp`.
+The private Streamable HTTP MCP endpoint is `https://fitnesstrackr.example/mcp`.
 It uses OAuth authorization code flow with PKCE, dynamic client registration, user consent,
 short-lived access tokens, and separate `fitness:read` and `fitness:write` permissions.
 No password, setup code, API key or deployment secret belongs in the plugin package.
@@ -9,7 +9,7 @@ No password, setup code, API key or deployment secret belongs in the plugin pack
 
 Set the **application runtime variable** `FITNESS_MCP_ENABLED=true` in Coolify and deploy
 through the existing GitHub Actions pipeline. Production activation requires the owner's approval.
-Keep `BETTER_AUTH_URL=https://fitnesstrackr.co.uk`.
+Keep `BETTER_AUTH_URL=https://fitnesstrackr.example`.
 The feature is deliberately unavailable (404) until enabled.
 
 After deployment, check that these return 200 with public configuration only:
@@ -25,7 +25,7 @@ and must never return meal data. Normal website sessions do not replace MCP OAut
 Use ChatGPT web or desktop to install the private FitnessTrackr plugin or configure it manually:
 
 1. Open **Plugins**, select **+**, then **Add custom MCP server**.
-2. Name it **FitnessTrackr** and enter `https://fitnesstrackr.co.uk/mcp`.
+2. Name it **FitnessTrackr** and enter `https://fitnesstrackr.example/mcp`.
 3. Choose **OAuth** with dynamic/automatic client registration. No pre-issued client secret is needed.
 4. Request `fitness:read fitness:write offline_access` for meal logging. For read-only access,
    use `fitness:read` (and optionally `offline_access`). Review the connection warning and create the plugin.
@@ -65,7 +65,7 @@ Saving/installing the package does not activate the production endpoint or authe
 For Codex CLI, add and authenticate the existing endpoint:
 
 ```sh
-codex mcp add mcp-logger --url https://fitnesstrackr.co.uk/mcp
+codex mcp add mcp-logger --url https://fitnesstrackr.example/mcp
 codex mcp login mcp-logger --scopes fitness:read,fitness:write,offline_access
 ```
 
@@ -110,8 +110,8 @@ Phone reminders are delivered by the installed PWA, not the ChatGPT app. On iPho
 from Safari's Add to Home Screen, open the installed app, then enable notifications under Settings.
 Installing the plugin alone does not create a ChatGPT scheduled task.
 
-Public connection guide: https://fitnesstrackr.co.uk/connect
-Publisher: FitnessTrackr. Support: support@fitnesstrackr.co.uk. Personal UK hosting; free service.
+Public connection guide: https://fitnesstrackr.example/connect
+Publisher: FitnessTrackr. Support: support@fitnesstrackr.example. Self-hosted or public instance.
 The downloadable package can be imported where supported. The account plugin remains private;
 public directory approval requires the separate submission workflow and is not completed by hosting a ZIP.
 

@@ -7,10 +7,10 @@ Open Food Facts Search-a-licious service with debounce, caching, quotas and loca
 
 Runtime environment:
 - VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY: generated Web Push keypair. Keep stable after subscriptions exist.
-- VAPID_SUBJECT: mailto:support@fitnesstrackr.co.uk.
+- VAPID_SUBJECT: mailto:support@fitnesstrackr.example.
 - BETTER_AUTH_SECRET: also derives the push-subscription encryption key; rotation requires re-enrolling devices.
 - GOOGLE_HEALTH_CLIENT_ID / GOOGLE_HEALTH_CLIENT_SECRET / FITNESS_INTEGRATION_KEY (64 hex characters):
-  required before Google Health can connect. Redirect URI: https://fitnesstrackr.co.uk/api/integrations/google/callback.
+  required before Google Health can connect. Redirect URI: https://fitnesstrackr.example/api/integrations/google/callback.
 - FITNESS_BACKGROUND_WORKER=false disables the 15-second outbox/reminder worker; default enabled.
 
 Google integration uses current Google Health v4, never legacy Fitbit/Fit REST. Each user must

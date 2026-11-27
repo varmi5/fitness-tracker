@@ -86,7 +86,7 @@ source, sync time, historical goals, vitals and workouts. Use
 `includeStageIntervals: true` for detailed stage timings for at most 31 days;
 ordinary requests omit verbose intervals. Missing data does not establish no sleep
 or no workout. The public MCP URL and OAuth configuration are unchanged:
-`https://fitnesstrackr.co.uk/mcp`.
+`https://<your-domain>/mcp`.
 
 Export includes raw sessions/goals. Account deletion cascades to owned rows;
 Google disconnect removes only that user's Google-origin sessions. A successful

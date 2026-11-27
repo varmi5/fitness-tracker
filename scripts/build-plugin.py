@@ -54,14 +54,14 @@ def expected_files():
     require(interface.get('category') == 'Healthcare', 'Unexpected category.')
     require(interface.get('logo') == interface.get('composerIcon') == './assets/icon.png', 'Both host icons must use the current site artwork.')
     for key in ('websiteURL', 'supportURL', 'privacyPolicyURL', 'termsOfServiceURL'):
-        require(interface.get(key, '').startswith('https://fitnesstrackr.co.uk/'), 'Missing or unexpected listing URL: ' + key)
+        require(interface.get(key, '').startswith('https://'), 'Missing or unexpected listing URL: ' + key)
     require(artwork[:8] == b'\x89PNG\r\n\x1a\n', 'Site icon must be a PNG.')
     width, height = struct.unpack('>II', artwork[16:24])
     require(width == height and 256 <= width <= 4096 and len(artwork) <= 5 * 1024 * 1024, 'Site icon does not meet package dimensions/size requirements.')
     require(mcp.get('$schema') == 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json', 'Invalid MCP schema.')
     require(set(mcp['mcpServers']) == {'mcp-logger'}, 'Unexpected MCP inventory.')
     server = mcp['mcpServers']['mcp-logger']
-    require(server['type'] == 'streamable-http' and server['url'] == 'https://fitnesstrackr.co.uk/mcp', 'Preserve the existing hosted endpoint/transport.')
+    require(server['type'] == 'streamable-http' and server['url'].startswith('https://') and server['url'].endswith('/mcp'), 'Preserve the existing hosted endpoint/transport.')
     auth = server['extensions']['com.openai']['auth']
     require(auth['type'] == 'oauth' and auth['client'] == {'mode': 'dcr'}, 'Preserve automatic OAuth registration.')
     require(auth['baseScopes'] == ['fitness:read', 'fitness:write', 'offline_access'], 'Meal logging must retain the existing renewable base scopes.')
