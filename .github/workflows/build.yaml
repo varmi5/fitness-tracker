@@ -59,13 +59,17 @@ jobs:
             ghcr.io/varmi5/fitness-tracker:latest
             ghcr.io/varmi5/fitness-tracker:${{ github.sha }}
       - name: Queue the Coolify deployment
-        if: github.repository == 'varmi5/fitness-tracker' && secrets.COOLIFY_WEBHOOK != ''
+        if: github.repository == 'varmi5/fitness-tracker'
         env:
           COOLIFY_WEBHOOK: ${{ secrets.COOLIFY_WEBHOOK }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
+          if [[ -z "${COOLIFY_WEBHOOK:-}" ]]; then
+            echo "COOLIFY_WEBHOOK not set; skipping Coolify deployment."
+            exit 0
+          fi
           response=$(mktemp)
           trap 'rm -f "$response"' EXIT
           status=$(curl --silent --show-error --max-time 30 \
