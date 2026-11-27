@@ -457,7 +457,10 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
             fetch("/api/integrations/hevy/sync", { method: "POST", cache: "no-store" })
               .then(async (res) => (res.ok ? res.json() : null))
               .then((payload) => {
-                if (payload?.status && active) setHevy(payload.status);
+                if (payload?.status && active) {
+                  setHevy(payload.status);
+                  void updateStartupCache(() => ({ hevy: payload.status }));
+                }
                 return Boolean(payload);
               })
               .catch(() => false),
@@ -934,7 +937,10 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Could not import Hevy data.");
-      if (json?.status) setHevy(json.status);
+      if (json?.status) {
+        setHevy(json.status);
+        await updateStartupCache(() => ({ hevy: json.status }));
+      }
       await refreshIncomingData();
       showToast(`Imported ${json.imported ?? 0} Hevy workout(s).`, "success");
       return true;
@@ -952,7 +958,10 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       const res = await fetch("/api/integrations/hevy/sync", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Hevy sync failed.");
-      if (json?.status) setHevy(json.status);
+      if (json?.status) {
+        setHevy(json.status);
+        await updateStartupCache(() => ({ hevy: json.status }));
+      }
       await refreshIncomingData();
       showToast(`Synced ${json.synced ?? 0} Hevy workout(s).`, "success");
     } catch (error) {
@@ -969,7 +978,11 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       const res = await fetch("/api/integrations/hevy/disconnect", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Could not disconnect Hevy.");
-      if (json?.status) setHevy(json.status);
+      if (json?.status) {
+        setHevy(json.status);
+        await updateStartupCache(() => ({ hevy: json.status }));
+      }
+      void refreshSyncToken().catch(() => null);
       showToast("Hevy disconnected.", "success");
     } catch (error) {
       showToast(error instanceof Error ? error.message : "Could not disconnect Hevy.", "error");
@@ -1077,6 +1090,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       } else if (action.action === "revoke-mcp") {
         await updateStartupCache(() => ({ audit: [] }));
         setAudit([]);
+        setMcpConnected(false);
       }
       let refreshed = true;
       await refreshHistoryAndToday(sourceRulesChanged).catch(() => {
@@ -1204,7 +1218,10 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
         });
         const payload = await res.json();
         if (!res.ok) throw new Error(payload.message ?? "Google push failed.");
-        if (payload.status) setGoogle(payload.status);
+        if (payload.status) {
+          setGoogle(payload.status);
+          void updateStartupCache(() => ({ google: payload.status }));
+        }
         queued += payload.mealsQueued ?? 0;
         cursor = payload.nextCursor ?? null;
       } while (cursor);
@@ -1244,7 +1261,10 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
       const res = await fetch("/api/integrations/open-wearables/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset }) });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.message ?? "Could not generate connection code.");
-      if (payload.status) setOpenWearables(payload.status);
+      if (payload.status) {
+        setOpenWearables(payload.status);
+        void updateStartupCache(() => ({ openWearables: payload.status }));
+      }
       return {
         code: payload.code,
         expiresAt: payload.expiresAt ?? null,
@@ -1487,6 +1507,7 @@ export function Dashboard({ initial, savedAt, updateStartupCache }: {
             strainSettings={strainSettings}
             hevy={hevy}
             google={google}
+            openWearables={openWearables}
             theme="light"
             busy={busy}
             loading={trainingLoading}

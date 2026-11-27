@@ -619,8 +619,8 @@ export async function hevyStatus(db: AuthDatabase, userId: string) {
 
   return {
     oauthAvailable: hevyOAuthConfigured(),
-    connected: Boolean(row) || workoutCountRows.length > 0,
-    accountLabel: row?.accountLabel ?? (workoutCountRows.length > 0 ? "Hevy Import" : null),
+    connected: Boolean(row),
+    accountLabel: row?.accountLabel ?? null,
     status: row?.status ?? (workoutCountRows.length > 0 ? "imported" : null),
     lastSync: row?.lastSync?.toISOString() ?? null,
     lastError: row?.lastError ?? null,

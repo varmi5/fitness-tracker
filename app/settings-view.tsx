@@ -163,6 +163,10 @@ export function SettingsView({
     setHrAge(strainSettings.age != null ? String(strainSettings.age) : "");
   }, [strainSettings]);
 
+  useEffect(() => {
+    if (!openWearables?.owUserId) setOwInvite(null);
+  }, [openWearables?.owUserId]);
+
   const [manualDay, setManualDay] = useState(today);
   const [manualTotal, setManualTotal] = useState("");
   const [manualActive, setManualActive] = useState("");
@@ -845,7 +849,7 @@ export function SettingsView({
               ? `Connected · ${hevy.accountLabel}`
               : "Connected"
             : hevy?.oauthAvailable
-              ? "Ready to link"
+              ? (hevy.workoutCount > 0 ? "Not connected" : "Ready to link")
               : "CSV / JSON Import"
         }
         badgeClass={hevy?.connected ? "teal-soft" : ""}

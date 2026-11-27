@@ -16,6 +16,7 @@ import {
   type DailyStrainView,
   type GoogleIntegrationStatus,
   type HevyIntegrationStatus,
+  type OpenWearablesIntegrationStatus,
   type PulseInsightsView,
   type RecoveryInsightView,
   type StrainSettings,
@@ -32,6 +33,7 @@ interface TrainingViewProps {
   strainSettings: StrainSettings;
   hevy: HevyIntegrationStatus;
   google?: GoogleIntegrationStatus;
+  openWearables?: OpenWearablesIntegrationStatus;
   theme: ThemeMode;
   busy: boolean;
   loading: boolean;
@@ -97,6 +99,7 @@ export function TrainingView({
   pulseInsights,
   hevy,
   google,
+  openWearables,
   busy,
   loading,
   onSelectDay,
@@ -593,6 +596,8 @@ export function TrainingView({
   // MAIN TRAINING OVERVIEW (Sleek, Tappable Bevel Cards → Full-Page Drill-Downs)
   // ===========================================================================
   const recoveryPending = effectiveRecovery == null;
+  const hasHevyData = Boolean(hevy.connected || hevy.workoutCount > 0);
+  const wearableConnected = Boolean(google?.connected || openWearables?.connected);
 
   return (
     <>
@@ -673,7 +678,7 @@ export function TrainingView({
       {/* Recovery Insights Card (Taps into full-page Recovery view) */}
       <div className="unlock-gate">
         <section
-          className={`card unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}
+          className={`card unlock-gate-content ${Boolean(google) && !wearableConnected ? "is-locked" : ""}`}
           aria-label="Recovery Insights"
           style={{ padding: recoveryPending ? ".65rem .9rem" : undefined }}
         >
@@ -703,10 +708,10 @@ export function TrainingView({
             <ChevronRight size={17} style={{ color: "var(--muted)" }} />
           </button>
         </section>
-        {google && !google.connected && (
+        {google && !wearableConnected && (
           <div className="unlock-overlay">
             <h3>Unlock Recovery Insights</h3>
-            <p>Connect Google Health to unlock Sleep, Resting HR, and HRV readiness.</p>
+            <p>Connect Google Health or a wearable in Settings to unlock Sleep, Resting HR, and HRV readiness.</p>
             {google.available ? (
               <a className="unlock-btn" href="/api/integrations/google/connect">
                 Connect Google Health
@@ -769,7 +774,7 @@ export function TrainingView({
             <div className="unlock-gate">
               <button
                 type="button"
-                className={`card card-interactive unlock-gate-content ${google && !google.connected ? "is-locked" : ""}`}
+                className={`card card-interactive unlock-gate-content ${Boolean(google) && !wearableConnected ? "is-locked" : ""}`}
                 onClick={() => setPage({ kind: "cardio" })}
                 style={{ width: "100%", textAlign: "left" }}
               >
@@ -792,10 +797,10 @@ export function TrainingView({
                   </span>
                 </div>
               </button>
-              {google && !google.connected && (
+              {google && !wearableConnected && (
                 <div className="unlock-overlay">
                   <h3>Unlock Cardio Load</h3>
-                  <p>Connect Google Health to track heart-rate load.</p>
+                  <p>Connect Google Health or a wearable in Settings to track heart-rate load.</p>
                   {google.available ? (
                     <a className="unlock-btn" href="/api/integrations/google/connect">
                       Connect Google Health
@@ -812,7 +817,7 @@ export function TrainingView({
             <div className="unlock-gate">
               <button
                 type="button"
-                className={`card card-interactive unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
+                className={`card card-interactive unlock-gate-content ${!hasHevyData ? "is-locked" : ""}`}
                 onClick={() => setPage({ kind: "muscular" })}
                 style={{ width: "100%", textAlign: "left" }}
               >
@@ -835,7 +840,7 @@ export function TrainingView({
                   </span>
                 </div>
               </button>
-              {!hevy.connected && (
+              {!hasHevyData && (
                 <div className="unlock-overlay">
                   <h3>Unlock Muscular Load</h3>
                   <p>Connect Hevy to track set-level Muscular Load and training status.</p>
@@ -859,7 +864,7 @@ export function TrainingView({
       {/* Inline Anatomical Muscle Training Map */}
       <div className="unlock-gate">
         <section
-          className={`card unlock-gate-content ${!hevy.connected ? "is-locked" : ""}`}
+          className={`card unlock-gate-content ${!hasHevyData ? "is-locked" : ""}`}
           style={{ display: "grid", gap: ".65rem" }}
           aria-label="Muscle Training Map"
         >
@@ -887,7 +892,7 @@ export function TrainingView({
             />
           )}
         </section>
-        {!hevy.connected && (
+        {!hasHevyData && (
           <div className="unlock-overlay">
             <h3>Unlock Muscle Training</h3>
             <p>Connect Hevy to view recorded training by muscle group.</p>

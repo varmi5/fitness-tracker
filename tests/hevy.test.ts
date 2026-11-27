@@ -194,9 +194,17 @@ test("syncHevyOAuth paginates /v1/workouts and disconnectHevy cleans up credenti
     assert.equal(status.connected, true);
     assert.equal(status.workoutCount, 2);
 
+    await disconnectHevy(db, "HV-1", false);
+    const afterKeepWorkouts = await hevyStatus(db, "HV-1");
+    assert.equal(afterKeepWorkouts.connected, false);
+    assert.equal(afterKeepWorkouts.accountLabel, null);
+    assert.equal(afterKeepWorkouts.status, "imported");
+    assert.equal(afterKeepWorkouts.workoutCount, 2);
+
     await disconnectHevy(db, "HV-1", true);
     const afterDisconnect = await hevyStatus(db, "HV-1");
     assert.equal(afterDisconnect.connected, false);
+    assert.equal(afterDisconnect.status, null);
     assert.equal(afterDisconnect.workoutCount, 0);
   } finally {
     globalThis.fetch = originalFetch;
