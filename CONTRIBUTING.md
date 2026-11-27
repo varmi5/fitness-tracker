@@ -31,6 +31,7 @@ Thanks for checking out **FitnessTrackr**! Contributions, bug reports, documenta
 
 ## Pull Request Expectations
 
+- **No unapproved SQL or schema changes:** Do not modify `migrations/` or `lib/schema.ts` in pull requests without opening an Issue and discussing it with `@varmi5` first (automated PR checks block schema edits unless the maintainer applies the `allow-schema-change` label).
 - Keep PRs focused and well-tested; add or update tests under `tests/` for behaviour changes.
 - Preserve per-user data isolation, server-side input validation, and existing security headers/CSP rules in `proxy.ts` and `next.config.ts`.
 - Never commit `.env*` files, personal domains, API keys, or private test fixtures.
